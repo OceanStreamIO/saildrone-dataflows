@@ -9,6 +9,9 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from dask.distributed import Client
+from prefect.cache_policies import CacheKeyFnPolicy, Inputs
+
+input_cache_policy = Inputs()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +33,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 @task(
     retries=3,
     retry_delay_seconds=1,
+    cache_policy=input_cache_policy,
 )
 def process_file(file_path: Path) -> None:
     with get_dask_client():
@@ -44,7 +48,7 @@ def process_file(file_path: Path) -> None:
         print(f"Processed Sv for {file_path.name}")
 
 
-@flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
+@flow
 def process_batch(batch_files: List[Path]) -> None:
     task_futures = []
     for file_path in batch_files:

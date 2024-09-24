@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from prefect import flow, task
 from dask.distributed import Client
 from prefect_flows import process_batch
+from prefect_dask import DaskTaskRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +27,8 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 
     sys.exit(1)
 
-@flow()
+
+@flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def load_and_process_files_in_batches(directory: Path) -> None:
     # List all .raw files in the directory
     raw_files = sorted(directory.glob("*.raw"))
