@@ -1,0 +1,10 @@
+bokeh
+dask
+distributed
+python-dotenv==1.0.1
+sqlite-utils
+typing_extensions
+adlfs
+numpy
+git+https://github.com/OceanStreamIO/echopype-dev.git@oceanstream-iotedge#egg=echopype
+prefect[dask]
