@@ -1,3 +1,3 @@
-from .compute_sv import process_batch, process_file
+from .process_raw import convert_raw_data
 
-__all__ = ['process_batch', 'process_file']
+__all__ = ['convert_raw_data']
