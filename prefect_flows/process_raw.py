@@ -6,6 +6,7 @@ from typing import List
 
 from echopype.calibrate import compute_Sv
 from echopype.convert.api import open_raw
+from store import ensure_container_exists
 
 from dotenv import load_dotenv
 from prefect import flow, task
@@ -53,6 +54,7 @@ def convert_file(file_path: Path, container_name, survey_id=None, sonar_model='E
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def convert_raw_data(files: List[Path], container_name, survey_id) -> None:
+    ensure_container_exists(container_name)
     task_futures = []
     for file_path in files:
         future = convert_file.submit(file_path, container_name, survey_id)

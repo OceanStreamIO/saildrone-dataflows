@@ -3,9 +3,6 @@ import os
 import sys
 from pathlib import Path
 
-from store import ensure_container_exists
-from utils import map_file_paths
-
 from dotenv import load_dotenv
 from prefect import flow, task
 from dask.distributed import Client
@@ -24,7 +21,6 @@ RAW_DATA_MOUNT = os.getenv('RAW_DATA_MOUNT')
 RAW_DATA_LOCAL = os.getenv('RAW_DATA_LOCAL')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
-client = Client(address=DASK_CLUSTER_ADDRESS)
 BATCH_SIZE = 10
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -50,14 +46,12 @@ def load_and_convert_files_to_zarr(source_directory, container_name, survey_id, 
 
 
 if __name__ == "__main__":
-    load_and_convert_files_to_zarr.deploy(name="convert-raw-files-to-zarr",
-                                          work_pool_name='ubuntu-docker',
-                                          build=False,
-                                          push=False,
-                                          image='oceanstreamdevcr.azurecr.io/convertflowsaildrone:latest',
-                                          parameters={
-                                              'source_directory': RAW_DATA_LOCAL,
-                                              'container_name': 'converted',
-                                              'survey_id': '',
-                                              'batch_size': '10'
-                                          })
+    client = Client(address=DASK_CLUSTER_ADDRESS)
+
+    load_and_convert_files_to_zarr.serve(name="convert-raw-files-to-zarr",
+                                         parameters={
+                                            'source_directory': RAW_DATA_LOCAL,
+                                            'container_name': 'converted',
+                                            'survey_id': '',
+                                            'batch_size': '10'
+                                        })
