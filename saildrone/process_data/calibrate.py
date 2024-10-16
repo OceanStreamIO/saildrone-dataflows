@@ -1,6 +1,6 @@
 import numpy as np
 
-from utils import load_values_from_xlsx
+from saildrone.utils import load_values_from_xlsx
 
 
 def apply_calibration(echodata, file_path='./utils/calibration_values.xlsx'):

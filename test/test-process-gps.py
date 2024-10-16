@@ -5,7 +5,7 @@ import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point, Polygon, box
 
-from process_data import consolidate_csv_to_geoparquet_partitioned
+from saildrone.process_data import consolidate_csv_to_geoparquet_partitioned
 
 TEST_DATA_FOLDER = "./test/gps-data"
 OUTPUT_FOLDER = "./test/gps-processed"

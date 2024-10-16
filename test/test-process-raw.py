@@ -10,8 +10,8 @@ from echopype.calibrate import compute_Sv
 from echopype.convert.api import open_raw
 
 from dotenv import load_dotenv
-from process_data import apply_calibration, plot_sv_data
-from store import ensure_container_exists, save_zarr_store
+from saildrone.process_data import apply_calibration, plot_sv_data
+from saildrone.store import ensure_container_exists, save_zarr_store
 
 # from prefect_flows.convert import process_file
 

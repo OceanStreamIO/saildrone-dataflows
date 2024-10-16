@@ -3,7 +3,7 @@ import fsspec
 import pandas as pd
 import geopandas as gpd
 from shapely.geometry import Point
-from store import get_azure_blob_filesystem
+from saildrone.store import get_azure_blob_filesystem
 
 
 def consolidate_csv_to_geoparquet_partitioned(folder_path, output_path, storage_type='local'):

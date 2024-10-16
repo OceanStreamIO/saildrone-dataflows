@@ -3,7 +3,6 @@ from typing import Optional, List
 from adlfs import AzureBlobFileSystem
 import xarray as xr
 import geopandas as gpd
-
 import logging
 from azure.storage.blob import BlobServiceClient, ContentSettings
 

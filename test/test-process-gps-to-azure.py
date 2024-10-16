@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
-from process_data import consolidate_csv_to_geoparquet_partitioned
-from store import ensure_container_exists, open_geo_parquet
+from saildrone.process_data import consolidate_csv_to_geoparquet_partitioned
+from saildrone.store import ensure_container_exists, open_geo_parquet
 
 
 TEST_DATA_FOLDER = "./test/gps-data"

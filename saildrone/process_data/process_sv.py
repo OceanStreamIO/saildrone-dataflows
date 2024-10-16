@@ -1,8 +1,6 @@
 import logging
 import sys
-
 import xarray as xr
-
 import numpy as np
 
 logging.basicConfig(
