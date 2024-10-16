@@ -6,8 +6,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from prefect import flow, task
 from dask.distributed import Client
-from prefect_flows import convert_raw_data
 from prefect_dask import DaskTaskRunner
+from saildrone.prefect_flows import convert_raw_data
 
 logging.basicConfig(
     level=logging.INFO,
