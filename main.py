@@ -47,7 +47,6 @@ def load_and_convert_files_to_zarr(source_directory, container_name, survey_id, 
 
 if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
-
     load_and_convert_files_to_zarr.serve(name="convert-raw-files-to-zarr",
                                          parameters={
                                             'source_directory': RAW_DATA_LOCAL,

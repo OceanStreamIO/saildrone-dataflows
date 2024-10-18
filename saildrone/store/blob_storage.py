@@ -72,7 +72,7 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
         raise
 
 
-def save_zarr_store(echodata, zarr_path, survey_id=None, container_name=None):
+def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None):
     if container_name is not None and survey_id is not None:
         zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
     elif container_name is not None:
@@ -84,7 +84,11 @@ def save_zarr_store(echodata, zarr_path, survey_id=None, container_name=None):
     zarr_store = azfs.get_mapper(zarr_path_full)
 
     logger.info(f"Saving converted data to Zarr format at: {zarr_path_full}")
-    echodata.to_zarr(save_path=zarr_store, overwrite=True)
+
+    if isinstance(echodata_or_sv_ds, xr.Dataset):
+        echodata_or_sv_ds.to_zarr(store=zarr_store, mode='w')
+    else:
+        echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
 
 def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
