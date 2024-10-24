@@ -11,6 +11,7 @@ from prefect import flow, task
 from dask.distributed import Client
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
+from prefect.states import Completed
 
 from saildrone.process import process_file
 from saildrone.store import save_zarr_store, ensure_container_exists
@@ -58,8 +59,9 @@ def process_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
                      chunks={"ping_time": 1000, "range_sample": -1},
                      processed_container_name=PROCESSED_CONTAINER_NAME)
         print(f"Processed Sv for {file_path.name}")
-    except Exception as e:
-        logging.error(f"Error processing file: {file_path.name}", exc_info=False)
+    except Exception:
+        print(f"Error processing file: {file_path.name}")
+        return Completed(message="Task completed with errors")
 
 
 def convert_raw_data(files: List[Path], survey_id) -> None:
