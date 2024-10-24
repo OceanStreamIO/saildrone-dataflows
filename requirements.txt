@@ -1,6 +1,7 @@
 azure-storage-blob==12.8.0
 adlfs==2021.8.1
 bokeh
+psycopg2
 dask
 distributed
 python-dotenv==1.0.1
@@ -12,3 +13,4 @@ git+https://github.com/OceanStreamIO/echopype-dev.git@oceanstream-iotedge#egg=ec
 prefect[dask]
 matplotlib
 openpyxl
+psycopg2-binary

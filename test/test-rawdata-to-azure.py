@@ -1,7 +1,7 @@
 from pathlib import Path
 import pytest
 from echopype.convert.api import open_raw
-from saildrone.process_data import apply_calibration
+from saildrone.process import apply_calibration
 from saildrone.store import ensure_container_exists, open_converted, save_zarr_store
 
 TEST_DATA_FOLDER = "./test/data"

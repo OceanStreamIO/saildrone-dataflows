@@ -1,6 +1,6 @@
 import pandas as pd
 import pytest
-from saildrone.process_data import consolidate_csv_to_geoparquet_partitioned
+from saildrone.process import consolidate_csv_to_geoparquet_partitioned
 from saildrone.store import ensure_container_exists, open_geo_parquet
 
 

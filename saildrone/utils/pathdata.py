@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import List
 
@@ -20,3 +21,34 @@ def map_file_paths(file_paths: List[Path], mounted_folder: Path, local_folder: P
     ]
 
     return mapped_paths
+
+
+def load_local_files(directory: str, map_to_directory: str) -> list[Path]:
+    """
+    Load and map local raw files from the given directory.
+
+    Parameters
+    ----------
+    directory : str
+        The directory containing the original raw files.
+
+    map_to_directory : str
+        The directory to map the raw files to.
+
+    Returns
+    -------
+    list[Path]
+        A list of mapped file paths, where the base path is replaced by the value of the RAW_DATA_MOUNT environment variable.
+    """
+    # Get the mounted and local directories as Path objects
+    mounted_folder = Path(directory)
+    mount_base_path = Path(map_to_directory)
+
+    # Get the list of all .raw files sorted by name
+    raw_files = sorted(mounted_folder.glob("*.raw"))
+    mapped_files = [
+        mount_base_path / file.relative_to(mounted_folder)  # Preserve relative path
+        for file in raw_files
+    ]
+
+    return mapped_files

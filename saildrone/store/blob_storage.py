@@ -90,6 +90,8 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     else:
         echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
+    return zarr_store
+
 
 def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
     """Open a Zarr store from Azure Blob Storage."""
@@ -110,9 +112,9 @@ def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINE
     return xr.open_dataset(chunk_store, engine='zarr', chunks=chunks)
 
 
-def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER_NAME):
+def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER_NAME, chunks=None):
     """Open a Zarr store from Azure Blob Storage."""
-    import echopype as ep
+    from echopype.echodata.api import open_converted
 
     connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     azfs = AzureBlobFileSystem(connection_string=connection_string)
@@ -128,7 +130,7 @@ def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
 
-    return ep.open_converted(chunk_store)
+    return open_converted(chunk_store, chunks=chunks)
 
 
 def open_geo_parquet(pq_path, survey_id=None, container_name=None):
