@@ -51,13 +51,15 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 def process_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
     print('Processing file:', file_path)
 
-    process_file(file_path, survey_id, sonar_model,
-                 calibration_file=CALIBRATION_FILE,
-                 output_path=ECHODATA_OUTPUT_PATH,
-                 chunks={"ping_time": 1000, "range_sample": -1},
-                 processed_container_name=PROCESSED_CONTAINER_NAME)
-
-    print(f"Processed Sv for {file_path.name}")
+    try:
+        process_file(file_path, survey_id, sonar_model,
+                     calibration_file=CALIBRATION_FILE,
+                     output_path=ECHODATA_OUTPUT_PATH,
+                     chunks={"ping_time": 1000, "range_sample": -1},
+                     processed_container_name=PROCESSED_CONTAINER_NAME)
+        print(f"Processed Sv for {file_path.name}")
+    except Exception as e:
+        logging.error(f"Error processing file: {file_path.name}", exc_info=False)
 
 
 def convert_raw_data(files: List[Path], survey_id) -> None:
