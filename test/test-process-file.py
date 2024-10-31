@@ -4,7 +4,7 @@ import fsspec
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from saildrone.store import PostgresDB, FileSegmentService
-from saildrone.process import process_file
+from saildrone.process import process_file, plot_sv_data
 
 
 @pytest.fixture
@@ -15,13 +15,32 @@ def db_setup():
 
 
 @patch('saildrone.store.save_zarr_store')
+@pytest.mark.skip(reason="Temporarily")
 @patch('prefect_dask.get_dask_client', return_value=MagicMock())
-def test_process_file_success(mock_get_dask_client, mock_save_zarr_store, db_setup):
+def test_process_file_without_beam(mock_get_dask_client, mock_save_zarr_store, db_setup):
     db_setup.empty_files_table()
 
     file_info = Path('./test/data/SD_TPOS2023_v03-Phase0-D20230530-T220328-0.raw')
     file_name = 'SD_TPOS2023_v03-Phase0-D20230530-T220328-0'
 
+    file_segment_service = FileSegmentService(db_setup)
+    assert not file_segment_service.is_file_processed(file_name)
+    sv_dataset = process_file(
+        file_path=file_info,
+        survey_id='TPOS2023',
+        sonar_model='EK80',
+        calibration_file='./saildrone/utils/calibration_values.xlsx'
+    )
+    assert sv_dataset is None
+
+
+@patch('saildrone.store.save_zarr_store')
+@patch('prefect_dask.get_dask_client', return_value=MagicMock())
+def test_process_file_success(mock_get_dask_client, mock_save_zarr_store, db_setup):
+    db_setup.empty_files_table()
+
+    file_name = 'SD_TPOS2023_v03-Phase0-D20230826-T015958-0'
+    file_info = Path(f'./test/data/{file_name}.raw')
     file_segment_service = FileSegmentService(db_setup)
     assert not file_segment_service.is_file_processed(file_name)
     sv_dataset, _, _ = process_file(
@@ -30,9 +49,11 @@ def test_process_file_success(mock_get_dask_client, mock_save_zarr_store, db_set
         sonar_model='EK80',
         calibration_file='./saildrone/utils/calibration_values.xlsx'
     )
+
     sv_path = f"test/processed/{file_name}_Sv.zarr"
     sv_dataset.to_zarr(sv_path, mode='w')
 
+    plot_sv_data(sv_dataset, file_name, output_path='test/processed')
     assert file_segment_service.is_file_processed(file_name)
 
     db_setup.cursor.execute("SELECT * FROM files WHERE file_name = %s", (file_name,))

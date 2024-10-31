@@ -6,7 +6,7 @@ import xarray as xr
 import numpy as np
 
 
-def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, echogram_path: str, cmap: str = 'ocean_r') -> list:
+def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -30,7 +30,7 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, echogram_path: str, cma
 
     echogram_files = []
     for channel in range(ds_Sv.dims['channel']):
-        echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, echogram_path, cmap)
+        echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap)
         echogram_files.append(echogram_file_path)
 
     return echogram_files

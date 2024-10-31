@@ -29,7 +29,7 @@ def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibratio
         # Check if the file has already been processed
         if file_segment_service.is_file_processed(file_name):
             logging.info(f'Skipping already processed file: {file_name}')
-            return
+            return None, None, None
 
         with get_dask_client():
             echodata, zarr_path = convert_file(file_name, file_path, survey_id=survey_id,
@@ -41,6 +41,10 @@ def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibratio
                 output_zarr_path = f"{output_path}/{file_name}/{file_name}.zarr"
                 os.makedirs(f"{output_path}/{file_name}", exist_ok=True)
                 echodata.to_zarr(output_zarr_path, overwrite=True)
+
+            if echodata.beam is None:
+                logging.info(f'No beam data found in file: {file_name}')
+                return
 
             sv_dataset = compute_sv(echodata, container_name=converted_container_name, zarr_path=zarr_path,
                                     source_path=output_zarr_path, chunks=chunks)
@@ -67,6 +71,40 @@ def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibratio
             return sv_dataset, zarr_store, sv_zarr_path
 
 
+def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
+                          converted_container_name=None) -> (int, str, str):
+    file_name = file_path.stem
+    sv_zarr_path = None
+    zarr_store = None
+
+    with PostgresDB() as db_connection:
+        file_segment_service = FileSegmentService(db_connection)
+
+        # Check if the file has already been processed
+        if file_segment_service.is_file_processed(file_name):
+            logging.info(f'Skipping already processed file: {file_name}')
+            return None, None, None
+
+        with get_dask_client():
+            echodata, zarr_path = convert_file(file_name, file_path, survey_id=survey_id,
+                                               calibration_file=calibration_file,
+                                               container_name=converted_container_name, sonar_model=sonar_model)
+
+            if output_path is not None:
+                output_zarr_path = f"{output_path}/{file_name}/{file_name}.zarr"
+                os.makedirs(f"{output_path}/{file_name}", exist_ok=True)
+                echodata.to_zarr(output_zarr_path, overwrite=True)
+
+            file_id = file_segment_service.insert_file_record(
+                file_name=file_name,
+                size=file_path.stat().st_size,
+                location=str(file_path),
+                last_modified=time.ctime(file_path.stat().st_mtime)
+            )
+
+            return file_id, zarr_store, sv_zarr_path
+
+
 def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, chunks=None):
     if chunks is not None:
         echodata = open_echodata(zarr_path=zarr_path, source_path=source_path, container_name=container_name,
@@ -85,6 +123,10 @@ def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, 
 def convert_file(file_name, file_path, calibration_file=None,
                  survey_id=None, container_name=None, sonar_model='EK80'):
     echodata = open_raw(file_path, sonar_model=sonar_model)
+
+    if echodata.beam is None:
+        return echodata, None
+
     echodata = apply_calibration(echodata, calibration_file)
 
     if survey_id:
@@ -94,7 +136,7 @@ def convert_file(file_name, file_path, calibration_file=None,
 
     if container_name is not None:
         # echodata = echodata.chunk(CHUNKS)
-        save_zarr_store(echodata, container_name=container_name, zarr_path=zarr_path)
+        save_zarr_to_blobstorage(echodata, container_name=container_name, zarr_path=zarr_path)
 
     return echodata, zarr_path
 

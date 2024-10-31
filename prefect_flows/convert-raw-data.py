@@ -9,14 +9,14 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from prefect import flow, task
 from dask.distributed import Client
-from prefect_dask import DaskTaskRunner, get_dask_client
+from prefect_dask import DaskTaskRunner
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 
-from saildrone.process import process_file
-from saildrone.store import save_zarr_store, ensure_container_exists
+from saildrone.process import convert_file_and_save
+from saildrone.store import ensure_container_exists
 from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService, FileSegmentService
+from saildrone.store import PostgresDB, SurveyService
 
 input_cache_policy = Inputs()
 
@@ -37,28 +37,20 @@ PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
-AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-if not AZURE_STORAGE_CONNECTION_STRING:
-    logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
-    sys.exit(1)
-
-
 @task(
     retries=3,
     retry_delay_seconds=1,
     cache_policy=input_cache_policy,
     task_run_name="process-{file_path.stem}",
 )
-def process_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
+def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
     print('Processing file:', file_path)
 
     try:
-        process_file(file_path, survey_id, sonar_model,
-                     calibration_file=CALIBRATION_FILE,
-                     output_path=ECHODATA_OUTPUT_PATH,
-                     chunks={"ping_time": 1000, "range_sample": -1},
-                     processed_container_name=PROCESSED_CONTAINER_NAME)
-        print(f"Processed Sv for {file_path.name}")
+        convert_file_and_save(file_path, survey_id, sonar_model,
+                              calibration_file=CALIBRATION_FILE,
+                              output_path=ECHODATA_OUTPUT_PATH)
+        print(f"Converted {file_path.name}")
     except Exception:
         print(f"Error processing file: {file_path.name}")
         return Completed(message="Task completed with errors")
@@ -68,7 +60,7 @@ def convert_raw_data(files: List[Path], survey_id) -> None:
     task_futures = []
     print('Processing files:', files)
     for file_path in files:
-        future = process_single_file.submit(file_path, survey_id)
+        future = convert_single_file.submit(file_path, survey_id)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
