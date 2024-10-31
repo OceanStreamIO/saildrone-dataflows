@@ -37,11 +37,17 @@ PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
+AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+if not AZURE_STORAGE_CONNECTION_STRING:
+    logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
+    sys.exit(1)
+
+
 @task(
     retries=3,
     retry_delay_seconds=1,
     cache_policy=input_cache_policy,
-    task_run_name="process-{file_path.stem}",
+    task_run_name="convert-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
     print('Processing file:', file_path)
@@ -51,8 +57,9 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
                               calibration_file=CALIBRATION_FILE,
                               output_path=ECHODATA_OUTPUT_PATH)
         print(f"Converted {file_path.name}")
-    except Exception:
-        print(f"Error processing file: {file_path.name}")
+    except Exception as e:
+        print(f"Error processing file: {file_path.name}" + str(e))
+
         return Completed(message="Task completed with errors")
 
 
