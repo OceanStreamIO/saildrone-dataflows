@@ -138,7 +138,7 @@ if __name__ == "__main__":
             name='convert-raw-files-to-zarr',
             parameters={
                 'source_directory': RAW_DATA_LOCAL,
-                'map_to_directory': RAW_DATA_LOCAL,
+                'map_to_directory': RAW_DATA_MOUNT,
                 'cruise_id': '',
                 'survey_name': '',
                 'vessel': '',
