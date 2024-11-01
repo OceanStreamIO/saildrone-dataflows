@@ -53,15 +53,19 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     task_run_name="convert-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
-    print('Processing file:', file_path)
+    new_base_path = Path(RAW_DATA_MOUNT)
+
+    # Create the new path by combining new base directory and file name
+    new_file_path = new_base_path / file_path.name
+    print('Processing file:', new_file_path)
 
     try:
-        convert_file_and_save(file_path, survey_id, sonar_model,
+        convert_file_and_save(new_file_path, survey_id, sonar_model,
                               calibration_file=CALIBRATION_FILE,
                               output_path=ECHODATA_OUTPUT_PATH)
-        print(f"Converted {file_path.name}")
+        print(f"Converted {new_file_path.name}")
     except Exception as e:
-        print(f"Error processing file: {file_path.name}" + str(e))
+        print(f"Error processing file: {new_file_path.name}" + str(e))
 
         return Completed(message="Task completed with errors")
 
@@ -115,6 +119,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
                                                      end_date, description)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
+
     raw_files = load_local_files(source_directory, RAW_DATA_MOUNT)
 
     total_files = len(raw_files)
@@ -132,6 +137,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
 if __name__ == "__main__":
     with PostgresDB() as db:
         db.create_tables()
+
 
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
