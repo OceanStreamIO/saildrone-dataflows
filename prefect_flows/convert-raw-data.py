@@ -116,6 +116,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
     raw_files = load_local_files(source_directory, RAW_DATA_MOUNT)
+
     total_files = len(raw_files)
     print(f"Total files to process: {total_files}")
 

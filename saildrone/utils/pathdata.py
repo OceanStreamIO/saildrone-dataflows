@@ -47,7 +47,7 @@ def load_local_files(directory: str, map_to_directory: str, extension: str = '*.
     # Get the list of all .raw files sorted by name
     raw_files = sorted(mounted_folder.glob(extension))
     mapped_files = [
-        mount_base_path / file.relative_to(mounted_folder)  # Preserve relative path
+        mount_base_path / file.name
         for file in raw_files
     ]
 
