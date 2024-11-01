@@ -53,11 +53,13 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     task_run_name="convert-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
-    new_base_path = Path(RAW_DATA_MOUNT)
+    load_dotenv()
+    raw_data_path = os.getenv('RAW_DATA_MOUNT')
+    new_base_path = Path(raw_data_path)
 
     # Create the new path by combining new base directory and file name
     new_file_path = new_base_path / file_path.name
-    print('Processing file:', new_base_path, RAW_DATA_MOUNT)
+    print('Processing file:', new_base_path, raw_data_path)
 
     try:
         convert_file_and_save(new_file_path, survey_id, sonar_model,
