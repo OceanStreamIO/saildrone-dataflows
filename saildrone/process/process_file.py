@@ -81,8 +81,8 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
         file_segment_service = FileSegmentService(db_connection)
 
         # Check if the file has already been processed
-        if file_segment_service.is_file_processed(file_name):
-            logging.info(f'Skipping already processed file: {file_name}')
+        if file_segment_service.is_file_converted(file_name):
+            logging.info(f'Skipping already converted file: {file_name}')
             return None, None, None
 
         with get_dask_client():
@@ -91,8 +91,7 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
                                                container_name=converted_container_name, sonar_model=sonar_model)
 
             if output_path is not None:
-                output_zarr_path = f"{output_path}/{file_name}/{file_name}.zarr"
-                os.makedirs(f"{output_path}/{file_name}", exist_ok=True)
+                output_zarr_path = f"{output_path}/{file_name}.zarr"
                 echodata.to_zarr(output_zarr_path, overwrite=True)
 
             file_id = file_segment_service.insert_file_record(
@@ -101,6 +100,8 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
                 location=str(file_path),
                 last_modified=time.ctime(file_path.stat().st_mtime)
             )
+
+            file_segment_service.mark_file_converted(file_id)
 
             return file_id, zarr_store, sv_zarr_path
 

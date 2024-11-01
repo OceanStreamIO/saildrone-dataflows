@@ -9,4 +9,4 @@ else
 fi
 
 # Pass all parameters to dask-worker
-dask worker tcp://192.168.0.17:8786 "$@"
+dask worker "$@"

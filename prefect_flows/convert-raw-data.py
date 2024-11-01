@@ -45,8 +45,11 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 
 @task(
     retries=3,
-    retry_delay_seconds=1,
+    retry_delay_seconds=[10, 30, 60],
     cache_policy=input_cache_policy,
+    retry_jitter_factor=0.1,
+    refresh_cache=True,
+    result_storage=None,
     task_run_name="convert-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
@@ -127,6 +130,9 @@ def load_and_convert_files_to_zarr(source_directory: str, map_to_directory: str,
 
 
 if __name__ == "__main__":
+    with PostgresDB() as db:
+        db.create_tables()
+
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
     ensure_container_exists(CONVERTED_CONTAINER_NAME)

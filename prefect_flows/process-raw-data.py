@@ -45,7 +45,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 
 @task(
     retries=3,
-    retry_delay_seconds=1,
+    retry_delay_seconds=30,
     cache_policy=input_cache_policy,
     task_run_name="process-{file_path.stem}",
 )
@@ -128,6 +128,9 @@ def load_and_process_files_to_zarr(source_directory: str, map_to_directory: str,
 
 
 if __name__ == "__main__":
+    with PostgresDB() as db:
+        db.create_tables()
+
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
     ensure_container_exists(CONVERTED_CONTAINER_NAME)

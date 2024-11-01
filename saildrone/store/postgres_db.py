@@ -48,6 +48,7 @@ class PostgresDB:
                 size INTEGER,
                 location TEXT,
                 processed BOOLEAN DEFAULT FALSE,
+                converted BOOLEAN DEFAULT FALSE,
                 last_modified TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 file_npings INTEGER,
                 file_nsamples INTEGER,
@@ -126,20 +127,6 @@ class PostgresDB:
         file_id = self.cursor.fetchone()[0]
         self.conn.commit()
         return file_id
-
-    def mark_file_processed(self, file_id: int) -> None:
-        """
-        Mark a file as processed in the database by updating the 'processed' flag.
-
-        Parameters
-        ----------
-        file_id : int
-            The ID of the file to mark as processed.
-        """
-        self.cursor.execute('''
-            UPDATE files SET processed=TRUE WHERE id=%s
-        ''', (file_id,))
-        self.conn.commit()
 
     def insert_survey_record(self, cruise_id: str, survey_name: str, vessel: str, start_port: str, end_port: str,
                              start_date: str, end_date: str, description: Optional[str]) -> int:

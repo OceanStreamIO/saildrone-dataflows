@@ -31,6 +31,23 @@ class FileSegmentService:
         self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND processed=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
+    def is_file_converted(self, file_name: str) -> bool:
+        """
+        Check if a file has already been converted.
+
+        Parameters
+        ----------
+        file_name : str
+            The name of the file to check.
+
+        Returns
+        -------
+        bool
+            Returns True if the file has already been converted, False otherwise.
+        """
+        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND converted=TRUE', (file_name,))
+        return self.db.cursor.fetchone() is not None
+
     def insert_file_record(
         self,
         file_name: str,
@@ -95,10 +112,10 @@ class FileSegmentService:
         """
         self.db.cursor.execute('''
             INSERT INTO files (
-                file_name, size, location, processed, last_modified, file_npings, file_nsamples, file_start_time, 
+                file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time, 
                 file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, 
                 file_end_lat, file_end_lon, echogram_files
-            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            ) VALUES (%s, %s, %s, FALSE, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         ''', (file_name, size, location, last_modified, file_npings, file_nsamples, file_start_time, file_end_time,
               file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat, file_end_lon, echogram_files))
         file_id = self.db.cursor.fetchone()[0]
@@ -198,4 +215,16 @@ class FileSegmentService:
             The ID of the file to mark as processed.
         """
         self.db.cursor.execute('UPDATE files SET processed=TRUE WHERE id=%s', (file_id,))
+        self.db.conn.commit()
+
+    def mark_file_converted(self, file_id: int) -> None:
+        """
+        Mark a file as processed by updating the 'converted' field in the database.
+
+        Parameters
+        ----------
+        file_id : int
+            The ID of the file to mark as converted.
+        """
+        self.db.cursor.execute('UPDATE files SET converted=TRUE WHERE id=%s', (file_id,))
         self.db.conn.commit()
