@@ -31,7 +31,7 @@ class FileSegmentService:
         self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND processed=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
-    def get_file_info(self, file_name: str) -> dict:
+    def get_file_info(self, file_name: str):
         """
         Get information about a file from the database.
 
@@ -45,8 +45,13 @@ class FileSegmentService:
         dict
             A dictionary containing information about the file.
         """
-        self.db.cursor.execute('SELECT * FROM files WHERE file_name=%s AND processed=TRUE', (file_name,))
-        return self.db.cursor.fetchone()
+        self.db.cursor.execute('SELECT size, converted FROM files WHERE file_name=%s', (file_name,))
+        row = self.db.cursor.fetchone()
+
+        if row:
+            return {'size': row[0], 'converted': row[1]}
+
+        return None
 
     def is_file_converted(self, file_name: str) -> bool:
         """
