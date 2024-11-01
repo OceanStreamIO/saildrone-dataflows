@@ -55,6 +55,8 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
     load_dotenv()
     raw_data_path = os.getenv('RAW_DATA_MOUNT')
+    calibration_file = os.getenv('CALIBRATION_FILE')
+    output_path = os.getenv('ECHODATA_OUTPUT_PATH')
     new_base_path = Path(raw_data_path)
 
     # Create the new path by combining new base directory and file name
@@ -62,8 +64,8 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
 
     try:
         convert_file_and_save(new_file_path, survey_id, sonar_model,
-                              calibration_file=CALIBRATION_FILE,
-                              output_path=ECHODATA_OUTPUT_PATH)
+                              calibration_file=calibration_file,
+                              output_path=output_path)
         print(f"Converted {new_file_path}")
     except Exception as e:
         print(f"Error processing file: {new_file_path.name}" + str(e))
