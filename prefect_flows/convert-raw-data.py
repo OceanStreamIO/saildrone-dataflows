@@ -79,7 +79,7 @@ def convert_raw_data(files: List[Path], survey_id) -> None:
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_convert_files_to_zarr(source_directory: str, map_to_directory: str, cruise_id: str, survey_name: str,
+def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey_name: str,
                                    vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
                                    description: Optional[str], batch_size: int) -> None:
     """
@@ -87,7 +87,6 @@ def load_and_convert_files_to_zarr(source_directory: str, map_to_directory: str,
 
     Args:
         source_directory (str): The directory containing the raw files.
-        map_to_directory (str): The directory to map the raw files to.
         cruise_id (str): The unique ID of the cruise.
         survey_name (str): The name of the survey.
         vessel (str): The vessel used in the survey.
@@ -116,7 +115,7 @@ def load_and_convert_files_to_zarr(source_directory: str, map_to_directory: str,
                                                      end_date, description)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
-    raw_files = load_local_files(source_directory, map_to_directory)
+    raw_files = load_local_files(source_directory, RAW_DATA_MOUNT)
     total_files = len(raw_files)
     print(f"Total files to process: {total_files}")
 
@@ -144,7 +143,6 @@ if __name__ == "__main__":
             name='convert-raw-files-to-zarr',
             parameters={
                 'source_directory': RAW_DATA_LOCAL,
-                'map_to_directory': RAW_DATA_MOUNT,
                 'cruise_id': '',
                 'survey_name': '',
                 'vessel': '',
