@@ -23,7 +23,7 @@ def map_file_paths(file_paths: List[Path], mounted_folder: Path, local_folder: P
     return mapped_paths
 
 
-def load_local_files(directory: str, map_to_directory: str) -> list[Path]:
+def load_local_files(directory: str, map_to_directory: str, extension: str = '*.raw') -> list[Path]:
     """
     Load and map local raw files from the given directory.
 
@@ -45,7 +45,7 @@ def load_local_files(directory: str, map_to_directory: str) -> list[Path]:
     mount_base_path = Path(map_to_directory)
 
     # Get the list of all .raw files sorted by name
-    raw_files = sorted(mounted_folder.glob("*.raw"))
+    raw_files = sorted(mounted_folder.glob(extension))
     mapped_files = [
         mount_base_path / file.relative_to(mounted_folder)  # Preserve relative path
         for file in raw_files

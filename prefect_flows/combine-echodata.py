@@ -12,8 +12,8 @@ from dask.distributed import Client
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
+from echopype import open_converted, combine_echodata as ep_combine_echodata
 
-from saildrone.process import process_file, convert_file
 from saildrone.store import save_zarr_store, ensure_container_exists
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, SurveyService, FileSegmentService
@@ -30,11 +30,8 @@ load_dotenv()
 
 RAW_DATA_MOUNT = os.getenv('RAW_DATA_MOUNT')
 RAW_DATA_LOCAL = os.getenv('RAW_DATA_LOCAL')
-ECHODATA_OUTPUT_PATH = os.getenv('ECHODATA_OUTPUT_PATH')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
-CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
-PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
-CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
+COMBINED_CONTAINER_NAME = os.getenv('COMBINED_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -43,108 +40,79 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     sys.exit(1)
 
 
-@task(
-    retries=3,
-    retry_delay_seconds=1,
-    cache_policy=input_cache_policy,
-    task_run_name="process-{file_path.stem}",
-)
-def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
-    print('Processing file:', file_path)
+@task(cache_policy=input_cache_policy)
+def combine_echodata(echodata_files, combined_zarr_path, ed_combined_name) -> None:   
+    # Open (lazy-load) Zarr stores containing EchoData Objects, and lazily combine them
 
-    try:
-        convert_file(file_path, survey_id, sonar_model,
-                     calibration_file=CALIBRATION_FILE,
-                     output_path=ECHODATA_OUTPUT_PATH)
-        print(f"Processed Sv for {file_path.name}")
-    except Exception:
-        print(f"Error processing file: {file_path.name}")
-        return Completed(message="Task completed with errors")
+    with get_dask_client() as client:
+        ed_future_list = []
+        for converted_file in echodata_files:
+            ed_future = client.submit(    
+                open_converted,
+                converted_raw_path=converted_file,
+                chunks={}
+            )
+            ed_future_list.append(ed_future)
 
+        ed_list = client.gather(ed_future_list)
+        ed_combined = ep_combine_echodata(ed_list)
 
-def convert_raw_data(files: List[Path], survey_id) -> None:
-    task_futures = []
-    print('Processing files:', files)
-    for file_path in files:
-        future = convert_single_file.submit(file_path, survey_id)
-        task_futures.append(future)
-
-    # Wait for all tasks in the batch to complete
-    for future in task_futures:
-        future.result()
+        # Save the combined EchoData object to a new Zarr store
+        # The appending operation only happens when relevant data needs to be save to disk
+        ed_combined.to_zarr(
+            combined_zarr_path / ed_combined_name,
+            overwrite=True,
+            compute=True,
+        )
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_convert_files_to_zarr(source_directory: str, map_to_directory: str, cruise_id: str, survey_name: str,
-                                   vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
-                                   description: Optional[str], batch_size: int) -> None:
+def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, output_zarr_path: str, combined_zarr_name: str, description: Optional[str], batch_size: int) -> None:
     """
     Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
-
-    Args:
-        source_directory (str): The directory containing the raw files.
-        map_to_directory (str): The directory to map the raw files to.
-        cruise_id (str): The unique ID of the cruise.
-        survey_name (str): The name of the survey.
-        vessel (str): The vessel used in the survey.
-        start_port (str): The start port of the survey.
-        end_port (str): The end port of the survey.
-        start_date (str): The start date of the survey in the format YYYY-MM-DD.
-        end_date (str): The end date of the survey in the format YYYY-MM-DD.
-        description (Optional[str]): Optional description of the survey.
-        batch_size (int): The number of files to process in each batch.
     """
 
-    with PostgresDB() as db_connection:
-        survey_service = SurveyService(db_connection)
+    echodata_files = load_local_files(source_directory, map_to_directory, '*.zarr')
+    # combine_echodata(echodata_files, Path(output_zarr_path), combined_zarr_name)
+    combined_zarr_path = Path(output_zarr_path)
 
-        # Check if a survey with the given cruise_id exists
-        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
+    with get_dask_client() as client:
+        ed_future_list = []
+        for converted_file in echodata_files:
+            ed_future = client.submit(    
+                open_converted,
+                converted_raw_path=converted_file,
+                chunks={}
+            )
+            ed_future_list.append(ed_future)
 
-        if survey_id:
-            # Update the existing survey record
-            survey_service.update_survey(survey_id, survey_name, vessel, start_port, end_port, start_date, end_date,
-                                         description)
-            logging.info(f"Updated survey with cruise_id: {cruise_id}")
-        else:
-            # Insert a new survey record
-            survey_id = survey_service.insert_survey(cruise_id, survey_name, vessel, start_port, end_port, start_date,
-                                                     end_date, description)
-            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
+        ed_list = client.gather(ed_future_list)
+        ed_combined = ep_combine_echodata(ed_list)
 
-    raw_files = load_local_files(source_directory, map_to_directory)
-    total_files = len(raw_files)
-    print(f"Total files to process: {total_files}")
+        # Save the combined EchoData object to a new Zarr store
+        # The appending operation only happens when relevant data needs to be save to disk
+        ed_combined.to_zarr(
+            combined_zarr_path / combined_zarr_name,
+            overwrite=True,
+            compute=True,
+        )
 
-    # Process files in batches
-    for i in range(0, total_files, batch_size):
-        batch_files = raw_files[i:i + batch_size]
-        print(f"Processing batch {i // batch_size + 1}")
-        convert_raw_data(batch_files, survey_id)
-
-    logging.info("All batches have been processed.")
 
 
 if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
-    ensure_container_exists(CONVERTED_CONTAINER_NAME)
-    ensure_container_exists(PROCESSED_CONTAINER_NAME)
-
+    ensure_container_exists(COMBINED_CONTAINER_NAME)
+    
     try:
         # Start the flow
-        load_and_convert_files_to_zarr.serve(
-            name='convert-raw-files-to-zarr',
+        load_and_combine_zarr_stores.serve(
+            name='combine-zarr-stores',
             parameters={
                 'source_directory': RAW_DATA_LOCAL,
                 'map_to_directory': RAW_DATA_LOCAL,
-                'cruise_id': '',
-                'survey_name': '',
-                'vessel': '',
-                'start_port': '',
-                'end_port': '',
-                'start_date': '2024-05-01',
-                'end_date': '2024-06-30',
+                'output_zarr_path': '',
+                'combined_zarr_name': 'combined.zarr',
                 'description': '',
                 'batch_size': BATCH_SIZE
             }
