@@ -59,13 +59,12 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
 
     # Create the new path by combining new base directory and file name
     new_file_path = new_base_path / file_path.name
-    print('Processing file:', new_base_path, raw_data_path)
 
     try:
         convert_file_and_save(new_file_path, survey_id, sonar_model,
                               calibration_file=CALIBRATION_FILE,
                               output_path=ECHODATA_OUTPUT_PATH)
-        print(f"Converted {new_file_path.name}")
+        print(f"Converted {new_file_path}")
     except Exception as e:
         print(f"Error processing file: {new_file_path.name}" + str(e))
 
