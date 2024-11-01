@@ -40,34 +40,55 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     sys.exit(1)
 
 
-@task(cache_policy=input_cache_policy)
-def combine_echodata(echodata_files, combined_zarr_path, ed_combined_name) -> None:   
-    # Open (lazy-load) Zarr stores containing EchoData Objects, and lazily combine them
+@task
+def process_converted_file(converted_file: str, chunks=None):
+    """
+    Processes a file only if it hasn't already been converted.
+    """
+    with PostgresDB() as db_connection:
+        file_segment_service = FileSegmentService(db_connection)
 
-    with get_dask_client() as client:
-        ed_future_list = []
-        for converted_file in echodata_files:
-            ed_future = client.submit(    
-                open_converted,
-                converted_raw_path=converted_file,
-                chunks={}
-            )
-            ed_future_list.append(ed_future)
+        file_info = file_segment_service.get_file_info(converted_file)
 
-        ed_list = client.gather(ed_future_list)
-        ed_combined = ep_combine_echodata(ed_list)
+        if file_info is None:
+            return None
 
-        # Save the combined EchoData object to a new Zarr store
-        # The appending operation only happens when relevant data needs to be save to disk
-        ed_combined.to_zarr(
-            combined_zarr_path / ed_combined_name,
-            overwrite=True,
-            compute=True,
-        )
+        if file_info['size'] < 6648203:
+            logging.info(f"File {converted_file} is too small to process.")
+            return None
+
+    return open_converted(converted_file, chunks=chunks)
+
+
+# @task(cache_policy=input_cache_policy)
+# def combine_echodata(echodata_files, combined_zarr_path, ed_combined_name) -> None:
+#     # Open (lazy-load) Zarr stores containing EchoData Objects, and lazily combine them
+#
+#     with get_dask_client() as client:
+#         ed_future_list = []
+#         for converted_file in echodata_files:
+#             ed_future = client.submit(
+#                 open_converted,
+#                 converted_raw_path=converted_file,
+#                 chunks={}
+#             )
+#             ed_future_list.append(ed_future)
+#
+#         ed_list = client.gather(ed_future_list)
+#         ed_combined = ep_combine_echodata(ed_list)
+#
+#         # Save the combined EchoData object to a new Zarr store
+#         # The appending operation only happens when relevant data needs to be save to disk
+#         ed_combined.to_zarr(
+#             combined_zarr_path / ed_combined_name,
+#             overwrite=True,
+#             compute=True,
+#         )
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, output_zarr_path: str, combined_zarr_name: str, description: Optional[str], batch_size: int) -> None:
+def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, output_zarr_path: str,
+                                 combined_zarr_name: str, description: Optional[str], batch_size: int) -> None:
     """
     Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
     """
@@ -79,8 +100,8 @@ def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, o
     with get_dask_client() as client:
         ed_future_list = []
         for converted_file in echodata_files:
-            ed_future = client.submit(    
-                open_converted,
+            ed_future = client.submit(
+                process_converted_file,
                 converted_raw_path=converted_file,
                 chunks={}
             )
@@ -98,12 +119,11 @@ def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, o
         )
 
 
-
 if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
     ensure_container_exists(COMBINED_CONTAINER_NAME)
-    
+
     try:
         # Start the flow
         load_and_combine_zarr_stores.serve(
