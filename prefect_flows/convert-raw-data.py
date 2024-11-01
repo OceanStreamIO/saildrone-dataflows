@@ -57,7 +57,7 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
 
     # Create the new path by combining new base directory and file name
     new_file_path = new_base_path / file_path.name
-    print('Processing file:', new_file_path)
+    print('Processing file:', new_base_path, new_file_path)
 
     try:
         convert_file_and_save(new_file_path, survey_id, sonar_model,
