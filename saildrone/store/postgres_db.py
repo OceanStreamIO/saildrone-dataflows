@@ -1,6 +1,7 @@
-import psycopg2
-from typing import Optional
 import os
+import psycopg2
+from dotenv import load_dotenv
+from typing import Optional
 
 
 class PostgresDB:
@@ -18,6 +19,8 @@ class PostgresDB:
         PostgresDB
             The database instance itself for context management.
         """
+        load_dotenv()
+
         self.conn = psycopg2.connect(
             host=os.getenv('DB_HOST', 'localhost'),
             port=os.getenv('DB_PORT', '5432'),
