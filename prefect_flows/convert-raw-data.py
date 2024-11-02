@@ -73,11 +73,19 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
         return Completed(message="Task completed with errors")
 
 
+@task
+def test_task(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
+    from prefect.settings import default_database_connection_url
+    url = default_database_connection_url
+    print(url)
+
+    return "Hello from Dask worker!"
+
 def convert_raw_data(files: List[Path], survey_id) -> None:
     task_futures = []
     print('Processing files:', files)
     for file_path in files:
-        future = convert_single_file.submit(file_path, survey_id)
+        future = test_task.submit(file_path, survey_id)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -122,7 +130,6 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
                                                      end_date, description)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
-
     raw_files = load_local_files(source_directory, RAW_DATA_MOUNT)
 
     total_files = len(raw_files)
@@ -140,7 +147,6 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
 if __name__ == "__main__":
     with PostgresDB() as db:
         db.create_tables()
-
 
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
