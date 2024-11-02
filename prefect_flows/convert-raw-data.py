@@ -13,6 +13,8 @@ from prefect_dask import DaskTaskRunner
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 
+import prefect.settings as ps
+
 from saildrone.process import convert_file_and_save
 from saildrone.store import ensure_container_exists
 from saildrone.utils import load_local_files
@@ -78,9 +80,8 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
 
 @task
 def test_task(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
-    from prefect.settings import default_database_connection_url
-    url = default_database_connection_url
-    print(url)
+    db_url = ps.default_database_connection_url.value()
+    print(f"Database URL: {db_url}")
 
     return "Hello from Dask worker!"
 
