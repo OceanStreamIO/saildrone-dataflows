@@ -17,6 +17,9 @@ from saildrone.process import convert_file_and_save
 from saildrone.store import ensure_container_exists
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, SurveyService
+from dask.config import set
+
+set({"distributed.protocol.pickle": "pickle"})
 
 input_cache_policy = Inputs()
 
