@@ -44,7 +44,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 
 
 @task(
-    retries=3,
+    retries=10,
     retry_delay_seconds=[10, 30, 60],
     cache_policy=input_cache_policy,
     retry_jitter_factor=0.1,
