@@ -32,7 +32,7 @@ RAW_DATA_MOUNT = os.getenv('RAW_DATA_MOUNT')
 RAW_DATA_LOCAL = os.getenv('RAW_DATA_LOCAL')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 COMBINED_CONTAINER_NAME = os.getenv('COMBINED_CONTAINER_NAME')
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
+BATCH_SIZE = int(os.getenv('BATCH_SIZE', 10))
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 if not AZURE_STORAGE_CONNECTION_STRING:
@@ -87,8 +87,14 @@ def process_converted_file(converted_file: str, chunks=None):
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, output_zarr_path: str,
-                                 combined_zarr_name: str, description: Optional[str], batch_size: int) -> None:
+def load_and_combine_zarr_stores(source_directory: str,
+                                 map_to_directory: str,
+                                 output_zarr_path: str,
+                                 container_name: str,
+                                 survey_id: str,
+                                 combined_zarr_name: str,
+                                 description: Optional[str],
+                                 batch_size: int) -> None:
     """
     Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
     """
@@ -112,11 +118,15 @@ def load_and_combine_zarr_stores(source_directory: str, map_to_directory: str, o
 
         # Save the combined EchoData object to a new Zarr store
         # The appending operation only happens when relevant data needs to be save to disk
-        ed_combined.to_zarr(
-            combined_zarr_path / combined_zarr_name,
-            overwrite=True,
-            compute=True,
-        )
+        if container_name != '':
+            zarr_store = save_zarr_store(ed_combined, combined_zarr_name, survey_id=survey_id,
+                                         container_name=container_name)
+        else:
+            ed_combined.to_zarr(
+                combined_zarr_path / combined_zarr_name,
+                overwrite=True,
+                compute=True,
+            )
 
 
 if __name__ == "__main__":
@@ -132,7 +142,9 @@ if __name__ == "__main__":
                 'source_directory': RAW_DATA_LOCAL,
                 'map_to_directory': RAW_DATA_LOCAL,
                 'output_zarr_path': '',
-                'combined_zarr_name': 'combined.zarr',
+                'container_name': COMBINED_CONTAINER_NAME,
+                'survey_id': '',
+                'combined_zarr_name': 'saildrone2023.zarr',
                 'description': '',
                 'batch_size': BATCH_SIZE
             }
