@@ -11,7 +11,7 @@ PARTITIONED_DATA_PATH = OUTPUT_FOLDER
 
 def test_geoparquet_data_writetoazure():
     container_name = 'gpsdata'
-    survey_name = 'SAILDRONE2023'
+    survey_name = 'SD_TPOS2023_v03'
 
     ensure_container_exists(container_name)
     storage_path = f"{container_name}/{survey_name}"
@@ -19,7 +19,7 @@ def test_geoparquet_data_writetoazure():
     consolidate_csv_to_geoparquet_partitioned(TEST_DATA_FOLDER, storage_path, storage_type='azure')
 
     container_name = 'gpsdata'
-    partition_path = 'lon_grid=-158/lat_grid=21/data.parquet'
+    partition_path = f'{survey_name}/lon_grid=-158/lat_grid=21/data.parquet'
 
     try:
         gdf = open_geo_parquet(partition_path, container_name=container_name)

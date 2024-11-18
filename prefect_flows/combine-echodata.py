@@ -16,7 +16,7 @@ from echopype import open_converted, combine_echodata as ep_combine_echodata
 
 from saildrone.store import save_zarr_store, ensure_container_exists
 from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService, FileSegmentService
+from saildrone.store import PostgresDB, FileSegmentService
 
 input_cache_policy = Inputs()
 

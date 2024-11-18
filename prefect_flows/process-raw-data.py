@@ -13,7 +13,7 @@ from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 
-from saildrone.process import process_file
+from saildrone.process import process_raw_file
 from saildrone.store import save_zarr_store, ensure_container_exists
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, SurveyService, FileSegmentService
@@ -53,11 +53,11 @@ def process_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
     print('Processing file:', file_path)
 
     try:
-        process_file(file_path, survey_id, sonar_model,
-                     calibration_file=CALIBRATION_FILE,
-                     output_path=ECHODATA_OUTPUT_PATH,
-                     chunks={"ping_time": 1000, "range_sample": -1},
-                     processed_container_name=PROCESSED_CONTAINER_NAME)
+        process_raw_file(file_path, survey_id, sonar_model,
+                         calibration_file=CALIBRATION_FILE,
+                         output_path=ECHODATA_OUTPUT_PATH,
+                         chunks={"ping_time": 1000, "range_sample": -1},
+                         processed_container_name=PROCESSED_CONTAINER_NAME)
         print(f"Processed Sv for {file_path.name}")
     except Exception:
         print(f"Error processing file: {file_path.name}")

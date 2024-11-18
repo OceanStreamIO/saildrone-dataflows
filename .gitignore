@@ -118,4 +118,6 @@ venv.bak/
 raw-data/
 .DS_Store
 .prefect
+calibration/*.ecs
+calibration/*.xlsx
 
