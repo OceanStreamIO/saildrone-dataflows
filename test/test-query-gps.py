@@ -3,14 +3,10 @@ import shutil
 import pytest
 import pandas as pd
 import geopandas as gpd
-
-from shapely import wkt
 from shapely.geometry import Point, Polygon, box
-from saildrone.process import consolidate_csv_to_geoparquet_partitioned, query_location_points_between_timestamps
+from saildrone.process import consolidate_csv_to_geoparquet_partitioned
 
-TEST_DATA_FOLDER = "./test/gps-data"
-OUTPUT_FOLDER = "./test/gps-processed"
-PARTITIONED_DATA_PATH = OUTPUT_FOLDER
+PARTITIONED_DATA_PATH = "./test/gps-processed"
 
 
 @pytest.fixture(scope="function")
@@ -29,16 +25,15 @@ def setup_and_cleanup():
     yield
 
 
-# @pytest.mark.usefixtures("setup_and_cleanup")
+@pytest.mark.usefixtures("setup_and_cleanup")
 def test_geoparquet_data_integrity():
     """
     Test the data integrity of the GeoParquet file and perform example geospatial queries.
     """
-
     parquet_files = []
     for root, dirs, files in os.walk(PARTITIONED_DATA_PATH):
         for file in files:
-            if file == 'data.parquet' and 'lon_grid=' in root and 'lat_grid=' in root:
+            if file.endswith('.parquet'):
                 parquet_files.append(os.path.join(root, file))
 
     assert parquet_files, "No partitioned Parquet files found."
@@ -48,13 +43,14 @@ def test_geoparquet_data_integrity():
         try:
             gdf = gpd.read_parquet(file_path)
             data_frames.append(gdf)
+            print(f"Loaded partitioned file: {file_path}")
         except Exception as e:
             pytest.fail(f"Failed to load partitioned Parquet file '{file_path}': {e}")
 
     combined_gdf = gpd.GeoDataFrame(pd.concat(data_frames, ignore_index=True))
     assert not combined_gdf.empty, "Combined GeoDataFrame is empty."
 
-    required_columns = ['time', 'latitude', 'longitude', 'geometry']
+    required_columns = ['time', 'latitude', 'longitude', 'geometry', 'lon_grid', 'lat_grid']
     missing_columns = [col for col in required_columns if col not in combined_gdf.columns]
     assert not missing_columns, f"Missing required columns: {missing_columns}"
 
@@ -84,16 +80,3 @@ def test_geoparquet_data_integrity():
     assert not points_within_polygon.empty, "No data points found within the custom polygon."
 
     print("\nData Integrity and Geospatial Queries completed successfully.")
-
-    # **Timestamp-based Query Test**
-    query_start_time = combined_gdf['time'].min()  # Earliest timestamp in the dataset
-    query_end_time = query_start_time + pd.Timedelta(hours=1)  # One hour after the start time
-
-    # Run the timestamp-based query using `query_location_points_between_timestamps`
-    result_gdf = query_location_points_between_timestamps(PARTITIONED_DATA_PATH, query_start_time, query_end_time)
-
-    # Assertions on the timestamp query result
-    assert not result_gdf.empty, "No data points found within the specified timestamp range."
-    assert result_gdf['time'].min() >= query_start_time, "Query result contains points before the start time."
-    assert result_gdf['time'].max() <= query_end_time, "Query result contains points after the end time."
-

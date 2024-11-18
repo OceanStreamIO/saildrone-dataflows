@@ -45,11 +45,11 @@ class FileSegmentService:
         dict
             A dictionary containing information about the file.
         """
-        self.db.cursor.execute('SELECT size, converted FROM files WHERE file_name=%s', (file_name,))
+        self.db.cursor.execute('SELECT id, size, converted FROM files WHERE file_name=%s', (file_name,))
         row = self.db.cursor.fetchone()
 
         if row:
-            return {'size': row[0], 'converted': row[1]}
+            return {'id': row[0], 'size': row[1], 'converted': row[2]}
 
         return None
 
@@ -75,6 +75,7 @@ class FileSegmentService:
         file_name: str,
         size: Optional[int] = None,
         location: Optional[str] = None,
+        converted: Optional[bool] = None,
         last_modified: Optional[str] = None,
         file_npings: Optional[int] = None,
         file_nsamples: Optional[int] = None,
@@ -100,6 +101,8 @@ class FileSegmentService:
             The size of the file in bytes.
         location : Optional[str]
             The file path or location.
+        converted : Optional[bool]
+            Whether the file has been converted.
         last_modified : Optional[str]
             The last modified timestamp of the file.
         file_npings : Optional[int]
@@ -131,14 +134,18 @@ class FileSegmentService:
         -------
         int
             The ID of the newly inserted file record.
+
+        Args:
+            converted:
+            converted:
         """
         self.db.cursor.execute('''
             INSERT INTO files (
                 file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time, 
                 file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, 
                 file_end_lat, file_end_lon, echogram_files
-            ) VALUES (%s, %s, %s, FALSE, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-        ''', (file_name, size, location, last_modified, file_npings, file_nsamples, file_start_time, file_end_time,
+            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        ''', (file_name, size, location, converted, last_modified, file_npings, file_nsamples, file_start_time, file_end_time,
               file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat, file_end_lon, echogram_files))
         file_id = self.db.cursor.fetchone()[0]
         self.db.conn.commit()
@@ -149,6 +156,7 @@ class FileSegmentService:
         file_id: int,
         file_name: Optional[str] = None,
         size: Optional[int] = None,
+        processed: Optional[bool] = None,
         location: Optional[str] = None,
         last_modified: Optional[str] = None,
         file_npings: Optional[int] = None,
@@ -175,6 +183,8 @@ class FileSegmentService:
             The name of the file.
         size : Optional[int]
             The size of the file in bytes.
+        processed : Optional[bool]
+            Whether the file has been processed.
         location : Optional[str]
             The file path or location.
         last_modified : Optional[str]
@@ -208,6 +218,7 @@ class FileSegmentService:
             UPDATE files
             SET file_name = COALESCE(%s, file_name),
                 size = COALESCE(%s, size),
+                processed = COALESCE(%s, processed),
                 location = COALESCE(%s, location),
                 last_modified = COALESCE(%s, last_modified),
                 file_npings = COALESCE(%s, file_npings),
@@ -223,8 +234,9 @@ class FileSegmentService:
                 file_end_lon = COALESCE(%s, file_end_lon),
                 echogram_files = COALESCE(%s, echogram_files)
             WHERE id = %s
-        ''', (file_name, size, location, last_modified, file_npings, file_nsamples, file_start_time, file_end_time,
-              file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat, file_end_lon, echogram_files, file_id))
+        ''', (file_name, size, processed, location, last_modified, file_npings, file_nsamples, file_start_time,
+              file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
+              file_end_lon, echogram_files, file_id))
         self.db.conn.commit()
 
     def mark_file_processed(self, file_id: int) -> None:

@@ -13,12 +13,11 @@ from saildrone.process import apply_calibration
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage
 from prefect_dask import get_dask_client
 
-
 CHUNKS = {"ping_time": 1000, "range_sample": -1}
 
 
-def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
-                 converted_container_name=None, processed_container_name=None, chunks=None) -> (Dataset, str, str):
+def process_raw_file(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
+                     converted_container_name=None, processed_container_name=None, chunks=None) -> (Dataset, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
     zarr_store = None
@@ -67,6 +66,75 @@ def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibratio
             )
 
             file_segment_service.mark_file_processed(file_id)
+
+            return sv_dataset, zarr_store, sv_zarr_path
+
+
+def open_echodata(source_path=None, container_name=None, zarr_path=None, chunks=None):
+    if source_path is not None:
+        from echopype.echodata.api import open_converted
+
+        return open_converted(source_path, chunks=chunks)
+
+    return open_from_blobstorage(zarr_path, container_name=container_name, chunks=chunks)
+
+
+def process_converted_file(source_path: Path = None,
+                           survey_id=None,
+                           output_path=None,
+                           converted_container_name=None,
+                           processed_container_name=None,
+                           chunks=None) -> (Dataset, str, str):
+    if isinstance(source_path, Path):
+        file_name = source_path.stem
+    else:
+        file_name = source_path
+
+    sv_zarr_path = None
+    zarr_store = None
+
+    with PostgresDB() as db_connection:
+        file_segment_service = FileSegmentService(db_connection)
+
+        # Check if the file has already been processed
+        if file_segment_service.is_file_processed(file_name):
+            logging.info(f'Skipping already processed file: {file_name}')
+            return None, None, None
+
+        with get_dask_client():
+            zarr_path = None
+            if converted_container_name is not None:
+                zarr_path = f"{survey_id}/{file_name}.zarr"
+
+            echodata = open_echodata(source_path=source_path,
+                                     container_name=converted_container_name,
+                                     zarr_path=zarr_path,
+                                     chunks=chunks)
+            output_zarr_path = None
+
+            if echodata.beam is None:
+                logging.info(f'No beam data found in file: {file_name}')
+                return
+
+            sv_dataset = compute_sv(echodata,
+                                    container_name=converted_container_name,
+                                    zarr_path=zarr_path,
+                                    source_path=output_zarr_path)
+
+            if processed_container_name is not None:
+                sv_zarr_path = f"{survey_id}/{file_name}.zarr"
+                zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
+                                                      zarr_path=sv_zarr_path)
+            elif output_path is not None:
+                sv_zarr_path = f"{output_path}/{file_name}.zarr"
+                sv_dataset.to_zarr(sv_zarr_path, mode='w')
+                zarr_store = sv_zarr_path
+
+            file_info = file_segment_service.get_file_info(file_name)
+            file_segment_service.update_file_record(
+                file_id=file_info['id'],
+                processed=True
+            )
 
             return sv_dataset, zarr_store, sv_zarr_path
 

@@ -3,7 +3,7 @@ import numpy as np
 from saildrone.utils import load_values_from_xlsx
 
 
-def apply_calibration(echodata, file_path='./utils/calibration_values.xlsx'):
+def apply_calibration(echodata, file_path='./calibration/calibration_values.xlsx'):
     """
     Apply calibration to the dataset.
 

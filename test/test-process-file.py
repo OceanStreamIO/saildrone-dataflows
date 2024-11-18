@@ -4,7 +4,7 @@ import fsspec
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from saildrone.store import PostgresDB, FileSegmentService
-from saildrone.process import process_file, plot_sv_data
+from saildrone.process import process_raw_file, plot_sv_data
 
 
 @pytest.fixture
@@ -25,7 +25,7 @@ def test_process_file_without_beam(mock_get_dask_client, mock_save_zarr_store, d
 
     file_segment_service = FileSegmentService(db_setup)
     assert not file_segment_service.is_file_processed(file_name)
-    sv_dataset = process_file(
+    sv_dataset = process_raw_file(
         file_path=file_info,
         survey_id='TPOS2023',
         sonar_model='EK80',
@@ -43,7 +43,7 @@ def test_process_file_success(mock_get_dask_client, mock_save_zarr_store, db_set
     file_info = Path(f'./test/data/{file_name}.raw')
     file_segment_service = FileSegmentService(db_setup)
     assert not file_segment_service.is_file_processed(file_name)
-    sv_dataset, _, _ = process_file(
+    sv_dataset, _, _ = process_raw_file(
         file_path=file_info,
         survey_id='TPOS2023',
         sonar_model='EK80',

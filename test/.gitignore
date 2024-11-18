@@ -3,3 +3,4 @@ data
 gps-data
 processed
 gps-processed
+zarr

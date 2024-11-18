@@ -35,10 +35,16 @@ def load_local_files(directory: str, map_to_directory: str, extension: str = '*.
     map_to_directory : str
         The directory to map the raw files to.
 
+    extension : str, optional
+        The file extension to search for, by default '*.raw'.
+
     Returns
     -------
     list[Path]
         A list of mapped file paths, where the base path is replaced by the value of the RAW_DATA_MOUNT environment variable.
+
+    Args:
+        extension:
     """
     # Get the mounted and local directories as Path objects
     mounted_folder = Path(directory)

@@ -10,8 +10,13 @@ PARTITIONED_DATA_PATH = OUTPUT_FOLDER
 
 
 def test_geoparquet_data_writetoazure():
-    ensure_container_exists('gpsdata')
-    consolidate_csv_to_geoparquet_partitioned(TEST_DATA_FOLDER, 'gpsdata', storage_type='azure')
+    container_name = 'gpsdata'
+    survey_name = 'SAILDRONE2023'
+
+    ensure_container_exists(container_name)
+    storage_path = f"{container_name}/{survey_name}"
+
+    consolidate_csv_to_geoparquet_partitioned(TEST_DATA_FOLDER, storage_path, storage_type='azure')
 
     container_name = 'gpsdata'
     partition_path = 'lon_grid=-158/lat_grid=21/data.parquet'
