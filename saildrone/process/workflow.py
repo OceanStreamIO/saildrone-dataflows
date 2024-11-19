@@ -12,17 +12,12 @@ from saildrone.store import PostgresDB, FileSegmentService
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage
 
 
-def process_file(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
-                 converted_container_name=None, processed_container_name=None, chunks=None) -> (Dataset, str, str):
-    file_name = file_path.stem
-    sv_zarr_path = None
-
-
 def process_converted_file(source_path: Path = None,
                            survey_id=None,
                            output_path=None,
                            converted_container_name=None,
                            processed_container_name=None,
+                           reprocess=False,
                            chunks=None) -> (Dataset, str, str):
     if isinstance(source_path, Path):
         file_name = source_path.stem
@@ -36,7 +31,7 @@ def process_converted_file(source_path: Path = None,
         file_segment_service = FileSegmentService(db_connection)
 
         # Check if the file has already been processed
-        if file_segment_service.is_file_processed(file_name):
+        if file_segment_service.is_file_processed(file_name) and not reprocess:
             logging.info(f'Skipping already processed file: {file_name}')
             return None, None, None
 
@@ -70,6 +65,11 @@ def process_converted_file(source_path: Path = None,
                 zarr_store = sv_zarr_path
 
             file_info = file_segment_service.get_file_info(file_name)
+
+            if file_info is None:
+                logging.error(f'Failed to get file info for: {file_name}')
+                return sv_dataset, zarr_store, sv_zarr_path
+
             file_segment_service.update_file_record(
                 file_id=file_info['id'],
                 processed=True

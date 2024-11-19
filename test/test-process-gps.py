@@ -90,7 +90,8 @@ def test_geoparquet_data_integrity():
     query_end_time = query_start_time + pd.Timedelta(hours=1)  # One hour after the start time
 
     # Run the timestamp-based query using `query_location_points_between_timestamps`
-    result_gdf = query_location_points_between_timestamps(PARTITIONED_DATA_PATH, query_start_time, query_end_time)
+    result_gdf = query_location_points_between_timestamps(query_start_time, query_end_time,
+                                                          geoparquet_path=PARTITIONED_DATA_PATH)
 
     # Assertions on the timestamp query result
     assert not result_gdf.empty, "No data points found within the specified timestamp range."

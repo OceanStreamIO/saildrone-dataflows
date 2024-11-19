@@ -97,8 +97,8 @@ def consolidate_csv_to_geoparquet_partitioned(folder_path, output_path, storage_
         metadata_df.to_parquet(f, index=False)
 
 
-def query_location_points_between_timestamps(geoparquet_path, file_start_time, file_end_time, survey_id=None,
-                                             container_name=None):
+def query_location_points_between_timestamps(file_start_time, file_end_time, geoparquet_path=None,
+                                             container_name=None, survey_id=None):
     """
     Query location points between two timestamps by loading only relevant partitions based on metadata.
 
@@ -117,8 +117,13 @@ def query_location_points_between_timestamps(geoparquet_path, file_start_time, f
     file_end_time = pd.to_datetime(file_end_time)
 
     # Load the metadata file to identify relevant partitions
-    metadata_path = f"{geoparquet_path}/metadata.parquet"
-    metadata_df = pd.read_parquet(metadata_path)
+    if geoparquet_path is not None:
+        metadata_path = f"{geoparquet_path}/metadata.parquet"
+        metadata_df = pd.read_parquet(metadata_path)
+    elif container_name is not None:
+        metadata_df = open_geo_parquet('metadata.parquet', container_name=container_name, survey_id=survey_id)
+    else:
+        raise ValueError("Either 'geoparquet_path' or 'container_name' must be provided.")
 
     # Filter metadata to find partitions overlapping with the query timestamp range
     relevant_partitions = metadata_df[
@@ -137,7 +142,10 @@ def query_location_points_between_timestamps(geoparquet_path, file_start_time, f
         partition_path = row['partition_path']
 
         try:
-            partition_gdf = gpd.read_parquet(partition_path)
+            if geoparquet_path is not None:
+                partition_gdf = gpd.read_parquet(partition_path)
+            else:
+                partition_gdf = open_geo_parquet(partition_path)
 
             # Filter the partition to only include records within the specified timestamp range
             filtered_gdf = partition_gdf[
