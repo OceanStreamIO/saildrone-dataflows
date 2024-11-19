@@ -121,7 +121,8 @@ def query_location_points_between_timestamps(file_start_time, file_end_time, geo
         metadata_path = f"{geoparquet_path}/metadata.parquet"
         metadata_df = pd.read_parquet(metadata_path)
     elif container_name is not None:
-        metadata_df = open_geo_parquet('metadata.parquet', container_name=container_name, survey_id=survey_id)
+        metadata_df = open_geo_parquet('metadata.parquet', container_name=container_name, survey_id=survey_id,
+                                       has_geometry=False)
     else:
         raise ValueError("Either 'geoparquet_path' or 'container_name' must be provided.")
 

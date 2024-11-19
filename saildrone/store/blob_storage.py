@@ -1,13 +1,15 @@
 import os
-from typing import Optional, List
-from adlfs import AzureBlobFileSystem
+import pandas as pd
 import xarray as xr
 import geopandas as gpd
 import logging
+
+from typing import Optional, List
+from adlfs import AzureBlobFileSystem
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
 # Initialize the logger
-logger = logging.getLogger('oceanstream')
+logger = logging.getLogger(__name__)
 
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
@@ -133,8 +135,8 @@ def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER
     return open_converted(chunk_store, chunks=chunks)
 
 
-def open_geo_parquet(pq_path, survey_id=None, container_name=None):
-    """Open a Zarr store from Azure Blob Storage."""
+def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=True):
+    """Open a geo parquet file from Azure Blob Storage."""
     connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
     azfs = AzureBlobFileSystem(connection_string=connection_string)
 
@@ -148,8 +150,11 @@ def open_geo_parquet(pq_path, survey_id=None, container_name=None):
     else:
         pq_path_full = pq_path
 
-    logger.info(f"Opening Zarr store: {pq_path_full}")
+    logger.info(f"Opening parquet file: {pq_path_full}")
     with azfs.open(pq_path_full, 'rb') as f:
-        gdf = gpd.read_parquet(f)
+        if has_geometry:
+            gdf = gpd.read_parquet(f)
+        else:
+            gdf = pd.read_parquet(f)
 
     return gdf
