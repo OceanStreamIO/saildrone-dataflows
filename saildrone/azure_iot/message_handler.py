@@ -1,10 +1,12 @@
 import logging
-from typing import Dict, Any
-from datetime import datetime
+import datetime as dt
 import json
 import uuid
 import pandas as pd
 import numpy as np
+
+from typing import Dict, Any
+from datetime import datetime
 from azure.iot.device import Message
 from azure.iot.device import IoTHubModuleClient
 
@@ -26,6 +28,9 @@ def default_serializer(obj):
         # Convert Timestamp and datetime objects to ISO format strings
         return obj.isoformat()
 
+    if isinstance(obj, dt.date):
+        return obj.isoformat()
+
     if isinstance(obj, (np.integer, np.int8, np.int16, np.int32, np.int64)):
         return int(obj)
 
@@ -35,10 +40,7 @@ def default_serializer(obj):
     if isinstance(obj, (np.floating, np.float32, np.float64)):
         return float(obj)
 
-    if isinstance(obj, datetime):
-        return obj.isoformat()
-
-    return obj
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 def serialize_for_json(obj):

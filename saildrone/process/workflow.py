@@ -47,8 +47,8 @@ def process_converted_file(source_path: Path = None,
             output_zarr_path = None
 
             if echodata.beam is None:
-                logging.info(f'No beam data found in file: {file_name}')
-                return
+                logging.error(f'No beam data found in file: {file_name}')
+                return None, None, None
 
             sv_dataset = compute_sv(echodata,
                                     container_name=converted_container_name,
