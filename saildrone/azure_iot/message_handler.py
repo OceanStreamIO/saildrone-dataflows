@@ -90,6 +90,10 @@ def serialize_for_json(obj):
     return obj
 
 
+def serialize_location_data(data) -> str:
+    return json.dumps(data, default=default_serializer)
+
+
 def send_to_hub(client: IoTHubModuleClient, data: Dict[str, Any] = None, properties=None,
                 output_name: str = 'output1') -> None:
     """
@@ -111,7 +115,7 @@ def send_to_hub(client: IoTHubModuleClient, data: Dict[str, Any] = None, propert
             if data is None:
                 data = {}
 
-            payload = json.dumps(data, default=default_serializer)
+            payload = serialize_location_data(data)
             message = Message(payload)
             message.message_id = uuid.uuid4()
 

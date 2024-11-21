@@ -45,11 +45,11 @@ class FileSegmentService:
         dict
             A dictionary containing information about the file.
         """
-        self.db.cursor.execute('SELECT id, size, converted FROM files WHERE file_name=%s', (file_name,))
+        self.db.cursor.execute('SELECT id, size, converted, processed FROM files WHERE file_name=%s', (file_name,))
         row = self.db.cursor.fetchone()
 
         if row:
-            return {'id': row[0], 'size': row[1], 'converted': row[2]}
+            return {'id': row[0], 'size': row[1], 'converted': row[2], 'processed': row[3]}
 
         return None
 
@@ -88,7 +88,12 @@ class FileSegmentService:
         file_start_lon: Optional[float] = None,
         file_end_lat: Optional[float] = None,
         file_end_lon: Optional[float] = None,
-        echogram_files: Optional[List[str]] = None
+        echogram_files: Optional[List[str]] = None,
+        failed: Optional[bool] = None,
+        error_details: Optional[str] = None,
+        location_data: Optional[str] = None,
+        processing_time_ms: Optional[int] = None,
+        survey_db_id: Optional[int] = None,
     ) -> int:
         """
         Insert a new file record into the database.
@@ -129,6 +134,12 @@ class FileSegmentService:
             The ending longitude of the file.
         echogram_files : Optional[List[str]]
             A list of paths to the echogram files associated with this file.
+        failed : Optional[bool]
+            Whether the file processing failed.
+        error_details : Optional[str]
+            Details of the error that occurred during processing.
+        location_data : Optional[str]
+            The location data extracted from the file.
 
         Returns
         -------
@@ -143,10 +154,11 @@ class FileSegmentService:
             INSERT INTO files (
                 file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time, 
                 file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, 
-                file_end_lat, file_end_lon, echogram_files
-            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-        ''', (file_name, size, location, converted, last_modified, file_npings, file_nsamples, file_start_time, file_end_time,
-              file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat, file_end_lon, echogram_files))
+                file_end_lat, file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id
+            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        ''', (file_name, size, location, converted, last_modified, file_npings, file_nsamples, file_start_time,
+              file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
+              file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id))
         file_id = self.db.cursor.fetchone()[0]
         self.db.conn.commit()
         return file_id
@@ -170,7 +182,12 @@ class FileSegmentService:
         file_start_lon: Optional[float] = None,
         file_end_lat: Optional[float] = None,
         file_end_lon: Optional[float] = None,
-        echogram_files: Optional[List[str]] = None
+        echogram_files: Optional[List[str]] = None,
+        failed: Optional[bool] = None,
+        error_details: Optional[str] = None,
+        location_data: Optional[str] = None,
+        processing_time_ms: Optional[int] = None,
+        survey_db_id: Optional[int] = None,
     ) -> None:
         """
         Update an existing file record in the database.
@@ -232,11 +249,17 @@ class FileSegmentService:
                 file_start_lon = COALESCE(%s, file_start_lon),
                 file_end_lat = COALESCE(%s, file_end_lat),
                 file_end_lon = COALESCE(%s, file_end_lon),
-                echogram_files = COALESCE(%s, echogram_files)
+                echogram_files = COALESCE(%s, echogram_files),
+                failed = COALESCE(%s, failed),
+                error_details = COALESCE(%s, error_details),
+                location_data = COALESCE(%s, location_data),
+                processing_time_ms = COALESCE(%s, processing_time_ms),
+                survey_db_id = COALESCE(%s, survey_db_id)
             WHERE id = %s
         ''', (file_name, size, processed, location, last_modified, file_npings, file_nsamples, file_start_time,
               file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
-              file_end_lon, echogram_files, file_id))
+              file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id,
+              file_id))
         self.db.conn.commit()
 
     def mark_file_processed(self, file_id: int) -> None:

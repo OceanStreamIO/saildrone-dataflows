@@ -64,7 +64,10 @@ class PostgresDB:
                 file_start_lon REAL,
                 file_end_lat REAL,
                 file_end_lon REAL,
-                echogram_files TEXT[]
+                echogram_files TEXT[],
+                failed BOOLEAN DEFAULT FALSE,
+                error_details TEXT,
+                location_data JSON
             );
         ''')
 

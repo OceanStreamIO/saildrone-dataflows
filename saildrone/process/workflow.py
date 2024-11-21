@@ -1,81 +1,229 @@
 import logging
+import time
 
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from xarray import Dataset
 from pathlib import Path
-from prefect_dask import get_dask_client
+from typing import Optional, Tuple
 
 from echopype.calibrate import compute_Sv as sv_computation
-from saildrone.store import PostgresDB, FileSegmentService
+from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage
+from saildrone.azure_iot import serialize_location_data
+
+from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
+from .location import extract_location_data
 
 
-def process_converted_file(source_path: Path = None,
-                           survey_id=None,
-                           output_path=None,
-                           converted_container_name=None,
-                           processed_container_name=None,
-                           reprocess=False,
-                           chunks=None) -> (Dataset, str, str):
-    if isinstance(source_path, Path):
-        file_name = source_path.stem
-    else:
-        file_name = source_path
+def process_converted_file(
+    source_path: Path,
+    cruise_id: str,
+    output_path: Optional[str] = None,
+    converted_container_name: Optional[str] = None,
+    processed_container_name: Optional[str] = None,
+    gps_container_name: Optional[str] = None,
+    reprocess: bool = False,
+    chunks: Optional[dict] = None
+) -> dict:
+    """
+    Process a converted file and update the database with results or errors.
 
-    sv_zarr_path = None
-    zarr_store = None
+    Parameters:
+        source_path (Path): Path to the source file.
+        cruise_id (str): Cruise ID.
+        output_path (Optional[str]): Local output path for processed data.
+        converted_container_name (Optional[str]): Blob storage container name for converted files.
+        processed_container_name (Optional[str]): Blob storage container name for processed files.
+        gps_container_name (Optional[str]): Blob storage container name for GPS data.
+        reprocess (bool): Whether to reprocess an already processed file.
+        chunks (Optional[dict]): Dask chunking strategy.
+
+    Returns:
+        dict: Payload containing processing results.
+
+    Raises:
+        RuntimeError: If an error occurs during processing.
+    """
+    start_time = time.time()
+    file_name = source_path.stem if isinstance(source_path, Path) else source_path
 
     with PostgresDB() as db_connection:
         file_segment_service = FileSegmentService(db_connection)
+        survey_service = SurveyService(db_connection)
 
-        # Check if the file has already been processed
-        if file_segment_service.is_file_processed(file_name) and not reprocess:
-            logging.info(f'Skipping already processed file: {file_name}')
-            return None, None, None
+        file_info = file_segment_service.get_file_info(file_name)
 
-        with get_dask_client():
-            zarr_path = None
-            if converted_container_name is not None:
-                zarr_path = f"{survey_id}/{file_name}.zarr"
+        if file_info is None:
+            raise RuntimeError(f"File '{file_name}' not found in the database.")
 
-            echodata = open_echodata(source_path=source_path,
-                                     container_name=converted_container_name,
-                                     zarr_path=zarr_path,
-                                     chunks=chunks)
-            output_zarr_path = None
+        survey_db_id = survey_service.get_survey_by_cruise_id(cruise_id)
+        if survey_db_id is None:
+            raise RuntimeError(f"Survey with cruse id '{cruise_id}' not found in the database.")
 
-            if echodata.beam is None:
-                logging.error(f'No beam data found in file: {file_name}')
-                return None, None, None
+        # Check processing status
+        if file_info["processed"] and not reprocess:
+            logging.info(f"Skipping already processed file: {file_name}")
+            return {"status": "skipped", "file_name": file_name}
 
-            sv_dataset = compute_sv(echodata,
-                                    container_name=converted_container_name,
-                                    zarr_path=zarr_path,
-                                    source_path=output_zarr_path)
-
-            if processed_container_name is not None:
-                sv_zarr_path = f"{survey_id}/{file_name}.zarr"
-                zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
-                                                      zarr_path=sv_zarr_path)
-            elif output_path is not None:
-                sv_zarr_path = f"{output_path}/{file_name}.zarr"
-                sv_dataset.to_zarr(sv_zarr_path, mode='w')
-                zarr_store = sv_zarr_path
-
-            file_info = file_segment_service.get_file_info(file_name)
-
-            if file_info is None:
-                logging.error(f'Failed to get file info for: {file_name}')
-                return sv_dataset, zarr_store, sv_zarr_path
-
-            file_segment_service.update_file_record(
-                file_id=file_info['id'],
-                processed=True
+        # Process the file and handle potential errors
+        try:
+            return _process_file_workflow(
+                file_name=file_name,
+                source_path=source_path,
+                cruise_id=cruise_id,
+                survey_db_id=survey_db_id,
+                output_path=output_path,
+                converted_container_name=converted_container_name,
+                processed_container_name=processed_container_name,
+                gps_container_name=gps_container_name,
+                chunks=chunks,
+                file_segment_service=file_segment_service,
+                start_time=start_time,
+                file_id=file_info["id"]
             )
+        except Exception as e:
+            error_message = f"Error processing file '{file_name}': {e}"
+            logging.error(error_message)
 
-            return sv_dataset, zarr_store, sv_zarr_path
+            # Update the database with the failure details
+            file_segment_service.update_file_record(
+                file_id=file_info["id"],
+                failed=True,
+                error_details=str(e),
+            )
+            raise RuntimeError(error_message)
+
+
+def _process_file_workflow(
+    file_name: str = None,
+    source_path: Path = None,
+    cruise_id: str = None,
+    survey_db_id: int = None,
+    output_path: Optional[str] = None,
+    converted_container_name: Optional[str] = None,
+    processed_container_name: Optional[str] = None,
+    gps_container_name: Optional[str] = None,
+    chunks: Optional[dict] = None,
+    file_segment_service = None,
+    start_time: float = None,
+    file_id: int = None
+) -> dict:
+    """Core processing logic, encapsulating the main workflow."""
+    zarr_path = f"{cruise_id}/{file_name}.zarr" if converted_container_name else None
+    echodata = open_echodata(
+        source_path=source_path, container_name=converted_container_name, zarr_path=zarr_path, chunks=chunks
+    )
+
+    if echodata.beam is None:
+        error_message = f"No beam data found in file: {file_name}"
+        logging.error(error_message)
+        _update_file_failure(file_segment_service, file_id, error_message)
+        raise RuntimeError(error_message)
+
+    # Attempt Sv computation
+    try:
+        sv_dataset = compute_sv(
+            echodata, container_name=converted_container_name, zarr_path=zarr_path
+        )
+    except Exception as e:
+        error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
+        logging.error(error_message)
+        _update_file_failure(file_segment_service, file_id, error_message)
+        raise RuntimeError(error_message)
+
+    # Save the processed data
+    sv_zarr_path, zarr_store = _save_processed_data(
+        sv_dataset, cruise_id, file_name, processed_container_name, output_path
+    )
+
+    # Gather metadata and update the database
+    payload = _prepare_payload(
+        sv_dataset, file_name=file_name, sv_zarr_path=sv_zarr_path,
+        cruise_id=cruise_id, start_time=start_time, survey_db_id=survey_db_id,
+        gps_container_name=gps_container_name
+    )
+    file_segment_service.update_file_record(
+        file_id=file_id, **payload, processed=True
+    )
+    return payload
+
+
+def _save_processed_data(
+    sv_dataset: Dataset,
+    cruise_id: str,
+    file_name: str,
+    processed_container_name: Optional[str],
+    output_path: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Save processed data to storage."""
+    if processed_container_name:
+        sv_zarr_path = f"{cruise_id}/{file_name}.zarr"
+        zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name, zarr_path=sv_zarr_path)
+    elif output_path:
+        sv_zarr_path = f"{output_path}/{file_name}.zarr"
+        sv_dataset.to_zarr(sv_zarr_path, mode="w")
+        zarr_store = sv_zarr_path
+    else:
+        sv_zarr_path, zarr_store = None, None
+
+    return sv_zarr_path, zarr_store
+
+
+def _prepare_payload(
+    sv_dataset: Dataset,
+    file_name: str = None,
+    sv_zarr_path: Optional[str] = None,
+    cruise_id: str = None,
+    start_time: float = None,
+    gps_container_name: Optional[str] = None,
+    survey_db_id: int = None
+) -> dict:
+    """Prepare the payload with metadata and GPS data."""
+    processing_time_ms = int((time.time() - start_time) * 1000)
+    ping_times = sv_dataset.coords["ping_time"].values
+    ping_times_index = pd.DatetimeIndex(ping_times)
+    gps_data = query_location_points_between_timestamps(
+        ping_times_index[0].isoformat(), ping_times_index[-1].isoformat(), container_name=gps_container_name,
+        survey_id=cruise_id
+    )
+
+    gps_result = extract_start_end_coordinates(gps_data)
+    location_data = extract_location_data(gps_data)
+    location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
+
+    return {
+        "file_name": file_name,
+        "size": None,
+        "last_modified": None,
+        "location": sv_zarr_path,
+        "survey_db_id": survey_db_id,
+        "file_npings": len(sv_dataset["ping_time"].values),
+        "file_nsamples": len(sv_dataset["range_sample"].values),
+        "file_start_time": str(ping_times[0]),
+        "file_end_time": str(ping_times[-1]),
+        "file_freqs": ",".join(map(str, sv_dataset["frequency_nominal"].values)),
+        "file_start_depth": float(sv_dataset["range_sample"].values[0]),
+        "file_end_depth": float(sv_dataset["range_sample"].values[-1]),
+        "file_start_lat": gps_result["file_start_lat"],
+        "file_start_lon": gps_result["file_start_lon"],
+        "file_end_lat": gps_result["file_end_lat"],
+        "file_end_lon": gps_result["file_end_lon"],
+        "echogram_files": None,
+        "failed": False,
+        "error_details": None,
+        "location_data": location_data_str,
+        "processing_time_ms": processing_time_ms,
+    }
+
+
+def _update_file_failure(file_segment_service, file_id: int, error_message: str):
+    """Log failure details in the database."""
+    file_segment_service.update_file_record(
+        file_id=file_id, failed=True, error_details=error_message
+    )
 
 
 def open_echodata(source_path=None, container_name=None, zarr_path=None, chunks=None):
