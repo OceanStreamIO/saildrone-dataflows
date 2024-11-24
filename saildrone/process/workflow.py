@@ -213,7 +213,7 @@ def _prepare_payload(
         "file_end_lon": gps_result["file_end_lon"],
         "echogram_files": None,
         "failed": False,
-        "error_details": None,
+        "error_details": "",
         "location_data": location_data_str,
         "processing_time_ms": processing_time_ms,
     }
