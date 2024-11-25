@@ -71,7 +71,6 @@ class PostgresDB:
                 processing_time_ms INTEGER,
                 survey_db_id INTEGER,
                 downloaded BOOLEAN DEFAULT FALSE,
-            );
         ''')
 
         # Create the surveys table with more detailed metadata
