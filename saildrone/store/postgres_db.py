@@ -67,7 +67,10 @@ class PostgresDB:
                 echogram_files TEXT[],
                 failed BOOLEAN DEFAULT FALSE,
                 error_details TEXT,
-                location_data JSON
+                location_data JSON,
+                processing_time_ms INTEGER,
+                survey_db_id INTEGER,
+                downloaded BOOLEAN DEFAULT FALSE,
             );
         ''')
 

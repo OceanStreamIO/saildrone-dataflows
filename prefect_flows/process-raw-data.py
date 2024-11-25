@@ -16,7 +16,7 @@ from prefect.states import Completed
 from saildrone.process import process_raw_file
 from saildrone.store import save_zarr_store, ensure_container_exists
 from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService, FileSegmentService
+from saildrone.store import PostgresDB, SurveyService
 
 input_cache_policy = Inputs()
 

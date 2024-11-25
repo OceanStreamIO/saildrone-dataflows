@@ -70,6 +70,27 @@ class FileSegmentService:
         self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND converted=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
+    def is_file_downloaded(self, file_name: str, survey_id: int) -> bool:
+        """
+        Check if a file has already been converted.
+
+        Parameters
+        ----------
+        file_name : str
+            The name of the file to check.
+        survey_id : int
+            The ID of the survey in the database.
+
+        Returns
+        -------
+        bool
+            Returns True if the file has already been converted, False otherwise.
+        """
+        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND downloaded=TRUE AND survey_db_id=%s',
+                               (file_name,survey_id,))
+
+        return self.db.cursor.fetchone() is not None
+
     def insert_file_record(
         self,
         file_name: str,
@@ -94,6 +115,7 @@ class FileSegmentService:
         location_data: Optional[str] = None,
         processing_time_ms: Optional[int] = None,
         survey_db_id: Optional[int] = None,
+        downloaded: Optional[bool] = None,
     ) -> int:
         """
         Insert a new file record into the database.
@@ -154,11 +176,12 @@ class FileSegmentService:
             INSERT INTO files (
                 file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time, 
                 file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, 
-                file_end_lat, file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id
-            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                file_end_lat, file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, 
+                survey_db_id, downloaded
+            ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         ''', (file_name, size, location, converted, last_modified, file_npings, file_nsamples, file_start_time,
               file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
-              file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id))
+              file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id, downloaded))
         file_id = self.db.cursor.fetchone()[0]
         self.db.conn.commit()
         return file_id

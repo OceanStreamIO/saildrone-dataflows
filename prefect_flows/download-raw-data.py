@@ -13,7 +13,7 @@ from googleapiclient.http import MediaIoBaseDownload
 
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner
-from functools import partial
+from saildrone.store import PostgresDB, SurveyService, FileSegmentService
 
 load_dotenv()
 
@@ -42,7 +42,7 @@ service = build('drive', 'v3', credentials=credentials)
     retry_delay_seconds=RETRY_DELAY,
     task_run_name="download-file-{file_name}",
 )
-def download_file(file_id: str, file_name: str, download_dir: str) -> None:
+def download_file(file_id: str, file_name: str, download_dir: str, survey_id: int) -> None:
     """
     Download a single file from Google Drive.
 
@@ -50,24 +50,38 @@ def download_file(file_id: str, file_name: str, download_dir: str) -> None:
         file_id (str): The Google Drive file ID.
         file_name (str): The name of the file to download.
         download_dir (str): The directory to save the downloaded file.
+        survey_id (int): The ID of the survey in the database.
     """
     location = os.path.join(download_dir, file_name)
     os.makedirs(download_dir, exist_ok=True)
 
-    if os.path.exists(location):
-        logging.info(f'{file_name} already exists. Skipping download.')
-        return
+    fpath = Path(location)
+    file_name = fpath.stem
 
     try:
         logging.info(f'Starting download for {file_name}')
-        request = service.files().get_media(fileId=file_id)
-        with io.FileIO(location, 'wb') as fh:
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                status, done = downloader.next_chunk()
-                logging.info(f'Download progress for {file_name}: {int(status.progress() * 100)}%')
 
+        with PostgresDB() as db_connection:
+            file_service = FileSegmentService(db_connection)
+            is_downloaded = file_service.is_file_downloaded(file_name, survey_id)
+
+            if is_downloaded:
+                logging.info(f'{file_name} has already been downloaded.')
+                return
+
+            request = service.files().get_media(fileId=file_id)
+            with io.FileIO(location, 'wb') as fh:
+                downloader = MediaIoBaseDownload(fh, request)
+                done = False
+                while not done:
+                    status, done = downloader.next_chunk()
+                    logging.info(f'Download progress for {file_name}: {int(status.progress() * 100)}%')
+
+            file_service.insert_file_record(
+                file_name=file_name,
+                downloaded=True,
+                survey_db_id=survey_id
+            )
         logging.info(f'{file_name} downloaded successfully to {location}.')
     except Exception as e:
         logging.error(f'Error downloading {file_name}: {e}')
@@ -105,15 +119,28 @@ def list_files_in_folder(folder_id: str) -> List[dict]:
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def download_folder_from_drive(folder_id: str, download_dir: str, batch_size: int = 10) -> None:
+def download_folder_from_drive(folder_id: str, download_dir: str, cruise_id: str, batch_size: int = 10) -> None:
     """
     Flow to download files from a Google Drive folder in parallel.
 
     Args:
         folder_id (str): The Google Drive folder ID.
         download_dir (str): The local directory to save files.
+        cruise_id (str): The unique ID of the cruise.
         batch_size (int): Number of files to process in each batch.
     """
+    survey_id = None
+    with PostgresDB() as db_connection:
+        survey_service = SurveyService(db_connection)
+
+        # Check if a survey with the given cruise_id exists
+        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
+
+        if survey_id is None:
+            # Insert a new survey record
+            survey_id = survey_service.insert_survey(cruise_id)
+            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
+
     os.makedirs(download_dir, exist_ok=True)
 
     # List files in the folder
@@ -130,15 +157,18 @@ def download_folder_from_drive(folder_id: str, download_dir: str, batch_size: in
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        download_raw_data(batch_files, download_dir)
+        download_raw_data(batch_files, download_dir, survey_id)
 
     logging.info('All files have been downloaded.')
 
 
-def download_raw_data(files, download_dir) -> None:
+def download_raw_data(files, download_dir, survey_id) -> None:
     task_futures = []
     for file in files:
-        future = download_file.submit(file_id=file['id'], file_name=file['name'], download_dir=download_dir)
+        future = download_file.submit(file_id=file['id'],
+                                      file_name=file['name'],
+                                      download_dir=download_dir,
+                                      survey_id=survey_id)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -148,6 +178,9 @@ def download_raw_data(files, download_dir) -> None:
 
 if __name__ == "__main__":
     try:
+        with PostgresDB() as db:
+            db.create_tables()
+
         print(f'Starting flow... {DASK_CLUSTER_ADDRESS}')
         client = Client(address=DASK_CLUSTER_ADDRESS)
 
@@ -157,6 +190,7 @@ if __name__ == "__main__":
             parameters={
                 'folder_id': FOLDER_ID,
                 'download_dir': DOWNLOAD_DIR,
+                'cruise_id': '',
                 'batch_size': 10
             }
         )
