@@ -16,4 +16,5 @@ git+https://github.com/OceanStreamIO/echopype-dev.git@oceanstream-iotedge#egg=ec
 prefect[dask]
 matplotlib
 openpyxl
+google-api-python-client
 psycopg2-binary
