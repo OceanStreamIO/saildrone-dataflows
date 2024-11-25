@@ -138,7 +138,7 @@ def download_folder_from_drive(folder_id: str, download_dir: str, cruise_id: str
 
         if survey_id is None:
             # Insert a new survey record
-            survey_id = survey_service.insert_survey(cruise_id)
+            survey_id = survey_service.insert_survey(cruise_id, start_date='2024-05-01', end_date='2024-06-30')
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
     os.makedirs(download_dir, exist_ok=True)
