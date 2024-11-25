@@ -20,7 +20,7 @@ load_dotenv()
 # Constants and environment variables
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 SERVICE_ACCOUNT_FILE = './service_account.json'
-DOWNLOAD_DIR = './downloaded_files'
+DOWNLOAD_DIR = os.getenv('RAW_DATA_LOCAL', './downloaded_files')
 FOLDER_ID = os.getenv('GDRIVE_FOLDER_ID')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 MAX_RETRIES = 5
