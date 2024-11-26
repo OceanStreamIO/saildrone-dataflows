@@ -36,14 +36,20 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
                 output_zarr_path = f"{output_path}/{file_name}.zarr"
                 echodata.to_zarr(output_zarr_path, overwrite=True)
 
-            file_id = file_segment_service.insert_file_record(
-                file_name=file_name,
-                size=file_path.stat().st_size,
-                location=str(file_path),
-                last_modified=time.ctime(file_path.stat().st_mtime)
-            )
+            file_info = file_segment_service.get_file_info(file_name)
+            
+            if file_info is not None:
+                if file_info.get('converted'):
+                    return None, None, None
 
-            file_segment_service.mark_file_converted(file_id)
+                file_id = file_info.get('id')
+                file_segment_service.update_file_record(
+                    file_id,
+                    size=file_path.stat().st_size,
+                    location=str(file_path),
+                    last_modified=time.ctime(file_path.stat().st_mtime),
+                    converted=True
+                )
 
             return file_id, zarr_store, sv_zarr_path
 

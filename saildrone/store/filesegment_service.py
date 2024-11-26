@@ -192,6 +192,7 @@ class FileSegmentService:
         file_name: Optional[str] = None,
         size: Optional[int] = None,
         processed: Optional[bool] = None,
+        converted: Optional[bool] = None,
         location: Optional[str] = None,
         last_modified: Optional[str] = None,
         file_npings: Optional[int] = None,
@@ -259,6 +260,7 @@ class FileSegmentService:
             SET file_name = COALESCE(%s, file_name),
                 size = COALESCE(%s, size),
                 processed = COALESCE(%s, processed),
+                converted = COALESCE(%s, converted),
                 location = COALESCE(%s, location),
                 last_modified = COALESCE(%s, last_modified),
                 file_npings = COALESCE(%s, file_npings),
@@ -279,7 +281,7 @@ class FileSegmentService:
                 processing_time_ms = COALESCE(%s, processing_time_ms),
                 survey_db_id = COALESCE(%s, survey_db_id)
             WHERE id = %s
-        ''', (file_name, size, processed, location, last_modified, file_npings, file_nsamples, file_start_time,
+        ''', (file_name, size, processed, converted, location, last_modified, file_npings, file_nsamples, file_start_time,
               file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
               file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id,
               file_id))
