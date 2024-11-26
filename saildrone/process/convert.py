@@ -13,7 +13,7 @@ from saildrone.store import save_zarr_store as save_zarr_to_blobstorage
 CHUNKS = {"ping_time": 1000, "range_sample": -1}
 
 
-def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
+def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
                           converted_container_name=None) -> (int, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
@@ -28,7 +28,7 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
             return None, None, None
 
         with get_dask_client():
-            echodata, zarr_path = convert_file(file_name, file_path, survey_id=survey_id,
+            echodata, zarr_path = convert_file(file_name, file_path, survey_id=cruise_id,
                                                calibration_file=calibration_file,
                                                container_name=converted_container_name, sonar_model=sonar_model)
 
@@ -37,7 +37,7 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
                 echodata.to_zarr(output_zarr_path, overwrite=True)
 
             file_info = file_segment_service.get_file_info(file_name)
-            
+
             if file_info is not None:
                 if file_info.get('converted'):
                     return None, None, None
@@ -55,7 +55,7 @@ def convert_file_and_save(file_path: Path, survey_id=None, sonar_model='EK80', c
 
 
 def convert_file(file_name, file_path, calibration_file=None,
-                 survey_id=None, container_name=None, sonar_model='EK80'):
+                 cruise_id=None, container_name=None, sonar_model='EK80'):
     echodata = open_raw(file_path, sonar_model=sonar_model)
 
     if echodata.beam is None:
@@ -63,8 +63,8 @@ def convert_file(file_name, file_path, calibration_file=None,
 
     echodata = apply_calibration(echodata, calibration_file)
 
-    if survey_id:
-        zarr_path = f"{survey_id}/{file_name}.zarr"
+    if cruise_id:
+        zarr_path = f"{cruise_id}/{file_name}.zarr"
     else:
         zarr_path = f"{file_name}.zarr"
 

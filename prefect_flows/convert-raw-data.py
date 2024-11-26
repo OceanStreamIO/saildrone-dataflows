@@ -52,7 +52,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="convert-{file_path.stem}",
 )
-def convert_single_file(file_path: Path, survey_id, store_to_directory, output_directory,
+def convert_single_file(file_path: Path, cruise_id, store_to_directory, output_directory,
                         store_to_blobstorage, blobstorage_container, sonar_model='EK80') -> None:
     load_dotenv()
     raw_data_path = os.getenv('RAW_DATA_MOUNT')
@@ -71,7 +71,7 @@ def convert_single_file(file_path: Path, survey_id, store_to_directory, output_d
         if store_to_directory and output_directory:
             output_path = output_directory
 
-        convert_file_and_save(new_file_path, survey_id, sonar_model,
+        convert_file_and_save(new_file_path, cruise_id, sonar_model,
                               calibration_file=calibration_file,
                               converted_container_name=converted_container_name,
                               output_path=output_path)
@@ -82,12 +82,12 @@ def convert_single_file(file_path: Path, survey_id, store_to_directory, output_d
         return Completed(message="Task completed with errors")
 
 
-def convert_raw_data(files: List[Path], survey_id, store_to_directory, output_directory,
+def convert_raw_data(files: List[Path], cruise_id, store_to_directory, output_directory,
                      store_to_blobstorage, blobstorage_container) -> None:
     task_futures = []
     print('Processing files:', files)
     for file_path in files:
-        future = convert_single_file.submit(file_path, survey_id, store_to_directory, output_directory,
+        future = convert_single_file.submit(file_path, cruise_id, store_to_directory, output_directory,
                                             store_to_blobstorage, blobstorage_container)
         task_futures.append(future)
 
@@ -147,7 +147,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        convert_raw_data(batch_files, survey_id, store_to_directory, output_directory, store_to_blobstorage, blobstorage_container)
+        convert_raw_data(batch_files, cruise_id, store_to_directory, output_directory, store_to_blobstorage, blobstorage_container)
 
     logging.info("All batches have been processed.")
 
