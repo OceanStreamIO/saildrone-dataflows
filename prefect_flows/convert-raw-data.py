@@ -52,19 +52,28 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="convert-{file_path.stem}",
 )
-def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> None:
+def convert_single_file(file_path: Path, survey_id, store_to_directory, output_directory,
+                        store_to_blobstorage, blobstorage_container, sonar_model='EK80') -> None:
     load_dotenv()
     raw_data_path = os.getenv('RAW_DATA_MOUNT')
     calibration_file = os.getenv('CALIBRATION_FILE')
-    output_path = os.getenv('ECHODATA_OUTPUT_PATH')
     new_base_path = Path(raw_data_path)
 
     # Create the new path by combining new base directory and file name
     new_file_path = new_base_path / file_path.name
 
     try:
+        converted_container_name = None
+        output_path = None
+        if store_to_blobstorage:
+            converted_container_name = blobstorage_container
+
+        if store_to_directory and output_directory:
+            output_path = output_directory
+
         convert_file_and_save(new_file_path, survey_id, sonar_model,
                               calibration_file=calibration_file,
+                              converted_container_name=converted_container_name,
                               output_path=output_path)
         print(f"Converted {new_file_path}")
     except Exception as e:
@@ -73,11 +82,13 @@ def convert_single_file(file_path: Path, survey_id=None, sonar_model='EK80') -> 
         return Completed(message="Task completed with errors")
 
 
-def convert_raw_data(files: List[Path], survey_id) -> None:
+def convert_raw_data(files: List[Path], survey_id, store_to_directory, output_directory,
+                     store_to_blobstorage, blobstorage_container) -> None:
     task_futures = []
     print('Processing files:', files)
     for file_path in files:
-        future = convert_single_file.submit(file_path, survey_id)
+        future = convert_single_file.submit(file_path, survey_id, store_to_directory, output_directory,
+                                            store_to_blobstorage, blobstorage_container)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -88,7 +99,12 @@ def convert_raw_data(files: List[Path], survey_id) -> None:
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey_name: str,
                                    vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
-                                   description: Optional[str], batch_size: int) -> None:
+                                   description: Optional[str],
+                                   store_to_directory: Optional[bool],
+                                   output_directory: Optional[str],
+                                   store_to_blobstorage: Optional[bool],
+                                   blobstorage_container: Optional[str],
+                                   batch_size: int) -> None:
     """
     Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
 
@@ -131,7 +147,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        convert_raw_data(batch_files, survey_id)
+        convert_raw_data(batch_files, survey_id, store_to_directory, output_directory, store_to_blobstorage, blobstorage_container)
 
     logging.info("All batches have been processed.")
 
@@ -159,6 +175,10 @@ if __name__ == "__main__":
                 'start_date': '2024-05-01',
                 'end_date': '2024-06-30',
                 'description': '',
+                'store_to_directory': True,
+                'output_directory': ECHODATA_OUTPUT_PATH,
+                'store_to_blobstorage': False,
+                'blobstorage_container': os.getenv('CONVERTED_CONTAINER_NAME'),
                 'batch_size': BATCH_SIZE
             }
         )
