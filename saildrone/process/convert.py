@@ -28,7 +28,8 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
             return None, None, None
 
         with get_dask_client():
-            echodata, zarr_path = convert_file(file_name, file_path, survey_id=cruise_id,
+            print(f"convert_file_and_save: {file_name}, output_path: {output_path}, converted_container_name: {converted_container_name}")
+            echodata, zarr_path = convert_file(file_name, file_path, cruise_id=cruise_id,
                                                calibration_file=calibration_file,
                                                container_name=converted_container_name, sonar_model=sonar_model)
 
@@ -38,13 +39,23 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
 
             file_info = file_segment_service.get_file_info(file_name)
 
+            print(f"File info {file_name}: {file_info}")
+
             if file_info is not None:
-                if file_info.get('converted'):
+                if file_info['converted'] is True:
                     return None, None, None
 
-                file_id = file_info.get('id')
+                file_id = file_info['id']
                 file_segment_service.update_file_record(
                     file_id,
+                    size=file_path.stat().st_size,
+                    location=str(file_path),
+                    last_modified=time.ctime(file_path.stat().st_mtime),
+                    converted=True
+                )
+            else:
+                file_id = file_segment_service.insert_file_record(
+                    file_name,
                     size=file_path.stat().st_size,
                     location=str(file_path),
                     last_modified=time.ctime(file_path.stat().st_mtime),

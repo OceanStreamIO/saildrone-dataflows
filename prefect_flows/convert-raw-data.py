@@ -52,8 +52,8 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="convert-{file_path.stem}",
 )
-def convert_single_file(file_path: Path, cruise_id, store_to_directory, output_directory,
-                        store_to_blobstorage, blobstorage_container, sonar_model='EK80') -> None:
+def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None, output_directory=None,
+                        store_to_blobstorage=None, blobstorage_container=None, sonar_model='EK80') -> None:
     load_dotenv()
     raw_data_path = os.getenv('RAW_DATA_MOUNT')
     calibration_file = os.getenv('CALIBRATION_FILE')
@@ -71,6 +71,7 @@ def convert_single_file(file_path: Path, cruise_id, store_to_directory, output_d
         if store_to_directory and output_directory:
             output_path = output_directory
 
+        print(f"Converting {new_file_path}, store_to_directory: {store_to_directory}, store_to_blobstorage: {store_to_blobstorage}, converted_container_name: {converted_container_name}, output_path: {output_path}")
         convert_file_and_save(new_file_path, cruise_id, sonar_model,
                               calibration_file=calibration_file,
                               converted_container_name=converted_container_name,
@@ -82,13 +83,17 @@ def convert_single_file(file_path: Path, cruise_id, store_to_directory, output_d
         return Completed(message="Task completed with errors")
 
 
-def convert_raw_data(files: List[Path], cruise_id, store_to_directory, output_directory,
-                     store_to_blobstorage, blobstorage_container) -> None:
+def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None, output_directory=None,
+                     store_to_blobstorage=None, blobstorage_container=None) -> None:
     task_futures = []
     print('Processing files:', files)
     for file_path in files:
-        future = convert_single_file.submit(file_path, cruise_id, store_to_directory, output_directory,
-                                            store_to_blobstorage, blobstorage_container)
+        future = convert_single_file.submit(file_path,
+                                            cruise_id=cruise_id,
+                                            store_to_directory=store_to_directory,
+                                            output_directory=output_directory,
+                                            store_to_blobstorage=store_to_blobstorage,
+                                            blobstorage_container=blobstorage_container)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -118,6 +123,10 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
         start_date (str): The start date of the survey in the format YYYY-MM-DD.
         end_date (str): The end date of the survey in the format YYYY-MM-DD.
         description (Optional[str]): Optional description of the survey.
+        store_to_directory (Optional[bool]): Whether to store the converted files to a local directory.
+        output_directory (Optional[str]): The directory to store the converted files.
+        store_to_blobstorage (Optional[bool]): Whether to store the converted files to Azure Blob Storage.
+        blobstorage_container (Optional[str]): The name of the Azure Blob Storage container.
         batch_size (int): The number of files to process in each batch.
     """
 
@@ -147,7 +156,12 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        convert_raw_data(batch_files, cruise_id, store_to_directory, output_directory, store_to_blobstorage, blobstorage_container)
+        convert_raw_data(batch_files,
+                         cruise_id=cruise_id,
+                         store_to_directory=store_to_directory,
+                         output_directory=output_directory,
+                         store_to_blobstorage=store_to_blobstorage,
+                         blobstorage_container=blobstorage_container)
 
     logging.info("All batches have been processed.")
 
