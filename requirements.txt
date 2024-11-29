@@ -1,4 +1,4 @@
-#azure-iot-device # needed for edge devices
+azure-iot-device
 #azure-storage-blob==12.8.0 # This version is needed for blob storage on edge devices
 #adlfs==2021.8.1 # This version is needed for blob storage on edge devices
 azure-storage-blob
