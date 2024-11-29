@@ -1,6 +1,8 @@
-azure-iot-device
-azure-storage-blob==12.8.0
-adlfs==2021.8.1
+#azure-iot-device # needed for edge devices
+#azure-storage-blob==12.8.0 # This version is needed for blob storage on edge devices
+#adlfs==2021.8.1 # This version is needed for blob storage on edge devices
+azure-storage-blob
+adlfs
 bokeh
 numpy
 dask==2024.9.0

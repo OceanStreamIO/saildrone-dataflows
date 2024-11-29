@@ -1,12 +1,14 @@
 import os
+from pathlib import Path
+
 import pandas as pd
 import xarray as xr
 import geopandas as gpd
 import logging
 
-from typing import Optional, List
+from typing import List, Union, TypedDict
 from adlfs import AzureBlobFileSystem
-from azure.storage.blob import BlobServiceClient, ContentSettings
+from azure.storage.blob import BlobServiceClient
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
@@ -31,14 +33,20 @@ def create_blob_service_client(connect_str=None) -> BlobServiceClient:
     return BlobServiceClient.from_connection_string(connect_str)
 
 
-def get_azure_blob_filesystem() -> AzureBlobFileSystem:
+def get_azure_blob_filesystem(storage_config=None) -> AzureBlobFileSystem:
     """
     Get Azure Blob FileSystem Mapper for Dask.
 
     Returns:
     - AzureBlobFileSystem: The Azure Blob FileSystem Mapper.
     """
-    connect_str: Optional[str] = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+
+    if storage_config and storage_config['storage_type'] == 'azure':
+        azfs = AzureBlobFileSystem(**storage_config['storage_options'])
+        return azfs
+
+    connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+
     if not connect_str:
         raise EnvironmentError("AZURE_STORAGE_CONNECTION_STRING environment variable not set.")
 
@@ -97,8 +105,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
 
 def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
     """Open a Zarr store from Azure Blob Storage."""
-    connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-    azfs = AzureBlobFileSystem(connection_string=connection_string)
+    azfs = get_azure_blob_filesystem()
 
     if azfs is None:
         raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
@@ -114,20 +121,46 @@ def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINE
     return xr.open_dataset(chunk_store, engine='zarr', chunks=chunks)
 
 
-def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER_NAME, chunks=None):
+def list_zarr_files(path, azfs=None, cruise_id=None) -> List[Path]:
+    """List all Zarr files in the Azure Blob Storage container along with their metadata."""
+
+    if azfs is None:
+        azfs = get_azure_blob_filesystem()
+
+    if azfs is None:
+        raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
+
+    zarr_files = []
+
+    if cruise_id is not None:
+        path = f"{path}/{cruise_id}"
+
+    print('Listing files in path:', path)
+    for blob in azfs.ls(path, detail=True):
+        if blob['type'] == 'directory' and not blob['name'].endswith('.zarr'):
+            subdir_files = list_zarr_files(blob['name'], azfs)
+            zarr_files.extend(subdir_files)
+        elif blob['name'].endswith('.zarr'):
+            zarr_files.append(Path(blob['name']))
+
+    return zarr_files
+
+
+def open_converted(zarr_path, survey_id=None, container_name=None, chunks=None):
     """Open a Zarr store from Azure Blob Storage."""
     from echopype.echodata.api import open_converted
 
-    connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-    azfs = AzureBlobFileSystem(connection_string=connection_string)
+    azfs = get_azure_blob_filesystem()
 
     if azfs is None:
         raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
 
     if survey_id is not None:
         zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
-    else:
+    elif container_name is not None:
         zarr_path_full = f"{container_name}/{zarr_path}"
+    else:
+        zarr_path_full = zarr_path
 
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
@@ -137,8 +170,7 @@ def open_converted(zarr_path, survey_id=None, container_name=CONVERTED_CONTAINER
 
 def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=True):
     """Open a geo parquet file from Azure Blob Storage."""
-    connection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-    azfs = AzureBlobFileSystem(connection_string=connection_string)
+    azfs = get_azure_blob_filesystem()
 
     if azfs is None:
         raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")

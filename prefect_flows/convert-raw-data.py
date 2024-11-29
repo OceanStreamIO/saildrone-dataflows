@@ -71,7 +71,6 @@ def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None
         if store_to_directory and output_directory:
             output_path = output_directory
 
-        print(f"Converting {new_file_path}, store_to_directory: {store_to_directory}, store_to_blobstorage: {store_to_blobstorage}, converted_container_name: {converted_container_name}, output_path: {output_path}")
         convert_file_and_save(new_file_path, cruise_id, sonar_model,
                               calibration_file=calibration_file,
                               converted_container_name=converted_container_name,

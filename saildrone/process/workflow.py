@@ -1,5 +1,6 @@
 import logging
 import time
+import traceback
 
 import numpy as np
 import pandas as pd
@@ -19,19 +20,23 @@ from .location import extract_location_data
 
 
 def process_converted_file(
-    source_path: Path,
-    cruise_id: str,
-    output_path: Optional[str] = None,
-    converted_container_name: Optional[str] = None,
-    processed_container_name: Optional[str] = None,
-    gps_container_name: Optional[str] = None,
-    reprocess: bool = False,
-    chunks: Optional[dict] = None
+        source_path: Path,
+        cruise_id: str,
+        output_path: Optional[str] = None,
+        load_from_blobstorage: bool = None,
+        converted_container_name: Optional[str] = None,
+        save_to_blobstorage: Optional[bool] = None,
+        save_to_directory: Optional[bool] = None,
+        processed_container_name: Optional[str] = None,
+        gps_container_name: Optional[str] = None,
+        reprocess: bool = False,
+        chunks: Optional[dict] = None
 ) -> dict:
     """
     Process a converted file and update the database with results or errors.
 
     Parameters:
+        load_from_blobstorage: Whether to load the converted file from blob storage.
         source_path (Path): Path to the source file.
         cruise_id (str): Cruise ID.
         output_path (Optional[str]): Local output path for processed data.
@@ -72,6 +77,7 @@ def process_converted_file(
         try:
             return _process_file_workflow(
                 file_name=file_name,
+                load_from_blobstorage=load_from_blobstorage,
                 source_path=source_path,
                 cruise_id=cruise_id,
                 survey_db_id=survey_db_id,
@@ -80,6 +86,8 @@ def process_converted_file(
                 processed_container_name=processed_container_name,
                 gps_container_name=gps_container_name,
                 chunks=chunks,
+                save_to_directory=save_to_directory,
+                save_to_blobstorage=save_to_blobstorage,
                 file_segment_service=file_segment_service,
                 start_time=start_time,
                 file_id=file_info["id"]
@@ -87,6 +95,7 @@ def process_converted_file(
         except Exception as e:
             error_message = f"Error processing file '{file_name}': {e}"
             logging.error(error_message)
+            traceback.print_exc()
 
             # Update the database with the failure details
             file_segment_service.update_file_record(
@@ -98,23 +107,35 @@ def process_converted_file(
 
 
 def _process_file_workflow(
-    file_name: str = None,
-    source_path: Path = None,
-    cruise_id: str = None,
-    survey_db_id: int = None,
-    output_path: Optional[str] = None,
-    converted_container_name: Optional[str] = None,
-    processed_container_name: Optional[str] = None,
-    gps_container_name: Optional[str] = None,
-    chunks: Optional[dict] = None,
-    file_segment_service = None,
-    start_time: float = None,
-    file_id: int = None
+        file_name: str = None,
+        source_path: Path = None,
+        cruise_id: str = None,
+        survey_db_id: int = None,
+        output_path: Optional[str] = None,
+        load_from_blobstorage: bool = None,
+        converted_container_name: Optional[str] = None,
+        processed_container_name: Optional[str] = None,
+        gps_container_name: Optional[str] = None,
+        chunks: Optional[dict] = None,
+        file_segment_service=None,
+        save_to_directory=None,
+        save_to_blobstorage=None,
+        start_time: float = None,
+        file_id: int = None
 ) -> dict:
     """Core processing logic, encapsulating the main workflow."""
-    zarr_path = f"{cruise_id}/{file_name}.zarr" if converted_container_name else None
+    if load_from_blobstorage is True:
+        zarr_path = str(source_path)
+        source_path = None
+        converted_container_name = None
+    else:
+        zarr_path = f"{cruise_id}/{file_name}.zarr" if converted_container_name else None
+
     echodata = open_echodata(
-        source_path=source_path, container_name=converted_container_name, zarr_path=zarr_path, chunks=chunks
+        source_path=source_path,
+        container_name=converted_container_name,
+        zarr_path=zarr_path,
+        chunks=chunks
     )
 
     if echodata.beam is None:
@@ -126,7 +147,9 @@ def _process_file_workflow(
     # Attempt Sv computation
     try:
         sv_dataset = compute_sv(
-            echodata, container_name=converted_container_name, zarr_path=zarr_path
+            echodata,
+            container_name=converted_container_name,
+            zarr_path=zarr_path
         )
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
@@ -136,13 +159,23 @@ def _process_file_workflow(
 
     # Save the processed data
     sv_zarr_path, zarr_store = _save_processed_data(
-        sv_dataset, cruise_id, file_name, processed_container_name, output_path
+        sv_dataset,
+        cruise_id=cruise_id,
+        file_name=file_name,
+        processed_container_name=processed_container_name,
+        output_path=output_path,
+        save_to_directory=save_to_directory,
+        save_to_blobstorage=save_to_blobstorage,
     )
 
     # Gather metadata and update the database
     payload = _prepare_payload(
-        sv_dataset, file_name=file_name, sv_zarr_path=sv_zarr_path,
-        cruise_id=cruise_id, start_time=start_time, survey_db_id=survey_db_id,
+        sv_dataset,
+        file_name=file_name,
+        sv_zarr_path=sv_zarr_path,
+        cruise_id=cruise_id,
+        start_time=start_time,
+        survey_db_id=survey_db_id,
         gps_container_name=gps_container_name
     )
     file_segment_service.update_file_record(
@@ -152,17 +185,20 @@ def _process_file_workflow(
 
 
 def _save_processed_data(
-    sv_dataset: Dataset,
-    cruise_id: str,
-    file_name: str,
-    processed_container_name: Optional[str],
-    output_path: Optional[str],
+        sv_dataset: Dataset,
+        cruise_id: str = None,
+        file_name: str = None,
+        processed_container_name: Optional[str] = None,
+        output_path: Optional[str] = None,
+        save_to_directory: Optional[bool] = None,
+        save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
-    if processed_container_name:
+    if processed_container_name and save_to_blobstorage:
         sv_zarr_path = f"{cruise_id}/{file_name}.zarr"
-        zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name, zarr_path=sv_zarr_path)
-    elif output_path:
+        zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
+                                              zarr_path=sv_zarr_path)
+    elif output_path and save_to_directory:
         sv_zarr_path = f"{output_path}/{file_name}.zarr"
         sv_dataset.to_zarr(sv_zarr_path, mode="w")
         zarr_store = sv_zarr_path
@@ -173,13 +209,13 @@ def _save_processed_data(
 
 
 def _prepare_payload(
-    sv_dataset: Dataset,
-    file_name: str = None,
-    sv_zarr_path: Optional[str] = None,
-    cruise_id: str = None,
-    start_time: float = None,
-    gps_container_name: Optional[str] = None,
-    survey_db_id: int = None
+        sv_dataset: Dataset,
+        file_name: str = None,
+        sv_zarr_path: Optional[str] = None,
+        cruise_id: str = None,
+        start_time: float = None,
+        gps_container_name: Optional[str] = None,
+        survey_db_id: int = None
 ) -> dict:
     """Prepare the payload with metadata and GPS data."""
     processing_time_ms = int((time.time() - start_time) * 1000)
