@@ -255,6 +255,13 @@ class FileSegmentService:
         echogram_files : Optional[List[str]]
             A list of paths to the echogram files associated with this file.
         """
+
+        bounding_geom = (
+            f'ST_MakeEnvelope({file_start_lon}, {file_start_lat}, {file_end_lon}, {file_end_lat}, 4326)'
+            if file_start_lat is not None and file_start_lon is not None and file_end_lat is not None and file_end_lon is not None
+            else None
+        )
+
         self.db.cursor.execute('''
             UPDATE files
             SET file_name = COALESCE(%s, file_name),
@@ -279,12 +286,13 @@ class FileSegmentService:
                 error_details = COALESCE(%s, error_details),
                 location_data = COALESCE(%s, location_data),
                 processing_time_ms = COALESCE(%s, processing_time_ms),
-                survey_db_id = COALESCE(%s, survey_db_id)
+                survey_db_id = COALESCE(%s, survey_db_id),
+                bounding_geom = COALESCE(%s, bounding_geom)
             WHERE id = %s
         ''', (file_name, size, processed, converted, location, last_modified, file_npings, file_nsamples, file_start_time,
               file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
               file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, survey_db_id,
-              file_id))
+              bounding_geom, file_id))
         self.db.conn.commit()
 
     def mark_file_processed(self, file_id: int) -> None:
@@ -310,3 +318,35 @@ class FileSegmentService:
         """
         self.db.cursor.execute('UPDATE files SET converted=TRUE WHERE id=%s', (file_id,))
         self.db.conn.commit()
+
+    def get_files_by_polygon_and_survey(self, polygon: str, survey_id: int) -> List[tuple]:
+        """
+        Retrieve files matching a polygon and survey ID.
+
+        Parameters
+        ----------
+        polygon : str
+            The polygon geometry in WKT format.
+        survey_id : int
+            The ID of the survey.
+
+        Returns
+        -------
+        List[tuple]
+            List of files matching the query.
+        """
+        self.db.cursor.execute(
+            """
+            WITH region AS (
+                SELECT ST_GeomFromText(%s, 4326) AS geom
+            )
+            SELECT location, file_name, id, location_data, file_freqs, file_start_time, file_end_time
+            FROM files, region
+            WHERE ST_Intersects(files.bounding_geom, region.geom)
+              AND processed = TRUE
+              AND survey_db_id = %s
+            ORDER BY file_start_time ASC
+            """,
+            [polygon, survey_id]
+        )
+        return self.db.cursor.fetchall()
