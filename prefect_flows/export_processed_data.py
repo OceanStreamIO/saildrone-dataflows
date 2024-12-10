@@ -4,19 +4,21 @@ import sys
 import time
 import xarray as xr
 
-from pathlib import Path
-from typing import List, Optional
 import pandas as pd
 from dotenv import load_dotenv
 from prefect import flow, task
 from dask.distributed import Client
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
+from prefect.artifacts import create_link_artifact
 from prefect.states import Completed
 
 from saildrone.process import convert_file_and_save, plot_sv_data
-from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService, FileSegmentService, open_zarr_store
+from saildrone.store import (PostgresDB, SurveyService, FileSegmentService, open_zarr_store,
+                             upload_folder_to_blob_storage,
+                             save_datasets_to_netcdf, generate_container_name, ensure_container_exists,
+                             generate_container_access_url, create_blob_service_client)
+
 
 input_cache_policy = Inputs()
 
@@ -49,7 +51,9 @@ def export_processed(cruise_id='', coordinates=None):
         polygon = f"POLYGON(({', '.join([f'{lon} {lat}' for lon, lat in coordinates])}))"
 
         file_service = FileSegmentService(db_connection)
+
         files = file_service.get_files_by_polygon_and_survey(polygon, survey_id)
+
         if not files:
             raise ValueError("No files found matching the given criteria.")
 
@@ -62,7 +66,6 @@ def export_processed(cruise_id='', coordinates=None):
 
             # Load the zarr store as an xarray dataset
             ds = open_zarr_store(zarr_path, container_name=PROCESSED_CONTAINER_NAME, chunks=CHUNKS)
-            print(ds)
 
             # Merge location data into the dataset
             ds = merge_location_data(ds, location_data)
@@ -73,102 +76,39 @@ def export_processed(cruise_id='', coordinates=None):
             elif file_freqs == "38000.0":
                 long_pulse.append(ds)
 
+        container_name = generate_container_name(cruise_id)
+        ensure_container_exists(container_name)
+
+        output_path = f'/tmp/echograms/{container_name}'
+        os.makedirs(output_path, exist_ok=True)
+
         short_pulse_datasets = [
             ds.rename({"source_filenames": f"source_filenames_{i}"})
             for i, ds in enumerate(short_pulse)
         ]
         short_pulse_ds = xr.merge(short_pulse_datasets) if short_pulse_datasets else xr.Dataset()
-        plot_sv_data(short_pulse_ds, f"{cruise_id}--short-pulse", "output/short_pulse")
+
+        plot_sv_data(short_pulse_ds, f"{cruise_id}--short-pulse", output_path=output_path)
 
         long_pulse_datasets = [
             ds.rename({"source_filenames": f"source_filenames_{i}"})
             for i, ds in enumerate(long_pulse)
         ]
         long_pulse_ds = xr.merge(long_pulse_datasets) if long_pulse_datasets else xr.Dataset()
-        plot_sv_data(short_pulse_ds, f"{cruise_id}--long-pulse", "output/long_pulse")
+        plot_sv_data(short_pulse_ds, f"{cruise_id}--long-pulse", output_path=output_path)
 
-        save_datasets_to_netcdf(short_pulse_ds, long_pulse_ds)
+        upload_folder_to_blob_storage(output_path, container_name, 'echograms')
+        save_datasets_to_netcdf(short_pulse_ds, long_pulse_ds, container_name)
+
+        access_link = generate_container_access_url(container_name)
+        create_link_artifact(
+            key=f"{container_name}-link",
+            link=access_link,
+            link_text="Export link",
+            description="Link to download the exported data."
+        )
 
         return short_pulse_ds, long_pulse_ds
-
-
-def save_datasets_to_netcdf(
-    short_pulse_ds: xr.Dataset,
-    long_pulse_ds: xr.Dataset,
-    short_pulse_path: str = "output/short_pulse_data.nc",
-    long_pulse_path: str = "output/long_pulse_data.nc",
-    compression_level: int = 5
-):
-    """
-    Save short and long pulse Xarray datasets to NetCDF files efficiently with Dask.
-
-    Parameters
-    ----------
-    short_pulse_ds : xr.Dataset
-        The Xarray dataset for short pulse data.
-    long_pulse_ds : xr.Dataset
-        The Xarray dataset for long pulse data.
-    short_pulse_path : str, optional
-        The output file path for the short pulse dataset (default is "short_pulse_data.nc").
-    long_pulse_path : str, optional
-        The output file path for the long pulse dataset (default is "long_pulse_data.nc").
-    compression_level : int, optional
-        The zlib compression level (default is 5).
-
-    Returns
-    -------
-    Tuple[str, str]
-        Paths of the saved NetCDF files for short and long pulse datasets.
-    """
-
-    with get_dask_client() as client:
-        # Define compression encoding for short pulse dataset
-        short_pulse_encoding = get_variable_encoding(short_pulse_ds, compression_level)
-        long_pulse_encoding = get_variable_encoding(long_pulse_ds, compression_level)
-
-        # Save short pulse dataset to NetCDF
-        print(f"Saving short pulse dataset to {short_pulse_path}...")
-        short_pulse_ds.to_netcdf(
-            path=short_pulse_path,
-            format="NETCDF4",
-            engine="netcdf4",
-            encoding=short_pulse_encoding,
-            compute=True,
-        )
-        print(f"Short pulse dataset saved to {short_pulse_path}.")
-
-        # Save long pulse dataset to NetCDF
-        print(f"Saving long pulse dataset to {long_pulse_path}...")
-        long_pulse_ds.to_netcdf(
-            path=long_pulse_path,
-            format="NETCDF4",
-            engine="netcdf4",
-            encoding=long_pulse_encoding,
-            compute=True,
-        )
-        print(f"Long pulse dataset saved to {long_pulse_path}.")
-
-        # Close the Dask client
-        client.close()
-        print("Dask client closed.")
-
-        return short_pulse_path, long_pulse_path
-
-
-def get_variable_encoding(ds: xr.Dataset, compression_level):
-    """Generate encoding dictionary for dataset variables."""
-    encoding = {}
-    for var in ds.data_vars:
-        if ds[var].dtype.kind in {"U", "S", "O"}:  # String or object types
-            # No compression or chunking for unsupported types
-            encoding[var] = {}
-        else:
-            # Apply compression for numeric types
-            encoding[var] = {
-                "zlib": True,
-                "complevel": compression_level,
-            }
-    return encoding
 
 
 def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:

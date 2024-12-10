@@ -104,7 +104,6 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
         )
     except Exception as e:
         print(f"Error plotting echogram: {e}")
-        print(ds_Sv)
         traceback.print_exc()
 
     plt.grid(True, linestyle='--', alpha=0.5)

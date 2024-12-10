@@ -1,20 +1,25 @@
 import os
-from pathlib import Path
+import re
 
 import pandas as pd
 import xarray as xr
 import geopandas as gpd
 import logging
+import uuid
 
+from pathlib import Path
+from datetime import timedelta, datetime
 from typing import List, Union, TypedDict
 from adlfs import AzureBlobFileSystem
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, generate_container_sas, ContainerSasPermissions
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
 
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
+AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
+AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
 
 
 def create_blob_service_client(connect_str=None) -> BlobServiceClient:
@@ -107,9 +112,6 @@ def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINE
     """Open a Zarr store from Azure Blob Storage."""
     azfs = get_azure_blob_filesystem()
 
-    if azfs is None:
-        raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
-
     if survey_id is not None:
         zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
     else:
@@ -135,7 +137,6 @@ def list_zarr_files(path, azfs=None, cruise_id=None) -> List[Path]:
     if cruise_id is not None:
         path = f"{path}/{cruise_id}"
 
-    print('Listing files in path:', path)
     for blob in azfs.ls(path, detail=True):
         if blob['type'] == 'directory' and not blob['name'].endswith('.zarr'):
             subdir_files = list_zarr_files(blob['name'], azfs)
@@ -151,9 +152,6 @@ def open_converted(zarr_path, survey_id=None, container_name=None, chunks=None):
     from echopype.echodata.api import open_converted
 
     azfs = get_azure_blob_filesystem()
-
-    if azfs is None:
-        raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
 
     if survey_id is not None:
         zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
@@ -172,9 +170,6 @@ def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=
     """Open a geo parquet file from Azure Blob Storage."""
     azfs = get_azure_blob_filesystem()
 
-    if azfs is None:
-        raise ValueError("Azure Blob Storage connection string not found and no azfs instance was specified.")
-
     if survey_id is not None and container_name is not None:
         pq_path_full = f"{container_name}/{survey_id}/{pq_path}"
     elif container_name is not None:
@@ -190,3 +185,118 @@ def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=
             gdf = pd.read_parquet(f)
 
     return gdf
+
+
+def get_variable_encoding(ds: xr.Dataset, compression_level):
+    """Generate encoding dictionary for dataset variables."""
+    encoding = {}
+    for var in ds.data_vars:
+        if ds[var].dtype.kind in {"U", "S", "O"}:  # String or object types
+            # No compression or chunking for unsupported types
+            encoding[var] = {}
+        else:
+            # Apply compression for numeric types
+            encoding[var] = {
+                "zlib": True,
+                "complevel": compression_level,
+            }
+    return encoding
+
+
+def save_datasets_to_netcdf(
+    short_pulse_ds: xr.Dataset,
+    long_pulse_ds: xr.Dataset,
+    container_name: str = None,
+    base_local_temp_path: str = '/tmp/osnetcdf',
+    short_pulse_path: str = "short_pulse_data.nc",
+    long_pulse_path: str = "long_pulse_data.nc",
+    compression_level: int = 5
+):
+    container_local_path = os.path.join(base_local_temp_path, container_name)
+    os.makedirs(container_local_path, exist_ok=True)
+
+    local_short_pulse_path = os.path.join(container_local_path, short_pulse_path)
+    local_long_pulse_path = os.path.join(container_local_path, long_pulse_path)
+
+    # Save the datasets locally
+    short_pulse_ds.to_netcdf(
+        path=local_short_pulse_path,
+        format='NETCDF4',
+        engine='netcdf4',
+        encoding=get_variable_encoding(short_pulse_ds, compression_level)
+    )
+    long_pulse_ds.to_netcdf(
+        path=local_long_pulse_path,
+        format='NETCDF4',
+        engine='netcdf4',
+        encoding=get_variable_encoding(long_pulse_ds, compression_level)
+    )
+
+    upload_file_to_blob(local_short_pulse_path, short_pulse_path, container_name=container_name)
+    upload_file_to_blob(local_long_pulse_path, long_pulse_path, container_name=container_name)
+
+
+def upload_file_to_blob(local_path, blob_path, container_name=None):
+    """
+    Upload a file from local path to Azure Blob Storage.
+
+    Parameters:
+        local_path: Local path to the file.
+        blob_path: Blob path in the container.
+    """
+    blob_service_client = create_blob_service_client()
+    container_client = blob_service_client.get_container_client(container_name)
+
+    with open(local_path, "rb") as data:
+        container_client.upload_blob(name=blob_path, data=data, overwrite=True)
+
+
+def generate_container_access_url(container_name, duration_days=90):
+    """
+    Generate a SAS token for container access and return the URL.
+    """
+    sas_token = generate_container_sas(
+        account_name=AZURE_STORAGE_ACCOUNT_NAME,
+        container_name=container_name,
+        account_key=AZURE_STORAGE_ACCOUNT_KEY,
+        permission=ContainerSasPermissions(read=True, write=True, delete=True, list=True),
+        expiry=datetime.utcnow() + timedelta(days=duration_days)
+    )
+
+    url = f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{container_name}?{sas_token}"
+    return url
+
+
+def generate_container_name(cruise_id: str):
+    """Generate a unique container name based on the date, cruise_id, and a UUID."""
+    date_str = datetime.now().strftime("%Y%m%d")
+    unique_id = uuid.uuid4().hex[:8]
+
+    raw_name = f"{cruise_id}{date_str}{unique_id}".lower()
+    sanitized_name = re.sub(r'[^a-z0-9-]', '', raw_name)
+
+    return sanitized_name[:63]  # Limit to 63 characters for Azure Blob Storage
+
+
+def upload_folder_to_blob_storage(folder_path, container_name, target_path=None):
+    """
+    Uploads an entire folder to a specified Azure Blob Storage container.
+
+    Parameters:
+        folder_path (str): The path to the folder whose contents are to be uploaded.
+        container_name (str): The name of the Azure Blob Storage container.
+    """
+
+    blob_service_client = create_blob_service_client()
+    container_client = blob_service_client.get_container_client(container_name)
+
+    for root, dirs, files in os.walk(folder_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            relative_path = os.path.relpath(file_path, start=folder_path)
+            blob_path = os.path.join(target_path, relative_path).replace(os.sep, '/')
+
+            blob_client = container_client.get_blob_client(blob_path)
+
+            with open(file_path, "rb") as data:
+                blob_client.upload_blob(data, overwrite=True)

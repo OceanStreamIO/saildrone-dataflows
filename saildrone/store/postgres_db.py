@@ -93,6 +93,58 @@ class PostgresDB:
                 description TEXT
             );
         ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tenants (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                description TEXT
+            );
+        ''')
+
+        # Create platforms table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS platforms (
+                id SERIAL PRIMARY KEY,
+                tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                type TEXT NOT NULL CHECK (type IN ('vessel', 'glider', 'auv', 'buoy', 'drifter', 'other')),
+                manufacturer TEXT,
+                model TEXT,
+                operating_depth REAL,
+                description TEXT
+            );
+        ''')
+
+        # Create instrument types table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS instrument_types (
+                id SERIAL PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                manufacturer TEXT,
+                model TEXT,
+                calibration_date DATE,
+                operating_depth REAL,
+                measurement_type TEXT NOT NULL CHECK (measurement_type IN ('acoustic', 'optical', 'physical', 'chemical', 'other')),
+                frequency_range TEXT,
+                description TEXT
+            );
+        ''')
+
+        # Create instruments table
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS instruments (
+                id SERIAL PRIMARY KEY,
+                instrument_type_id INTEGER REFERENCES instrument_types(id) ON DELETE CASCADE,
+                survey_id INTEGER REFERENCES surveys(id) ON DELETE CASCADE,
+                serial_number TEXT NOT NULL,
+                deployment_start DATE NOT NULL,
+                deployment_end DATE,
+                deployment_notes TEXT,
+                description TEXT
+            );
+        ''')
+
         self.conn.commit()
 
     def is_file_processed(self, file_name: str) -> bool:

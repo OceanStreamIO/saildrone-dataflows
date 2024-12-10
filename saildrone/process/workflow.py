@@ -20,17 +20,17 @@ from .location import extract_location_data
 
 
 def process_converted_file(
-        source_path: Path,
-        cruise_id: str,
-        output_path: Optional[str] = None,
-        load_from_blobstorage: bool = None,
-        converted_container_name: Optional[str] = None,
-        save_to_blobstorage: Optional[bool] = None,
-        save_to_directory: Optional[bool] = None,
-        processed_container_name: Optional[str] = None,
-        gps_container_name: Optional[str] = None,
-        reprocess: bool = False,
-        chunks: Optional[dict] = None
+    source_path: Path,
+    cruise_id: str,
+    output_path: Optional[str] = None,
+    load_from_blobstorage: bool = None,
+    converted_container_name: Optional[str] = None,
+    save_to_blobstorage: Optional[bool] = None,
+    save_to_directory: Optional[bool] = None,
+    processed_container_name: Optional[str] = None,
+    gps_container_name: Optional[str] = None,
+    reprocess: bool = False,
+    chunks: Optional[dict] = None
 ) -> dict:
     """
     Process a converted file and update the database with results or errors.
@@ -277,6 +277,7 @@ def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, 
                                  chunks=chunks)
 
     sv_dataset = sv_computation(echodata, waveform_mode='CW', encode_mode='complex')
+    sv_dataset = enrich_sv_dataset(sv_dataset, echodata, depth_offset=0)
     sv_dataset = sv_dataset.chunk({
         'channel': 2,
         'ping_time': 1000,

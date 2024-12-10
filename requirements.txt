@@ -19,4 +19,5 @@ prefect[dask]
 matplotlib
 openpyxl
 google-api-python-client
+requests
 psycopg2-binary
