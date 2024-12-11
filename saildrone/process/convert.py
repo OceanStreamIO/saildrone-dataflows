@@ -72,7 +72,8 @@ def convert_file(file_name, file_path, calibration_file=None,
     if echodata.beam is None:
         return echodata, None
 
-    echodata = apply_calibration(echodata, calibration_file)
+    if calibration_file:
+        echodata = apply_calibration(echodata, calibration_file)
 
     if cruise_id:
         zarr_path = f"{cruise_id}/{file_name}.zarr"

@@ -8,6 +8,7 @@ from prefect_dask import get_dask_client
 
 from saildrone.store import PostgresDB, FileSegmentService
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage
+from .plot import plot_sv_data
 from .convert import convert_file
 from .workflow import compute_sv
 
@@ -15,7 +16,8 @@ CHUNKS = {"ping_time": 1000, "range_sample": -1}
 
 
 def process_raw_file(file_path: Path, survey_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
-                     converted_container_name=None, processed_container_name=None, chunks=None) -> (Dataset, str, str):
+                     converted_container_name=None, processed_container_name=None, waveform_mode='CW',
+                     encode_mode='complex', chunks=None) -> (Dataset, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
     zarr_store = None
@@ -29,9 +31,11 @@ def process_raw_file(file_path: Path, survey_id=None, sonar_model='EK80', calibr
             return None, None, None
 
         with get_dask_client():
-            echodata, zarr_path = convert_file(file_name, file_path, survey_id=survey_id,
+            echodata, zarr_path = convert_file(file_name, file_path,
+                                               cruise_id=survey_id,
                                                calibration_file=calibration_file,
-                                               container_name=converted_container_name, sonar_model=sonar_model)
+                                               container_name=converted_container_name,
+                                               sonar_model=sonar_model)
 
             output_zarr_path = None
             if output_path is not None:
@@ -43,7 +47,11 @@ def process_raw_file(file_path: Path, survey_id=None, sonar_model='EK80', calibr
                 logging.info(f'No beam data found in file: {file_name}')
                 return
 
-            sv_dataset = compute_sv(echodata, container_name=converted_container_name, zarr_path=zarr_path,
+            sv_dataset = compute_sv(echodata,
+                                    container_name=converted_container_name,
+                                    zarr_path=zarr_path,
+                                    waveform_mode=waveform_mode,
+                                    encode_mode=encode_mode,
                                     source_path=output_zarr_path, chunks=chunks)
 
             if processed_container_name is not None:
@@ -55,6 +63,8 @@ def process_raw_file(file_path: Path, survey_id=None, sonar_model='EK80', calibr
                 sv_zarr_path = f"{output_path}/{file_name}/{file_name}_Sv.zarr"
                 sv_dataset.to_zarr(sv_zarr_path, mode='w')
                 zarr_store = sv_zarr_path
+
+            plot_sv_data(sv_dataset, file_name, output_path='test/processed')
 
             file_id = file_segment_service.insert_file_record(
                 file_name=file_name,

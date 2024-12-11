@@ -71,12 +71,17 @@ class PostgresDB:
                 processing_time_ms INTEGER,
                 survey_db_id INTEGER,
                 downloaded BOOLEAN DEFAULT FALSE,
-                bounding_geom GEOMETRY(POLYGON, 4326)
+                bounding_geom GEOMETRY(POLYGON, 4326),
+                track_geom GEOMETRY(LINESTRING, 4326)
             );
         ''')
 
         self.cursor.execute('''
             CREATE INDEX IF NOT EXISTS files_bounding_geom_idx ON files USING GIST (bounding_geom);
+        ''')
+
+        self.cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_files_track_geom ON files USING GIST(track_geom);
         ''')
 
         # Create the surveys table with more detailed metadata

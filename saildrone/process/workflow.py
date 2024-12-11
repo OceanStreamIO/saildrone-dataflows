@@ -271,12 +271,13 @@ def open_echodata(source_path=None, container_name=None, zarr_path=None, chunks=
     return open_from_blobstorage(zarr_path, container_name=container_name, chunks=chunks)
 
 
-def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, chunks=None):
+def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, chunks=None, waveform_mode='CW',
+               encode_mode='complex'):
     if chunks is not None:
         echodata = open_echodata(zarr_path=zarr_path, source_path=source_path, container_name=container_name,
                                  chunks=chunks)
 
-    sv_dataset = sv_computation(echodata, waveform_mode='CW', encode_mode='complex')
+    sv_dataset = sv_computation(echodata, waveform_mode=waveform_mode, encode_mode=encode_mode)
     sv_dataset = enrich_sv_dataset(sv_dataset, echodata, depth_offset=0)
     sv_dataset = sv_dataset.chunk({
         'channel': 2,
