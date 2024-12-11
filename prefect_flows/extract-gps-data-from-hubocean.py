@@ -42,8 +42,10 @@ logging.basicConfig(
 
 
 @task(
-    retries=MAX_RETRIES,
-    retry_delay_seconds=RETRY_DELAY,
+    retries=5,
+    retry_delay_seconds=[10, 30, 60],
+    retry_jitter_factor=0.1,
+    refresh_cache=True,
     task_run_name="process-file-{file_path}",
 )
 def process_file(file_path: str, geolocation: dict, metadata):
@@ -64,15 +66,16 @@ def process_file(file_path: str, geolocation: dict, metadata):
         print(f'Processing file: {file_name}')
 
         if geolocation is None:
-            return None
+            return Completed(message=f"No geolocation data found for file: {file_name}")
 
         location_summary = process_geo_location(file_name, geolocation, metadata)
         markdown_report += f"\n\nLocation summary: {location_summary}"
 
         if location_summary is None:
-            return None
+            return Completed(message=f"No valid geo_location found for file: {file_name}")
 
         location_data_str = None
+
         if location_summary["location_data"]:
             location_data_str = serialize_location_data(location_summary["location_data"])
 
@@ -98,14 +101,12 @@ def process_file(file_path: str, geolocation: dict, metadata):
             markdown_report += f"\n\nProcessed file {file_name} successfully."
             create_markdown_artifact(markdown_report)
 
-            return location_summary
-
         except Exception as e:
             logging.error(f'Error processing file {file_name}: {e}')
             markdown_report += f"\n\nError processing file {file_name}: {e}"
 
             create_markdown_artifact(markdown_report)
-            raise
+            return Completed(message=f"Error processing file {file_name}: {e}")
 
 
 def list_raw_files(api_url: str, bearer_token: str) -> List[dict]:
