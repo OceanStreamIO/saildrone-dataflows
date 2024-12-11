@@ -16,12 +16,6 @@ def consolidate_csv_to_geoparquet_partitioned(folder_path, output_path, storage_
     output_directory (str): Path where the partitioned GeoParquet files will be saved.
     """
     combined_data = []
-    metadata_records = []
-
-    if storage_type == 'azure':
-        fs = get_azure_blob_filesystem()
-    else:
-        fs = fsspec.filesystem('file')
 
     for file_name in os.listdir(folder_path):
         if file_name.endswith('.csv'):
@@ -44,20 +38,25 @@ def consolidate_csv_to_geoparquet_partitioned(folder_path, output_path, storage_
             gdf = gpd.GeoDataFrame(df, geometry='geometry', crs='EPSG:4326')
             combined_data.append(gdf)
 
-    # Combine all GeoDataFrames into a single GeoDataFrame
     combined_gdf = pd.concat(combined_data, ignore_index=True)
-
     combined_gdf = combined_gdf.dropna(subset=['longitude', 'latitude'])
 
-    # Define grid size (e.g., 1 degree)
-    grid_size = 1.0  # degrees
+    save_to_partitioned_geoparquet(combined_gdf, output_path, storage_type)
 
+
+def save_to_partitioned_geoparquet(gdf: gpd.GeoDataFrame, output_path: str, storage_type='local', grid_size=1.0):
     # Calculate grid indices for partitioning
-    combined_gdf['lon_grid'] = (combined_gdf['longitude'] // grid_size).astype('int32')
-    combined_gdf['lat_grid'] = (combined_gdf['latitude'] // grid_size).astype('int32')
+    if storage_type == 'azure':
+        fs = get_azure_blob_filesystem()
+    else:
+        fs = fsspec.filesystem('file')
+
+    gdf['lon_grid'] = (gdf['longitude'] // grid_size).astype('int32')
+    gdf['lat_grid'] = (gdf['latitude'] // grid_size).astype('int32')
 
     # Group by partitioning columns and write each group to a separate Parquet file
-    grouped = combined_gdf.groupby(['lon_grid', 'lat_grid'])
+    grouped = gdf.groupby(['lon_grid', 'lat_grid'])
+    metadata_records = []
 
     for (lon_grid, lat_grid), group in grouped:
         if storage_type == 'azure':

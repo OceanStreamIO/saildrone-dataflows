@@ -352,3 +352,28 @@ class FileSegmentService:
             [polygon, survey_id]
         )
         return self.db.cursor.fetchall()
+
+    def fetch_location_data_by_survey_id(self, survey_id: int) -> list:
+        """
+        Fetch location data for all files associated with a given survey ID.
+
+        Parameters
+        ----------
+        survey_id : int
+            The ID of the survey to fetch location data for.
+
+        Returns
+        -------
+        list
+            A list of location_data dictionaries from the database.
+        """
+        query = '''
+            SELECT location_data
+            FROM files
+            WHERE survey_db_id = %s AND location_data IS NOT NULL
+        '''
+
+        self.db.cursor.execute(query, (survey_id,))
+        rows = self.db.cursor.fetchall()
+
+        return [row[0] for row in rows]

@@ -17,13 +17,15 @@ from prefect_dask import DaskTaskRunner
 
 from saildrone.azure_iot import serialize_location_data
 from saildrone.store import PostgresDB, SurveyService, FileSegmentService
-from saildrone.process import process_geo_location
+from saildrone.process import (process_geo_location, save_to_partitioned_geoparquet,
+                               create_geodataframe_from_location_data)
 
 load_dotenv()
 
 # Constants and environment variables
 DOWNLOAD_DIR = os.getenv('RAW_DATA_LOCAL', './downloaded_files')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
+GPSDATA_CONTAINER_NAME = os.getenv('GPSDATA_CONTAINER_NAME')
 SURVEY_ID = 'AKBM-SagaSea-2023'
 SURVEY_SEARCH_STRING = 'AKBM-SagaSea-2023'
 BEARER_TOKEN = os.getenv('BEARER_TOKEN')
@@ -59,9 +61,8 @@ def process_file(file_path: str, geolocation: dict, metadata):
             logging.info(f'{file_name} has not been downloaded.')
             return
 
-        print(f'Processing file: {file_name}', geolocation, metadata)
+        print(f'Processing file: {file_name}')
         location_summary = process_geo_location(file_name, geolocation, metadata)
-        print('Location summary:', location_summary)
 
         markdown_report += f"\n\nLocation summary: {location_summary}"
         location_data_str = serialize_location_data(location_summary["location_data"])
@@ -136,8 +137,38 @@ def list_raw_files(api_url: str, bearer_token: str) -> List[dict]:
     return files
 
 
+@task
+def create_geoparquet_file(cruise_id, survey_id, output_path, storage_type):
+    markdown_report = f"""# Report for create_geoparquet_file"""
+    try:
+        with PostgresDB() as db_connection:
+            file_service = FileSegmentService(db_connection)
+
+            location_data_list = file_service.fetch_location_data_by_survey_id(survey_id)
+            gdf = create_geodataframe_from_location_data(location_data_list)
+
+            if storage_type == 'azure':
+                output_path = f'{GPSDATA_CONTAINER_NAME}/{cruise_id}'
+                output_path = output_path.replace('-', '_')
+
+            print(f'Saving GeoParquet file...{output_path}')
+
+            save_to_partitioned_geoparquet(gdf, output_path, storage_type)
+            markdown_report += f"\n\nSaved GeoParquet file to {output_path}."
+            create_markdown_artifact(markdown_report)
+
+        return output_path
+
+    except Exception as e:
+        logging.error(f'Error creating GeoParquet file: {e}')
+        markdown_report += f"\n\nError creating GeoParquet file: {e}"
+        create_markdown_artifact(markdown_report)
+        raise
+
+
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, bearer_token: str = '') -> None:
+def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, geoparquet_storage_type: str = None,
+                                 bearer_token: str = '') -> None:
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -170,6 +201,7 @@ def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, bearer_to
         process_raw_data(batch_files)
 
     logging.info('All files have been downloaded.')
+    create_geoparquet_file(cruise_id, survey_id, './gps_data', geoparquet_storage_type)
 
     return Completed(message="All files have been downloaded")
 
@@ -199,6 +231,7 @@ if __name__ == "__main__":
             parameters={
                 'cruise_id': 'AKBM-SagaSea-2023',
                 'batch_size': 10,
+                'geoparquet_storage_type': 'local',
                 'bearer_token': ''
             }
         )
