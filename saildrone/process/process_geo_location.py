@@ -13,7 +13,7 @@ def process_geo_location(file_name, geo_data, metadata):
     # Ensure coordinates exist
     if not coordinates or geometry.get("type") != "LineString":
         print(f"No valid geo_location found for file: {file_name}")
-        return
+        return None
 
     # Extract start and end coordinates
     start_lat, start_lon = coordinates[0][1], coordinates[0][0]
