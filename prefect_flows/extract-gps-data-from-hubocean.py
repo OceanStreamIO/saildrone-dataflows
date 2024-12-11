@@ -65,7 +65,11 @@ def process_file(file_path: str, geolocation: dict, metadata):
         location_summary = process_geo_location(file_name, geolocation, metadata)
 
         markdown_report += f"\n\nLocation summary: {location_summary}"
-        location_data_str = serialize_location_data(location_summary["location_data"])
+        
+        location_data_str = None
+        if location_summary["location_data"]:
+            location_data_str = serialize_location_data(location_summary["location_data"])
+
         try:
             file_service.update_file_record(
                 file_id=file_info['id'],
