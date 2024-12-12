@@ -148,7 +148,9 @@ def list_raw_files(api_url: str, bearer_token: str) -> List[dict]:
     return files
 
 
-@task
+@task(
+    task_run_name="create-geoparquet-file-{cruise_id}"
+)
 def create_geoparquet_file(cruise_id, survey_id, output_path, storage_type):
     markdown_report = f"""# Report for create_geoparquet_file"""
     try:
