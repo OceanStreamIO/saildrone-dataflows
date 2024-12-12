@@ -28,10 +28,12 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
             return None, None, None
 
         with get_dask_client():
-            print(f"convert_file_and_save: {file_name}, output_path: {output_path}, converted_container_name: {converted_container_name}")
-            echodata, zarr_path = convert_file(file_name, file_path, cruise_id=cruise_id,
+            print(f"convert_file_and_save: {file_name}, file_path: {file_path}, output_path: {output_path}, converted_container_name: {converted_container_name}")
+            echodata, zarr_path = convert_file(file_name, file_path,
+                                               cruise_id=cruise_id,
                                                calibration_file=calibration_file,
-                                               container_name=converted_container_name, sonar_model=sonar_model)
+                                               container_name=converted_container_name,
+                                               sonar_model=sonar_model)
 
             if output_path is not None:
                 output_zarr_path = f"{output_path}/{file_name}.zarr"
