@@ -377,3 +377,20 @@ class FileSegmentService:
         rows = self.db.cursor.fetchall()
 
         return [row[0] for row in rows]
+
+    def file_has_location_data(self, file_id: int) -> bool:
+        """
+        Check if a file has associated location data.
+
+        Parameters
+        ----------
+        file_id : int
+            The ID of the file to check.
+
+        Returns
+        -------
+        bool
+            True if the file has location data, False otherwise.
+        """
+        self.db.cursor.execute('SELECT location_data FROM files WHERE id=%s', (file_id,))
+        return self.db.cursor.fetchone()[0] is not None

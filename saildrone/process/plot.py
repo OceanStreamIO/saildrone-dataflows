@@ -117,3 +117,4 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     plt.close()
 
     return echogram_output_path
+

@@ -23,7 +23,7 @@ def map_file_paths(file_paths: List[Path], mounted_folder: Path, local_folder: P
     return mapped_paths
 
 
-def load_local_files(directory: str, map_to_directory: str, extension: str = '*.raw') -> list[Path]:
+def load_local_files(directory: str, map_to_directory: str, glob_expression: str = '*.raw') -> list[Path]:
     """
     Load and map local raw files from the given directory.
 
@@ -35,23 +35,21 @@ def load_local_files(directory: str, map_to_directory: str, extension: str = '*.
     map_to_directory : str
         The directory to map the raw files to.
 
-    extension : str, optional
-        The file extension to search for, by default '*.raw'.
+    glob_expression : str
+        The glob expression to match the raw files. Default is '*.raw'.
 
     Returns
     -------
     list[Path]
         A list of mapped file paths, where the base path is replaced by the value of the RAW_DATA_MOUNT environment variable.
-
-    Args:
-        extension:
     """
     # Get the mounted and local directories as Path objects
     mounted_folder = Path(directory)
     mount_base_path = Path(map_to_directory)
 
     # Get the list of all .raw files sorted by name
-    raw_files = sorted(mounted_folder.glob(extension))
+    raw_files = sorted(mounted_folder.glob(glob_expression))
+
     mapped_files = [
         mount_base_path / file.name
         for file in raw_files

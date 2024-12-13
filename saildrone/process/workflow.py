@@ -12,7 +12,8 @@ from typing import Optional, Tuple
 
 from echopype.calibrate import compute_Sv as sv_computation
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
-from saildrone.store import save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage
+from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage,
+                             plot_and_upload_echograms)
 from saildrone.azure_iot import serialize_location_data
 
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
@@ -29,29 +30,13 @@ def process_converted_file(
     save_to_directory: Optional[bool] = None,
     processed_container_name: Optional[str] = None,
     gps_container_name: Optional[str] = None,
+    plot_echograms=None,
+    echograms_container=None,
     reprocess: bool = False,
+    encode_mode='complex',
+    waveform_mode='CW',
     chunks: Optional[dict] = None
 ) -> dict:
-    """
-    Process a converted file and update the database with results or errors.
-
-    Parameters:
-        load_from_blobstorage: Whether to load the converted file from blob storage.
-        source_path (Path): Path to the source file.
-        cruise_id (str): Cruise ID.
-        output_path (Optional[str]): Local output path for processed data.
-        converted_container_name (Optional[str]): Blob storage container name for converted files.
-        processed_container_name (Optional[str]): Blob storage container name for processed files.
-        gps_container_name (Optional[str]): Blob storage container name for GPS data.
-        reprocess (bool): Whether to reprocess an already processed file.
-        chunks (Optional[dict]): Dask chunking strategy.
-
-    Returns:
-        dict: Payload containing processing results.
-
-    Raises:
-        RuntimeError: If an error occurs during processing.
-    """
     start_time = time.time()
     file_name = source_path.stem if isinstance(source_path, Path) else source_path
 
@@ -84,8 +69,12 @@ def process_converted_file(
                 output_path=output_path,
                 converted_container_name=converted_container_name,
                 processed_container_name=processed_container_name,
+                plot_echograms=plot_echograms,
+                echograms_container=echograms_container,
                 gps_container_name=gps_container_name,
                 chunks=chunks,
+                encode_mode=encode_mode,
+                waveform_mode=waveform_mode,
                 save_to_directory=save_to_directory,
                 save_to_blobstorage=save_to_blobstorage,
                 file_segment_service=file_segment_service,
@@ -107,21 +96,25 @@ def process_converted_file(
 
 
 def _process_file_workflow(
-        file_name: str = None,
-        source_path: Path = None,
-        cruise_id: str = None,
-        survey_db_id: int = None,
-        output_path: Optional[str] = None,
-        load_from_blobstorage: bool = None,
-        converted_container_name: Optional[str] = None,
-        processed_container_name: Optional[str] = None,
-        gps_container_name: Optional[str] = None,
-        chunks: Optional[dict] = None,
-        file_segment_service=None,
-        save_to_directory=None,
-        save_to_blobstorage=None,
-        start_time: float = None,
-        file_id: int = None
+    file_name: str = None,
+    source_path: Path = None,
+    cruise_id: str = None,
+    survey_db_id: int = None,
+    output_path: Optional[str] = None,
+    load_from_blobstorage: bool = None,
+    converted_container_name: Optional[str] = None,
+    processed_container_name: Optional[str] = None,
+    gps_container_name: Optional[str] = None,
+    plot_echograms: Optional[bool] = None,
+    echograms_container: Optional[str] = None,
+    chunks: Optional[dict] = None,
+    encode_mode: str = 'complex',
+    waveform_mode: str = 'CW',
+    file_segment_service=None,
+    save_to_directory=None,
+    save_to_blobstorage=None,
+    start_time: float = None,
+    file_id: int = None
 ) -> dict:
     """Core processing logic, encapsulating the main workflow."""
     if load_from_blobstorage is True:
@@ -149,6 +142,8 @@ def _process_file_workflow(
         sv_dataset = compute_sv(
             echodata,
             container_name=converted_container_name,
+            encode_mode=encode_mode,
+            waveform_mode=waveform_mode,
             zarr_path=zarr_path
         )
     except Exception as e:
@@ -156,6 +151,13 @@ def _process_file_workflow(
         logging.error(error_message)
         _update_file_failure(file_segment_service, file_id, error_message)
         raise RuntimeError(error_message)
+
+    echogram_files = None
+    if plot_echograms:
+        echogram_files = plot_and_upload_echograms(sv_dataset,
+                                                   cruise_id=cruise_id,
+                                                   file_base_name=file_name,
+                                                   container_name=echograms_container)
 
     # Save the processed data
     sv_zarr_path, zarr_store = _save_processed_data(
@@ -172,11 +174,13 @@ def _process_file_workflow(
     payload = _prepare_payload(
         sv_dataset,
         file_name=file_name,
+        file_id=file_id,
         sv_zarr_path=sv_zarr_path,
         cruise_id=cruise_id,
         start_time=start_time,
         survey_db_id=survey_db_id,
-        gps_container_name=gps_container_name
+        gps_container_name=gps_container_name,
+        echogram_files=echogram_files
     )
     file_segment_service.update_file_record(
         file_id=file_id, **payload, processed=True
@@ -185,13 +189,13 @@ def _process_file_workflow(
 
 
 def _save_processed_data(
-        sv_dataset: Dataset,
-        cruise_id: str = None,
-        file_name: str = None,
-        processed_container_name: Optional[str] = None,
-        output_path: Optional[str] = None,
-        save_to_directory: Optional[bool] = None,
-        save_to_blobstorage: Optional[bool] = None
+    sv_dataset: Dataset,
+    cruise_id: str = None,
+    file_name: str = None,
+    processed_container_name: Optional[str] = None,
+    output_path: Optional[str] = None,
+    save_to_directory: Optional[bool] = None,
+    save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
     if processed_container_name and save_to_blobstorage:
@@ -209,33 +213,34 @@ def _save_processed_data(
 
 
 def _prepare_payload(
-        sv_dataset: Dataset,
-        file_name: str = None,
-        sv_zarr_path: Optional[str] = None,
-        cruise_id: str = None,
-        start_time: float = None,
-        gps_container_name: Optional[str] = None,
-        survey_db_id: int = None
+    sv_dataset: Dataset,
+    file_id: int = None,
+    file_name: str = None,
+    sv_zarr_path: Optional[str] = None,
+    cruise_id: str = None,
+    start_time: float = None,
+    echogram_files: Optional[list] = None,
+    gps_container_name: Optional[str] = None,
+    survey_db_id: int = None
 ) -> dict:
-    """Prepare the payload with metadata and GPS data."""
+    with PostgresDB() as db_connection:
+        file_service = FileSegmentService(db_connection)
+        has_location_data = file_service.file_has_location_data(file_id)
+
     processing_time_ms = int((time.time() - start_time) * 1000)
+
     ping_times = sv_dataset.coords["ping_time"].values
     ping_times_index = pd.DatetimeIndex(ping_times)
-    gps_data = query_location_points_between_timestamps(
-        ping_times_index[0].isoformat(), ping_times_index[-1].isoformat(), container_name=gps_container_name,
-        survey_id=cruise_id
-    )
 
-    gps_result = extract_start_end_coordinates(gps_data)
-    location_data = extract_location_data(gps_data)
-    location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
-
-    return {
+    payload = {
         "file_name": file_name,
         "size": None,
         "last_modified": None,
         "location": sv_zarr_path,
         "survey_db_id": survey_db_id,
+        "failed": False,
+        "error_details": "",
+        "processing_time_ms": processing_time_ms,
         "file_npings": len(sv_dataset["ping_time"].values),
         "file_nsamples": len(sv_dataset["range_sample"].values),
         "file_start_time": str(ping_times[0]),
@@ -243,16 +248,28 @@ def _prepare_payload(
         "file_freqs": ",".join(map(str, sv_dataset["frequency_nominal"].values)),
         "file_start_depth": float(sv_dataset["range_sample"].values[0]),
         "file_end_depth": float(sv_dataset["range_sample"].values[-1]),
-        "file_start_lat": gps_result["file_start_lat"],
-        "file_start_lon": gps_result["file_start_lon"],
-        "file_end_lat": gps_result["file_end_lat"],
-        "file_end_lon": gps_result["file_end_lon"],
-        "echogram_files": None,
-        "failed": False,
-        "error_details": "",
-        "location_data": location_data_str,
-        "processing_time_ms": processing_time_ms,
+        "echogram_files": echogram_files
     }
+
+    if not has_location_data:
+        gps_data = query_location_points_between_timestamps(
+            ping_times_index[0].isoformat(), ping_times_index[-1].isoformat(), container_name=gps_container_name,
+            survey_id=cruise_id
+        )
+
+        gps_result = extract_start_end_coordinates(gps_data)
+        location_data = extract_location_data(gps_data)
+        location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
+
+        payload.update({
+            "file_start_lat": gps_result["file_start_lat"],
+            "file_start_lon": gps_result["file_start_lon"],
+            "file_end_lat": gps_result["file_end_lat"],
+            "file_end_lon": gps_result["file_end_lon"],
+            "location_data": location_data_str
+        })
+
+    return payload
 
 
 def _update_file_failure(file_segment_service, file_id: int, error_message: str):

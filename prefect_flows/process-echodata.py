@@ -12,6 +12,7 @@ from dask.distributed import Client
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
+from prefect.artifacts import create_markdown_artifact
 
 from saildrone.process import process_converted_file
 from saildrone.store import ensure_container_exists
@@ -34,8 +35,8 @@ ECHODATA_OUTPUT_PATH = os.getenv('ECHODATA_OUTPUT_PATH')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
+WEBAPP_CONTAINER_NAME = os.getenv('WEBAPP_CONTAINER_NAME')
 GPSDATA_CONTAINER_NAME = os.getenv('GPSDATA_CONTAINER_NAME')
-CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
 CHUNKS = {"ping_time": 500, "range_sample": -1}
@@ -64,7 +65,11 @@ def process_single_file(source_path: Path,
                         save_to_blobstorage=None,
                         save_to_directory=None,
                         chunks_ping_time=None,
-                        chunks_range_sample=None) -> None:
+                        encode_mode=None,
+                        waveform_mode=None,
+                        plot_echograms=None,
+                        echograms_container=None,
+                        chunks_range_sample=None):
     try:
         chunks = {
             'ping_time': chunks_ping_time,
@@ -91,13 +96,23 @@ def process_single_file(source_path: Path,
                                load_from_blobstorage=load_from_blobstorage,
                                converted_container_name=converted_container_name,
                                reprocess=reprocess,
+                               plot_echograms=plot_echograms,
+                               echograms_container=echograms_container,
                                gps_container_name=GPSDATA_CONTAINER_NAME,
+                               encode_mode=encode_mode,
+                               waveform_mode=waveform_mode,
                                save_to_blobstorage=save_to_blobstorage,
                                save_to_directory=save_to_directory,
                                processed_container_name=processed_container_name)
         print(f"Processed Sv for {source_path.name}")
     except Exception as e:
         print(f"Error processing file: {source_path.name}: ${str(e)}")
+
+        markdown_report = f"""# Error report for {source_path.name}
+        Error occurred while processing the file: {source_path}
+        {str(e)}
+        """
+        create_markdown_artifact(markdown_report)
 
         return Completed(message="Task completed with errors")
 
@@ -107,8 +122,12 @@ def process_raw_data(files: List[Path],
                      source_container=None,
                      output_container=None,
                      save_to_blobstorage=None,
+                     plot_echograms=None,
+                     echograms_container=None,
                      load_from_blobstorage=None,
                      save_to_directory=None,
+                     encode_mode=None,
+                     waveform_mode=None,
                      chunks_ping_time=None,
                      chunks_range_sample=None,
                      reprocess=None) -> None:
@@ -120,8 +139,12 @@ def process_raw_data(files: List[Path],
                                             source_container=source_container,
                                             output_container=output_container,
                                             save_to_blobstorage=save_to_blobstorage,
+                                            plot_echograms=plot_echograms,
+                                            echograms_container=echograms_container,
                                             load_from_blobstorage=load_from_blobstorage,
                                             save_to_directory=save_to_directory,
+                                            encode_mode=encode_mode,
+                                            waveform_mode=waveform_mode,
                                             chunks_ping_time=chunks_ping_time,
                                             chunks_range_sample=chunks_range_sample,
                                             reprocess=reprocess)
@@ -133,66 +156,40 @@ def process_raw_data(files: List[Path],
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_process_files_to_zarr(source_directory: str, map_to_directory: str, cruise_id: str, survey_name: str,
-                                   vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
-                                   description: Optional[str],
+def load_and_process_files_to_zarr(source_directory: str,
+                                   map_to_directory: str,
+                                   cruise_id: str,
                                    load_from_blobstorage: bool,
-                                   save_to_blobstorage: bool,
-                                   save_to_directory: bool,
                                    source_container: str,
+                                   save_to_blobstorage: bool,
                                    output_container: str,
+                                   save_to_directory: bool,
                                    reprocess: bool,
+                                   plot_echograms: bool,
+                                   echograms_container: str,
+                                   encode_mode: str,
+                                   waveform_mode: str,
                                    chunks_ping_time: int,
                                    chunks_range_sample: int,
-                                   batch_size: int) -> None:
-    """
-    Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
-
-    Args:
-        source_directory (str): The directory containing the raw files.
-        map_to_directory (str): The directory to map the raw files to.
-        cruise_id (str): The unique ID of the cruise.
-        survey_name (str): The name of the survey.
-        vessel (str): The vessel used in the survey.
-        start_port (str): The start port of the survey.
-        end_port (str): The end port of the survey.
-        start_date (str): The start date of the survey in the format YYYY-MM-DD.
-        end_date (str): The end date of the survey in the format YYYY-MM-DD.
-        description (Optional[str]): Optional description of the survey.
-        load_from_blobstorage (bool): Whether to load the raw files from Azure Blob Storage.
-        save_to_blobstorage (bool): Whether to save the converted files to Azure Blob Storage.
-        save_to_directory (bool): Whether to save the converted files to a local directory.
-        source_container (str): The name of the Azure Blob Storage container containing the raw files.
-        output_container (str): The name of the Azure Blob Storage container to save the converted files.
-        reprocess (bool): Whether to reprocess the files if they have already been processed.
-        chunks_ping_time (int): The chunk size for the ping_time dimension.
-        chunks_range_sample (int): The chunk size for the range_sample dimension.
-        batch_size (int): The number of files to process in each batch.
-    """
-
+                                   batch_size: int):
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
         # Check if a survey with the given cruise_id exists
         survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
 
-        if survey_id:
-            # Update the existing survey record
-            survey_service.update_survey(survey_id, survey_name, vessel, start_port, end_port, start_date, end_date,
-                                         description)
-            logging.info(f"Updated survey with cruise_id: {cruise_id}")
-        else:
-            # Insert a new survey record
-            survey_id = survey_service.insert_survey(cruise_id, survey_name, vessel, start_port, end_port, start_date,
-                                                     end_date, description)
+        if not survey_id:
+            survey_id = survey_service.insert_survey(cruise_id)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
     if load_from_blobstorage:
         files_list = list_zarr_files(source_container, cruise_id=cruise_id)
     else:
-        files_list = load_local_files(source_directory, map_to_directory)
+        files_list = load_local_files(source_directory, map_to_directory, '*.zarr')
 
+    print('source_directory:', source_directory, 'map_to_directory:', map_to_directory)
     total_files = len(files_list)
+    print(f"Total files to process: {total_files}")
 
     # Process files in batches
     for i in range(0, total_files, batch_size):
@@ -204,8 +201,12 @@ def load_and_process_files_to_zarr(source_directory: str, map_to_directory: str,
                          source_container=source_container,
                          output_container=output_container,
                          reprocess=reprocess,
+                         plot_echograms=plot_echograms,
+                         echograms_container=echograms_container,
                          save_to_blobstorage=save_to_blobstorage,
                          save_to_directory=save_to_directory,
+                         encode_mode=encode_mode,
+                         waveform_mode=waveform_mode,
                          chunks_ping_time=chunks_ping_time,
                          chunks_range_sample=chunks_range_sample,
                          )
@@ -229,19 +230,16 @@ if __name__ == "__main__":
                 'source_directory': RAW_DATA_LOCAL,
                 'map_to_directory': RAW_DATA_LOCAL,
                 'cruise_id': '',
-                'survey_name': '',
-                'vessel': '',
-                'start_port': '',
-                'end_port': '',
-                'start_date': '2024-05-01',
-                'end_date': '2024-06-30',
-                'description': '',
                 'load_from_blobstorage': False,
-                'save_to_blobstorage': True,
-                'save_to_directory': False,
                 'source_container': CONVERTED_CONTAINER_NAME,
+                'save_to_blobstorage': True,
                 'output_container': PROCESSED_CONTAINER_NAME,
+                'save_to_directory': False,
                 'reprocess': False,
+                'plot_echograms': False,
+                'echograms_container': WEBAPP_CONTAINER_NAME,
+                'encode_mode': 'complex',
+                'waveform_mode': 'CW',
                 'chunks_ping_time': 500,
                 'chunks_range_sample': -1,
                 'batch_size': BATCH_SIZE
