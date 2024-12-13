@@ -3,6 +3,8 @@ import os
 import io
 import sys
 import time
+import traceback
+
 import requests
 
 from pathlib import Path
@@ -103,9 +105,11 @@ def process_file(file_path: str, geolocation: dict, metadata):
 
         except Exception as e:
             logging.error(f'Error processing file {file_name}: {e}')
+            stack_trace = traceback.format_exc()
             markdown_report += f"\n\nError processing file {file_name}: {e}"
-
+            markdown_report += f"\n\n{stack_trace}"
             create_markdown_artifact(markdown_report)
+            
             return Completed(message=f"Error processing file {file_name}: {e}")
 
 
