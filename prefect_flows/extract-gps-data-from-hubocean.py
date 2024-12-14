@@ -106,7 +106,7 @@ def process_file(file_path: str, geolocation: dict, metadata):
             markdown_report += f"\n\n{stack_trace}"
             create_markdown_artifact(markdown_report)
 
-            file_service.update_processing_report(file_info['id'], f"Error processing file: {e}")
+            file_service.update_processing_report(file_info['id'], f"Error processing file: {str(e)}")
 
             return Completed(message=f"Error processing file {file_name}: {e}")
 
