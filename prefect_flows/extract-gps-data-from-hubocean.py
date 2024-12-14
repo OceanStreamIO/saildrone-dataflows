@@ -62,14 +62,14 @@ def process_file(file_path: str, geolocation: dict, metadata):
             return
 
         if geolocation is None:
-            file_service.update_processing_report(file_info['id'], f"No geolocation data found")
+            file_service.update_processing_report(file_info['id'], "No geolocation data found")
             return Completed(message=f"No geolocation data found for file: {file_name}")
 
         location_summary = process_geo_location(file_name, geolocation, metadata)
         markdown_report += f"\n\nLocation summary: {location_summary}"
 
         if location_summary is None:
-            file_service.update_processing_report(file_info['id'], f"o valid geo_location found")
+            file_service.update_processing_report(file_info['id'], "No valid geo_location found")
             return Completed(message=f"No valid geo_location found for file: {file_name}")
 
         location_data_str = None
