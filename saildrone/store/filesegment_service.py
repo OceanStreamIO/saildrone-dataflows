@@ -309,6 +309,17 @@ class FileSegmentService:
         self.db.cursor.execute('UPDATE files SET processed=TRUE WHERE id=%s', (file_id,))
         self.db.conn.commit()
 
+    def update_processing_report(self, file_id: int, text: str):
+        self.db.cursor.execute('''
+            UPDATE files
+            SET processing_report = COALESCE(%s, processing_report),
+            WHERE id = %s
+        ''', (
+            text, file_id
+        ))
+
+        self.db.conn.commit()
+
     def mark_file_converted(self, file_id: int) -> None:
         """
         Mark a file as processed by updating the 'converted' field in the database.

@@ -184,7 +184,7 @@ if __name__ == "__main__":
             name='download-survey-from-hubocean',
             parameters={
                 'download_dir': './downloaded_files',
-                'cruise_id': 'AKBM-SagaSea-2023',
+                'cruise_id': 'AKBM_SagaSea_2023',
                 'batch_size': 10,
                 'page_size': 100,
                 'redownload': False,

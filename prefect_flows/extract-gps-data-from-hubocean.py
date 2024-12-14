@@ -42,7 +42,7 @@ logging.basicConfig(
 
 
 @task(
-    retries=5,
+    retries=10,
     retry_delay_seconds=[10, 30, 60],
     retry_jitter_factor=0.1,
     refresh_cache=True,
@@ -50,8 +50,6 @@ logging.basicConfig(
 )
 def process_file(file_path: str, geolocation: dict, metadata):
     markdown_report = f"""# Task Report for {file_path}"""
-
-    logging.info(f'Starting download for {file_path}')
 
     with PostgresDB() as db_connection:
         file_service = FileSegmentService(db_connection)
@@ -63,15 +61,15 @@ def process_file(file_path: str, geolocation: dict, metadata):
             logging.info(f'{file_name} has not been downloaded.')
             return
 
-        print(f'Processing file: {file_name}')
-
         if geolocation is None:
+            file_service.update_processing_report(file_info['id'], f"No geolocation data found")
             return Completed(message=f"No geolocation data found for file: {file_name}")
 
         location_summary = process_geo_location(file_name, geolocation, metadata)
         markdown_report += f"\n\nLocation summary: {location_summary}"
 
         if location_summary is None:
+            file_service.update_processing_report(file_info['id'], f"o valid geo_location found")
             return Completed(message=f"No valid geo_location found for file: {file_name}")
 
         location_data_str = None
@@ -107,6 +105,8 @@ def process_file(file_path: str, geolocation: dict, metadata):
             markdown_report += f"\n\nError processing file {file_name}: {e}"
             markdown_report += f"\n\n{stack_trace}"
             create_markdown_artifact(markdown_report)
+
+            file_service.update_processing_report(file_info['id'], f"Error processing file: {e}")
 
             return Completed(message=f"Error processing file {file_name}: {e}")
 
@@ -182,8 +182,7 @@ def create_geoparquet_file(cruise_id, survey_id, output_path, storage_type):
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, geoparquet_storage_type: str = None,
-                                 bearer_token: str = '') -> None:
+def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, page_size: int = 100, bearer_token: str = '') -> None:
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -196,10 +195,7 @@ def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, geoparque
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
     logging.info(f"Survey ID: {survey_id}")
-    api_url = f"{BASE_URL}/list?page_size={batch_size}"
-
-    logging.info(f"API URL: {api_url}")
-
+    api_url = f"{BASE_URL}/list?page_size={page_size}"
     raw_files = list_raw_files(api_url, bearer_token)
 
     if not raw_files:
@@ -246,7 +242,7 @@ if __name__ == "__main__":
             parameters={
                 'cruise_id': 'AKBM_SagaSea_2023',
                 'batch_size': 10,
-                'geoparquet_storage_type': 'local',
+                'page_size': 100,
                 'bearer_token': ''
             }
         )

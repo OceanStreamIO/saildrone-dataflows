@@ -72,7 +72,8 @@ class PostgresDB:
                 survey_db_id INTEGER,
                 downloaded BOOLEAN DEFAULT FALSE,
                 bounding_geom GEOMETRY(POLYGON, 4326),
-                track_geom GEOMETRY(LINESTRING, 4326)
+                track_geom GEOMETRY(LINESTRING, 4326),
+                processing_report TEXT
             );
         ''')
 
