@@ -68,10 +68,14 @@ def extract_location_data(gdf: gpd.GeoDataFrame, epsilon=0.00001, min_distance=0
     points = df[["lat", "lon"]].values
     thinned_points = ramer_douglas_peucker(points, epsilon)
     thinned_df = pd.DataFrame(thinned_points, columns=["lat", "lon"])
-    thinned_df["dt"] = thinned_df.apply(
-        lambda row: df.loc[(df["lat"] == row["lat"]) & (df["lon"] == row["lon"]), "dt"].values[0], axis=1)
-    thinned_df["knt"] = thinned_df.apply(
-        lambda row: df.loc[(df["lat"] == row["lat"]) & (df["lon"] == row["lon"]), "knt"].values[0], axis=1)
+
+    try:
+        thinned_df["dt"] = thinned_df.apply(
+            lambda row: df.loc[(df["lat"] == row["lat"]) & (df["lon"] == row["lon"]), "dt"].values[0], axis=1)
+        thinned_df["knt"] = thinned_df.apply(
+            lambda row: df.loc[(df["lat"] == row["lat"]) & (df["lon"] == row["lon"]), "knt"].values[0], axis=1)
+    except Exception:
+        logger.warning("Error in extracting time and speed data for thinned points.")
 
     # Further thin by minimum distance
     final_points = [thinned_df.iloc[0]]

@@ -38,8 +38,6 @@ def process_geo_location(file_name, geo_data, metadata):
     gdf = gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
 
     processed_df = extract_location_data(gdf)
-    # Partition and save to GeoParquet
-    # save_to_partitioned_geoparquet(gdf, output_path, storage_type)
 
     # Return metadata summary for database storage
     return {
