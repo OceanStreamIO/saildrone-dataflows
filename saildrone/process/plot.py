@@ -1,9 +1,13 @@
 import os
+import shutil
 import traceback
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
+
+from saildrone.store import upload_folder_to_blob_storage
 
 
 def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r') -> list:
@@ -118,3 +122,20 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
     return echogram_output_path
 
+
+def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, container_name=None, cmap='ocean_r'):
+    echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
+    os.makedirs(echograms_output_path, exist_ok=True)
+
+    echogram_files = plot_sv_data(sv_dataset,
+                                  file_base_name=file_base_name,
+                                  output_path=echograms_output_path,
+                                  cmap=cmap)
+
+    upload_folder_to_blob_storage(echograms_output_path, container_name, f'{cruise_id}/{file_base_name}')
+
+    shutil.rmtree(echograms_output_path, ignore_errors=True)
+
+    uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
+
+    return uploaded_files

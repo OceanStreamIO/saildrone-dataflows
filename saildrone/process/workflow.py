@@ -12,10 +12,10 @@ from typing import Optional, Tuple
 
 from echopype.calibrate import compute_Sv as sv_computation
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
-from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage,
-                             plot_and_upload_echograms)
+from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage)
 from saildrone.azure_iot import serialize_location_data
 
+from .plot import plot_and_upload_echograms
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
 

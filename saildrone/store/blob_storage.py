@@ -14,7 +14,6 @@ from typing import List, Union, TypedDict
 from adlfs import AzureBlobFileSystem
 from azure.storage.blob import BlobServiceClient, generate_container_sas, ContainerSasPermissions
 
-from saildrone.process import plot_sv_data
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
@@ -297,21 +296,4 @@ def upload_folder_to_blob_storage(folder_path, container_name, target_path):
                 blob_client.upload_blob(data, overwrite=True)
 
 
-def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, container_name=None, cmap='ocean_r'):
-    logger.info(f'Plotting Sv data and saving echograms...')
-    echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
-    os.makedirs(echograms_output_path, exist_ok=True)
 
-    echogram_files = plot_sv_data(sv_dataset,
-                                  file_base_name=file_base_name,
-                                  output_path=echograms_output_path,
-                                  cmap=cmap)
-
-    logger.info('Uploading echograms to Azure Blob Storage...')
-    upload_folder_to_blob_storage(echograms_output_path, container_name, f'{cruise_id}/{file_base_name}')
-
-    shutil.rmtree(echograms_output_path, ignore_errors=True)
-
-    uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
-
-    return uploaded_files
