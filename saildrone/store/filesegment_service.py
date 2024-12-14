@@ -312,11 +312,9 @@ class FileSegmentService:
     def update_processing_report(self, file_id: int, text: str):
         self.db.cursor.execute('''
             UPDATE files
-            SET processing_report = COALESCE(%s, processing_report),
+            SET processing_report = COALESCE(%s, processing_report)
             WHERE id = %s
-        ''', (
-            text, file_id
-        ))
+        ''', (text, file_id))
 
         self.db.conn.commit()
 
