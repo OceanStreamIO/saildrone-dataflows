@@ -40,7 +40,8 @@ logging.basicConfig(
     retry_delay_seconds=RETRY_DELAY,
     task_run_name="download-file-{file_name}",
 )
-def download_file(file_name: str, file_url, download_dir: str, survey_id: int, bearer_token: str, metadata: dict):
+def download_file(file_name: str, file_url, download_dir: str, survey_id: int, redownload: bool, bearer_token: str,
+                  metadata: dict):
     location = os.path.join(download_dir, file_name)
     bearer_token = bearer_token or BEARER_TOKEN
     os.makedirs(download_dir, exist_ok=True)
@@ -121,7 +122,8 @@ def list_raw_files(api_url: str, bearer_token: str) -> List[dict]:
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def download_raw_files_from_api(download_dir: str, cruise_id: str, batch_size: int = 10, bearer_token: str = '') -> None:
+def download_raw_files_from_api(download_dir: str, cruise_id: str, page_size: int = 50, batch_size: int = 10,
+                                redownload: bool = False, bearer_token: str = '') -> None:
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -134,7 +136,7 @@ def download_raw_files_from_api(download_dir: str, cruise_id: str, batch_size: i
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
     logging.info(f"Survey ID: {survey_id}")
-    api_url = f"{BASE_URL}/list?page_size={batch_size}"
+    api_url = f"{BASE_URL}/list?page_size={page_size}"
 
     logging.info(f"API URL: {api_url}")
     os.makedirs(download_dir, exist_ok=True)
@@ -152,15 +154,15 @@ def download_raw_files_from_api(download_dir: str, cruise_id: str, batch_size: i
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        download_raw_data(batch_files, download_dir, survey_id, bearer_token)
+        download_raw_data(batch_files, download_dir, survey_id, redownload, bearer_token)
 
     logging.info('All files have been downloaded.')
 
 
-def download_raw_data(files, download_dir, survey_id, bearer_token) -> None:
+def download_raw_data(files, download_dir, survey_id, redownload, bearer_token) -> None:
     task_futures = []
     for file in files:
-        future = download_file.submit(file['name'], file['url'], download_dir, survey_id, bearer_token,
+        future = download_file.submit(file['name'], file['url'], download_dir, survey_id, redownload, bearer_token,
                                       metadata=file["metadata"])
         task_futures.append(future)
 
@@ -184,6 +186,8 @@ if __name__ == "__main__":
                 'download_dir': './downloaded_files',
                 'cruise_id': 'AKBM-SagaSea-2023',
                 'batch_size': 10,
+                'page_size': 100,
+                'redownload': False,
                 'bearer_token': ''
             }
         )

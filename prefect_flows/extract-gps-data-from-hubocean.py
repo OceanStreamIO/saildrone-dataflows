@@ -1,8 +1,6 @@
 import logging
 import os
-import io
 import sys
-import time
 import traceback
 
 import requests
@@ -109,7 +107,7 @@ def process_file(file_path: str, geolocation: dict, metadata):
             markdown_report += f"\n\nError processing file {file_name}: {e}"
             markdown_report += f"\n\n{stack_trace}"
             create_markdown_artifact(markdown_report)
-            
+
             return Completed(message=f"Error processing file {file_name}: {e}")
 
 
@@ -218,7 +216,7 @@ def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, geoparque
         process_raw_data(batch_files)
 
     logging.info('All files have been downloaded.')
-    create_geoparquet_file(cruise_id, survey_id, './gps_data', geoparquet_storage_type)
+    # create_geoparquet_file(cruise_id, survey_id, './gps_data', geoparquet_storage_type)
 
     return Completed(message="All files have been downloaded")
 
@@ -246,7 +244,7 @@ if __name__ == "__main__":
         extract_geolocation_from_api.serve(
             name='extract-geolocation-from-hubocean',
             parameters={
-                'cruise_id': 'AKBM-SagaSea-2023',
+                'cruise_id': 'AKBM_SagaSea_2023',
                 'batch_size': 10,
                 'geoparquet_storage_type': 'local',
                 'bearer_token': ''
