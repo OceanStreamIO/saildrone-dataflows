@@ -367,6 +367,7 @@ class FileSegmentService:
             SELECT file_name
             FROM files
             WHERE survey_db_id = %s AND {condition}
+            ORDER BY size ASC
         '''
 
         self.db.cursor.execute(query, (survey_id,))
