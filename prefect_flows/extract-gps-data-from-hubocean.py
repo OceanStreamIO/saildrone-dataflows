@@ -48,7 +48,7 @@ logging.basicConfig(
     refresh_cache=True,
     task_run_name="process-file-{file_path}",
 )
-def process_file(file_path: str, geolocation: dict, metadata):
+def process_file(file_path: str, geolocation: dict, metadata, skip_existing: bool):
     markdown_report = f"""# Task Report for {file_path}"""
 
     with PostgresDB() as db_connection:
@@ -66,6 +66,11 @@ def process_file(file_path: str, geolocation: dict, metadata):
             return Completed(message=f"No geolocation data found for file: {file_name}")
 
         try:
+            already_processed = file_service.file_has_location_data(file_info['id'])
+            if already_processed and skip_existing:
+                logging.info(f'Skipping already processed file: {file_name}')
+                return Completed(message=f"Skipping already processed file: {file_name}")
+
             location_summary = process_geo_location(file_name, geolocation, metadata)
             markdown_report += f"\n\nLocation summary: {location_summary}"
 
@@ -182,7 +187,8 @@ def create_geoparquet_file(cruise_id, survey_id, output_path, storage_type):
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, page_size: int = 100, bearer_token: str = '') -> None:
+def extract_geolocation_from_api(cruise_id: str, skip_existing: bool, batch_size: int = 10, page_size: int = 100,
+                                 bearer_token: str = '') -> None:
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -209,7 +215,7 @@ def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, page_size
     for i in range(0, total_files, batch_size):
         batch_files = raw_files[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
-        process_raw_data(batch_files)
+        process_raw_data(batch_files, skip_existing)
 
     logging.info('All files have been downloaded.')
     # create_geoparquet_file(cruise_id, survey_id, './gps_data', geoparquet_storage_type)
@@ -217,10 +223,10 @@ def extract_geolocation_from_api(cruise_id: str, batch_size: int = 10, page_size
     return Completed(message="All files have been downloaded")
 
 
-def process_raw_data(files) -> None:
+def process_raw_data(files, skip_existing) -> None:
     task_futures = []
     for file in files:
-        future = process_file.submit(file['name'], file["geolocation"], file["metadata"])
+        future = process_file.submit(file['name'], file["geolocation"], file["metadata"], skip_existing)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -241,6 +247,7 @@ if __name__ == "__main__":
             name='extract-geolocation-from-hubocean',
             parameters={
                 'cruise_id': 'AKBM_SagaSea_2023',
+                'skip_existing': True,
                 'batch_size': 10,
                 'page_size': 100,
                 'bearer_token': ''
