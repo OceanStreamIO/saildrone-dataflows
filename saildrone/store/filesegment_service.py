@@ -72,6 +72,23 @@ class FileSegmentService:
         self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND converted=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
+    def is_file_failed(self, file_name: str) -> bool:
+        """
+        Check if a file has already been converted.
+
+        Parameters
+        ----------
+        file_name : str
+            The name of the file to check.
+
+        Returns
+        -------
+        bool
+            Returns True if the file has already been converted, False otherwise.
+        """
+        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND failed=TRUE', (file_name,))
+        return self.db.cursor.fetchone() is not None
+
     def is_file_downloaded(self, file_name: str, survey_id: int) -> bool:
         """
         Check if a file has already been converted.

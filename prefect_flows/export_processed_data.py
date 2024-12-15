@@ -49,9 +49,7 @@ def export_processed(cruise_id='', coordinates=None):
             raise ValueError(f'Survey with cruise_id {cruise_id} not found.')
 
         polygon = f"POLYGON(({', '.join([f'{lon} {lat}' for lon, lat in coordinates])}))"
-
         file_service = FileSegmentService(db_connection)
-
         files = file_service.get_files_by_polygon_and_survey(polygon, survey_id)
 
         if not files:
