@@ -133,7 +133,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
         if get_list_from_db:
             file_service = FileSegmentService(db_connection)
             file_names = file_service.get_files_with_condition(survey_id, 'converted IS NOT True')
-            raw_files = [f"{source_directory}/{file_name}" for file_name in file_names]
+            raw_files = [Path(source_directory) / file_name for file_name in file_names]
 
     if not get_list_from_db:
         raw_files = load_local_files(source_directory, source_directory)
