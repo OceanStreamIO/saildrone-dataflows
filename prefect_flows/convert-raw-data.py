@@ -16,7 +16,7 @@ from prefect.states import Completed
 from saildrone.process import convert_file_and_save
 from saildrone.store import ensure_container_exists
 from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService
+from saildrone.store import PostgresDB, SurveyService, FileSegmentService
 
 input_cache_policy = Inputs()
 
@@ -101,7 +101,9 @@ def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None,
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey_name: str,
+def load_and_convert_files_to_zarr(source_directory: str,
+                                   get_list_from_db: bool,
+                                   cruise_id: str, survey_name: str,
                                    vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
                                    description: Optional[str],
                                    store_to_directory: Optional[bool],
@@ -110,7 +112,7 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
                                    store_to_blobstorage: Optional[bool],
                                    blobstorage_container: Optional[str],
                                    batch_size: int) -> None:
-
+    raw_files = []
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -128,7 +130,13 @@ def load_and_convert_files_to_zarr(source_directory: str, cruise_id: str, survey
                                                      end_date, description)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
-    raw_files = load_local_files(source_directory, source_directory)
+        if get_list_from_db:
+            file_service = FileSegmentService(db_connection)
+            file_names = file_service.get_files_with_condition(survey_id, 'converted IS NOT True')
+            raw_files = [f"{source_directory}/{file_name}" for file_name in file_names]
+
+    if not get_list_from_db:
+        raw_files = load_local_files(source_directory, source_directory)
 
     total_files = len(raw_files)
     print(f"Total files to process: {total_files}")
@@ -163,6 +171,7 @@ if __name__ == "__main__":
             name='convert-raw-files-to-zarr',
             parameters={
                 'source_directory': RAW_DATA_LOCAL,
+                'get_list_from_db': False,
                 'cruise_id': '',
                 'survey_name': '',
                 'vessel': '',

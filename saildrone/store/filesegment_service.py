@@ -362,6 +362,17 @@ class FileSegmentService:
         )
         return self.db.cursor.fetchall()
 
+    def get_files_with_condition(self, survey_id: int, condition: str) -> list:
+        query = f'''
+            SELECT file_name
+            FROM files
+            WHERE survey_db_id = %s AND {condition}
+        '''
+
+        self.db.cursor.execute(query, (survey_id,))
+
+        return [row[0] for row in self.db.cursor.fetchall()]
+
     def fetch_location_data_by_survey_id(self, survey_id: int) -> list:
         """
         Fetch location data for all files associated with a given survey ID.

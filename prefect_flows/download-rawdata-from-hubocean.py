@@ -20,7 +20,7 @@ load_dotenv()
 # Constants and environment variables
 DOWNLOAD_DIR = os.getenv('RAW_DATA_LOCAL', './downloaded_files')
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
-SURVEY_ID = 'AKBM-SagaSea-2023'
+SURVEY_ID = 'AKBM_SagaSea_2023'
 SURVEY_SEARCH_STRING = 'AKBM-SagaSea-2023'
 BEARER_TOKEN = os.getenv('BEARER_TOKEN')
 BASE_URL = \
