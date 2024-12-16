@@ -50,7 +50,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     retry_jitter_factor=0.1,
     refresh_cache=True,
     result_storage=None,
-    task_run_name="convert-{file_path.stem}",
+    task_run_name="convertraw-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None, output_directory=None, reprocess=None,
                         apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None,
@@ -105,9 +105,7 @@ def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None,
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def load_and_convert_files_to_zarr(source_directory: str,
                                    get_list_from_db: bool,
-                                   cruise_id: str, survey_name: str,
-                                   vessel: str, start_port: str, end_port: str, start_date: str, end_date: str,
-                                   description: Optional[str],
+                                   cruise_id: str,
                                    store_to_directory: Optional[bool],
                                    apply_calibration: Optional[bool],
                                    reprocess: Optional[bool],
@@ -122,16 +120,9 @@ def load_and_convert_files_to_zarr(source_directory: str,
         # Check if a survey with the given cruise_id exists
         survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
 
-        if survey_id:
-            # Update the existing survey record
-            survey_service.update_survey(survey_id, survey_name, vessel, start_port, end_port, start_date, end_date,
-                                         description)
-            logging.info(f"Updated survey with cruise_id: {cruise_id}")
-        else:
-            # Insert a new survey record
-            survey_id = survey_service.insert_survey(cruise_id, survey_name, vessel, start_port, end_port, start_date,
-                                                     end_date, description)
-            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
+        if not survey_id:
+            print(f"No survey found with cruise ID: {cruise_id}")
+            return
 
         if get_list_from_db:
             file_service = FileSegmentService(db_connection)
@@ -183,13 +174,6 @@ if __name__ == "__main__":
                 'source_directory': RAW_DATA_LOCAL,
                 'get_list_from_db': False,
                 'cruise_id': '',
-                'survey_name': '',
-                'vessel': '',
-                'start_port': '',
-                'end_port': '',
-                'start_date': '2024-05-01',
-                'end_date': '2024-06-30',
-                'description': '',
                 'store_to_directory': True,
                 'apply_calibration': True,
                 'reprocess': False,
