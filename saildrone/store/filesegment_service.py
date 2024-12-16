@@ -383,7 +383,7 @@ class FileSegmentService:
         query = f'''
             SELECT file_name
             FROM files
-            WHERE survey_db_id = %s AND {condition}
+            WHERE survey_db_id = %s {condition}
             ORDER BY size ASC
         '''
 

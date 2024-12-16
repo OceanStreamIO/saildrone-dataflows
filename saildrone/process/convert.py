@@ -14,7 +14,7 @@ CHUNKS = {"ping_time": 1000, "range_sample": -1}
 
 
 def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
-                          converted_container_name=None) -> (int, str, str):
+                          reprocess=None, converted_container_name=None) -> (int, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
     zarr_store = None
@@ -23,12 +23,12 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
         file_segment_service = FileSegmentService(db_connection)
 
         # Check if the file has already been processed
-        if file_segment_service.is_file_converted(file_name):
+        if file_segment_service.is_file_converted(file_name) and not reprocess:
             logging.info(f'Skipping already converted file: {file_name}')
             return None, None, None
 
-        if file_segment_service.is_file_failed(file_name):
-            logging.info(f'Skipping already converted file: {file_name}')
+        if file_segment_service.is_file_failed(file_name) and not reprocess:
+            logging.info(f'Skipping failed file: {file_name}')
             return None, None, None
 
         file_info = file_segment_service.get_file_info(file_name)

@@ -52,7 +52,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="convert-{file_path.stem}",
 )
-def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None, output_directory=None,
+def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None, output_directory=None, reprocess=None,
                         apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None,
                         sonar_model='EK80'):
     load_dotenv()
@@ -73,6 +73,7 @@ def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None
 
         convert_file_and_save(file_path, cruise_id, sonar_model,
                               calibration_file=calibration_file,
+                              reprocess=reprocess,
                               converted_container_name=converted_container_name,
                               output_path=output_path)
     except Exception as e:
@@ -81,13 +82,14 @@ def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None
         return Completed(message="Task completed with errors")
 
 
-def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None, output_directory=None,
+def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None, output_directory=None, reprocess=None,
                      apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None):
     task_futures = []
 
     for file_path in files:
         future = convert_single_file.submit(file_path,
                                             cruise_id=cruise_id,
+                                            reprocess=reprocess,
                                             store_to_directory=store_to_directory,
                                             output_directory=output_directory,
                                             apply_calibration=apply_calibration,
@@ -108,6 +110,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
                                    description: Optional[str],
                                    store_to_directory: Optional[bool],
                                    apply_calibration: Optional[bool],
+                                   reprocess: Optional[bool],
                                    output_directory: Optional[str],
                                    store_to_blobstorage: Optional[bool],
                                    blobstorage_container: Optional[str],
@@ -132,7 +135,13 @@ def load_and_convert_files_to_zarr(source_directory: str,
 
         if get_list_from_db:
             file_service = FileSegmentService(db_connection)
-            file_names = file_service.get_files_with_condition(survey_id, 'converted IS NOT True')
+            if not reprocess:
+                condition = 'AND converted IS NOT True'
+            else:
+                condition = ''
+
+            print(f'Survey ID: {survey_id}')
+            file_names = file_service.get_files_with_condition(survey_id, condition)
             raw_files = [Path(source_directory) / f"{file_name}.raw" for file_name in file_names]
 
     if not get_list_from_db:
@@ -147,6 +156,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
         print(f"Processing batch {i // batch_size + 1}")
         convert_raw_data(batch_files,
                          cruise_id=cruise_id,
+                         reprocess=reprocess,
                          store_to_directory=store_to_directory,
                          output_directory=output_directory,
                          store_to_blobstorage=store_to_blobstorage,
@@ -182,6 +192,7 @@ if __name__ == "__main__":
                 'description': '',
                 'store_to_directory': True,
                 'apply_calibration': True,
+                'reprocess': False,
                 'output_directory': ECHODATA_OUTPUT_PATH,
                 'store_to_blobstorage': False,
                 'blobstorage_container': os.getenv('CONVERTED_CONTAINER_NAME'),
