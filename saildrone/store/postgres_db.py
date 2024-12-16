@@ -201,7 +201,7 @@ class PostgresDB:
         return file_id
 
     def insert_survey_record(self, cruise_id: str, survey_name: str, vessel: str, start_port: str, end_port: str,
-                             start_date: str, end_date: str, description: Optional[str]) -> int:
+                             start_date: str, end_date: str, description: Optional[str], days) -> int:
         """
         Insert a new survey record into the database.
 
@@ -230,9 +230,9 @@ class PostgresDB:
             The ID of the newly inserted survey record.
         """
         self.cursor.execute('''
-            INSERT INTO surveys (cruise_id, survey_name, vessel, start_port, end_port, start_date, end_date, description)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-        ''', (cruise_id, survey_name, vessel, start_port, end_port, start_date, end_date, description))
+            INSERT INTO surveys (cruise_id, survey_name, vessel, start_port, end_port, start_date, end_date, description, days)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+        ''', (cruise_id, survey_name, vessel, start_port, end_port, start_date, end_date, description, days))
         survey_id = self.cursor.fetchone()[0]
         self.conn.commit()
         return survey_id

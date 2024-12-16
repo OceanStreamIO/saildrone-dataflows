@@ -416,6 +416,41 @@ class FileSegmentService:
 
         return [row[0] for row in rows]
 
+    def get_files_by_survey_id(self, survey_id: int) -> list:
+        """
+        Fetch location data for all files associated with a given survey ID.
+
+        Parameters
+        ----------
+        survey_id : int
+            The ID of the survey to fetch location data for.
+
+        Returns
+        -------
+        list
+            A list of location_data dictionaries from the database.
+        """
+        query = '''
+            SELECT id, file_name, size, file_start_time, file_end_time
+            FROM files
+            WHERE survey_db_id = %s
+            ORDER BY file_start_time ASC
+        '''
+
+        self.db.cursor.execute(query, (survey_id,))
+        rows = self.db.cursor.fetchall()
+
+        return [
+            {
+                'id': row[0],
+                'file_name': row[1],
+                'size': row[2],
+                'file_start_time': row[3],
+                'file_end_time': row[4]
+            }
+            for row in rows
+        ]
+
     def file_has_location_data(self, file_id: int) -> bool:
         """
         Check if a file has associated location data.

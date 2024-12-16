@@ -34,7 +34,7 @@ class SurveyService:
         return result[0] if result else None
 
     def insert_survey(self, cruise_id: str, survey_name: str = '', vessel: str = '', start_port: str = '', end_port: str = '',
-                      start_date: str = '', end_date: str = '', description: Optional[str] = '') -> int:
+                      start_date: str = '', end_date: str = '', description: Optional[str] = '', days = 0) -> int:
         """
         Insert a new survey record into the database.
 
@@ -63,7 +63,7 @@ class SurveyService:
             The ID of the newly inserted survey.
         """
         return self.db.insert_survey_record(cruise_id, survey_name, vessel, start_port, end_port, start_date, end_date,
-                                            description)
+                                            description, days)
 
     def update_survey(self, survey_id: int, survey_name: str, vessel: str, start_port: str, end_port: str,
                       start_date: str, end_date: str, description: Optional[str]) -> None:
