@@ -27,7 +27,7 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
             logging.info(f'Skipping already converted file: {file_name}')
             return None, None, None
 
-        if file_segment_service.is_file_failed(file_name) and not reprocess:
+        if file_segment_service.is_file_failed(file_name):
             logging.info(f'Skipping failed file: {file_name}')
             return None, None, None
 
