@@ -63,72 +63,73 @@ def export_processed_data_task(cruise_id: str, coordinates=None, container_name=
         long_pulse = []
         exported_ds_list = []
 
-        for file in files:
-            location, file_name, file_id, location_data, file_freqs, file_start_time, file_end_time = file
-            zarr_path = location
-
-            # Load the zarr store as an xarray dataset
-            ds = open_zarr_store(zarr_path, container_name=PROCESSED_CONTAINER_NAME, chunks=CHUNKS)
-
-            # Merge location data into the dataset
-            ds = merge_location_data(ds, location_data)
-
-            # Categorize datasets by file frequency
-            if file_freqs == "38000.0,200000.0":
-                short_pulse.append(ds)
-            elif file_freqs == "38000.0":
-                long_pulse.append(ds)
-            else:
-                exported_ds_list.append(ds)
-
-        ensure_container_exists(container_name)
-
-        short_pulse_datasets = [
-            ds.rename({"source_filenames": f"source_filenames_{i}"})
-            for i, ds in enumerate(short_pulse)
-        ]
-        short_pulse_ds = xr.merge(short_pulse_datasets) if short_pulse_datasets else None
-
-        long_pulse_datasets = [
-            ds.rename({"source_filenames": f"source_filenames_{i}"})
-            for i, ds in enumerate(long_pulse)
-        ]
-        long_pulse_ds = xr.merge(long_pulse_datasets) if long_pulse_datasets else None
-
-        exported_ds_datasets = [
-            ds.rename({"source_filenames": f"source_filenames_{i}"})
-            for i, ds in enumerate(exported_ds_list)
-        ]
-        exported_ds = xr.merge(exported_ds_datasets) if exported_ds_datasets else None
-
-        if export_format == 'netcdf':
-            if short_pulse_ds:
-                save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
-
-            if long_pulse_ds:
-                save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
-
-            if exported_ds:
-                save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
-        elif export_format == 'zarr':
-            if short_pulse_ds:
-                save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
-
-            if long_pulse_ds:
-                save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
-
-            if exported_ds:
-                save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
-
-        access_link = generate_container_access_url(container_name)
-        create_link_artifact(
-            key=f"{container_name}-link",
-            link=access_link,
-            link_text="Export link",
-            description="Link to download the exported data."
-        )
-
-        return short_pulse_ds, long_pulse_ds, exported_ds
+        with get_dask_client() as client:
+            for file in files:
+                location, file_name, file_id, location_data, file_freqs, file_start_time, file_end_time = file
+                zarr_path = location
+    
+                # Load the zarr store as an xarray dataset
+                ds = open_zarr_store(zarr_path, container_name=PROCESSED_CONTAINER_NAME, chunks=CHUNKS)
+    
+                # Merge location data into the dataset
+                ds = merge_location_data(ds, location_data)
+    
+                # Categorize datasets by file frequency
+                if file_freqs == "38000.0,200000.0":
+                    short_pulse.append(ds)
+                elif file_freqs == "38000.0":
+                    long_pulse.append(ds)
+                else:
+                    exported_ds_list.append(ds)
+    
+            ensure_container_exists(container_name)
+    
+            short_pulse_datasets = [
+                ds.rename({"source_filenames": f"source_filenames_{i}"})
+                for i, ds in enumerate(short_pulse)
+            ]
+            short_pulse_ds = xr.merge(short_pulse_datasets) if short_pulse_datasets else None
+    
+            long_pulse_datasets = [
+                ds.rename({"source_filenames": f"source_filenames_{i}"})
+                for i, ds in enumerate(long_pulse)
+            ]
+            long_pulse_ds = xr.merge(long_pulse_datasets) if long_pulse_datasets else None
+    
+            exported_ds_datasets = [
+                ds.rename({"source_filenames": f"source_filenames_{i}"})
+                for i, ds in enumerate(exported_ds_list)
+            ]
+            exported_ds = xr.merge(exported_ds_datasets) if exported_ds_datasets else None
+    
+            if export_format == 'netcdf':
+                if short_pulse_ds:
+                    save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
+    
+                if long_pulse_ds:
+                    save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
+    
+                if exported_ds:
+                    save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
+            elif export_format == 'zarr':
+                if short_pulse_ds:
+                    save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
+    
+                if long_pulse_ds:
+                    save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
+    
+                if exported_ds:
+                    save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
+    
+            access_link = generate_container_access_url(container_name)
+            create_link_artifact(
+                key=f"{container_name}-link",
+                link=access_link,
+                link_text="Export link",
+                description="Link to download the exported data."
+            )
+    
+            return short_pulse_ds, long_pulse_ds, exported_ds
 
 
 @task(
