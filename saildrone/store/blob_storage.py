@@ -20,8 +20,6 @@ logger = logging.getLogger(__name__)
 
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
-AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
-AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
 
 
 def create_blob_service_client(connect_str=None) -> BlobServiceClient:
@@ -60,7 +58,7 @@ def get_azure_blob_filesystem(storage_config=None) -> AzureBlobFileSystem:
     return AzureBlobFileSystem(connection_string=connect_str)
 
 
-def ensure_container_exists(container_name: str, blob_service_client: BlobServiceClient = None):
+def ensure_container_exists(container_name: str, blob_service_client: BlobServiceClient = None, public_access=None):
     """
     Ensure that the specified container exists in Azure Blob Storage.
 
@@ -79,7 +77,7 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
         # Check if the container exists
         if not container_client.exists():
             logger.info(f"Container '{container_name}' does not exist. Creating container...")
-            container_client.create_container()
+            container_client.create_container(public_access=public_access)
             logger.info(f"Container '{container_name}' created successfully.")
         else:
             logger.info(f"Container '{container_name}' already exists.")
@@ -205,6 +203,29 @@ def get_variable_encoding(ds: xr.Dataset, compression_level):
     return encoding
 
 
+def save_dataset_to_netcdf(
+    ds: xr.Dataset,
+    container_name: str = None,
+    base_local_temp_path: str = '/tmp/osnetcdf',
+    ds_path: str = "short_pulse_data.nc",
+    compression_level: int = 5
+):
+    container_local_path = os.path.join(base_local_temp_path, container_name)
+    os.makedirs(container_local_path, exist_ok=True)
+
+    full_dataset_path = os.path.join(container_local_path, ds_path)
+
+    # Save the datasets locally
+    ds.to_netcdf(
+        path=full_dataset_path,
+        format='NETCDF4',
+        engine='netcdf4',
+        encoding=get_variable_encoding(full_dataset_path, compression_level)
+    )
+
+    upload_file_to_blob(full_dataset_path, ds_path, container_name=container_name)
+
+
 def save_datasets_to_netcdf(
     short_pulse_ds: xr.Dataset,
     long_pulse_ds: xr.Dataset,
@@ -257,11 +278,14 @@ def generate_container_access_url(container_name, duration_days=90):
     """
     Generate a SAS token for container access and return the URL.
     """
+    AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
+    AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
+
     sas_token = generate_container_sas(
         account_name=AZURE_STORAGE_ACCOUNT_NAME,
         container_name=container_name,
         account_key=AZURE_STORAGE_ACCOUNT_KEY,
-        permission=ContainerSasPermissions(read=True, write=True, delete=True, list=True),
+        permission=ContainerSasPermissions(read=True, list=True),
         expiry=datetime.utcnow() + timedelta(days=duration_days)
     )
 
@@ -294,6 +318,3 @@ def upload_folder_to_blob_storage(folder_path, container_name, target_path):
 
             with open(file_path, "rb") as data:
                 blob_client.upload_blob(data, overwrite=True)
-
-
-
