@@ -298,7 +298,7 @@ def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def export_processed(cruise_id='', coordinates=None, filters=None, export_format='netcdf'):
+def export_processed(cruise_id='', coordinates=None, filters=None, export_format='zarr'):
     if not coordinates:
         raise ValueError("Coordinates are required for spatial queries.")
 
@@ -431,7 +431,7 @@ if __name__ == "__main__":
                 'cruise_id': '',
                 'coordinates': [],
                 'filters': {},
-                'export_format': Literal['netcdf', 'zarr']
+                'export_format': 'zarr'
             }
         )
 
