@@ -101,7 +101,9 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     logger.info(f"Saving converted data to Zarr format at: {zarr_path_full}")
 
     if isinstance(echodata_or_sv_ds, xr.Dataset):
-        echodata_or_sv_ds.to_zarr(store=zarr_store, mode='w')
+        # echodata_or_sv_ds.to_zarr(store=zarr_store, mode='w')
+        rechunked_ds = echodata_or_sv_ds.chunk({dim: -1 for dim in echodata_or_sv_ds.dims})
+        rechunked_ds.to_zarr(store=zarr_store, mode='w')
     else:
         echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
@@ -220,7 +222,7 @@ def save_dataset_to_netcdf(
         path=full_dataset_path,
         format='NETCDF4',
         engine='netcdf4',
-        encoding=get_variable_encoding(full_dataset_path, compression_level)
+        encoding=get_variable_encoding(ds, compression_level)
     )
 
     upload_file_to_blob(full_dataset_path, ds_path, container_name=container_name)
