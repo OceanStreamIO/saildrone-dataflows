@@ -208,7 +208,7 @@ def get_variable_encoding(ds: xr.Dataset, compression_level):
 def save_dataset_to_netcdf(
     ds: xr.Dataset,
     container_name: str = None,
-    base_local_temp_path: str = '/tmp/osnetcdf',
+    base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
     compression_level: int = 5
 ):

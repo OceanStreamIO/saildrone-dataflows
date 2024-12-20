@@ -62,6 +62,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     Returns:
     - str: The path to the saved echogram file.
     """
+    print('plot_individual_channel_simplified', ds_Sv)
     full_channel_name = ds_Sv.channel.values[channel]
     channel_name = "_".join(full_channel_name.split()[:3])
 

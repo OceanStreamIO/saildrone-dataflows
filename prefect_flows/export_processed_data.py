@@ -3,10 +3,7 @@ import os
 import sys
 import time
 import traceback
-
-import xarray as xr
-
-import pandas as pd
+from dask.distributed import as_completed
 
 from dotenv import load_dotenv
 from prefect import flow, task
@@ -17,10 +14,12 @@ from prefect.artifacts import create_link_artifact, create_markdown_artifact
 from prefect.states import Completed
 
 from saildrone.process import convert_file_and_save, plot_sv_data
+from saildrone.process.concat import merge_location_data, optimize_zarr_store, concatenate_and_rechunk, \
+    cleanup_temp_folders
 from saildrone.store import (PostgresDB, SurveyService, FileSegmentService, open_zarr_store,
                              upload_folder_to_blob_storage, save_dataset_to_netcdf,
                              save_zarr_store, generate_container_name, ensure_container_exists,
-                             generate_container_access_url, create_blob_service_client)
+                             generate_container_access_url)
 
 load_dotenv()
 
@@ -35,7 +34,8 @@ logging.basicConfig(
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
-CHUNKS = {"ping_time": 500, "range_sample": -1}
+CHUNKS = {"ping_time": 1000, "range_sample": -1}
+BATCH_SIZE = os.getenv('BATCH_SIZE_FOR_EXPORT', 10)
 
 
 def get_files_by_cruise_id(cruise_id, coordinates=None):
@@ -59,82 +59,134 @@ def get_files_by_cruise_id(cruise_id, coordinates=None):
 @task(
     retries=3,
     retry_delay_seconds=[10, 30, 60],
+    cache_policy=input_cache_policy,
     retry_jitter_factor=0.1,
     refresh_cache=True,
-    task_run_name="export-processed-data"
+    result_storage=None,
+    task_run_name="process-{file_name}",
 )
+def process_single_file(file, file_name, source_container_name, chunks, path_template, file_index):
+    """
+    Process a single file for Dask Futures: open it, merge location data, save the dataset, and return its path and frequency category.
+    """
+    location, _, file_id, location_data, file_freqs, file_start_time, file_end_time = file
+    print(f"Processing file {location} with frequencies {file_freqs}")
+
+    # Open the Zarr store lazily with Dask
+    ds = open_zarr_store(location, container_name=source_container_name, chunks=chunks)
+
+    # Merge location data
+    ds = merge_location_data(ds, location_data)
+
+    # Save the dataset to a temporary Zarr store
+    category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
+    temp_path = f"{path_template}/{category}_file_{file_index}.zarr"
+
+    print('Writing to', temp_path)
+    ds.to_zarr(temp_path, mode="w")
+
+    optimize_zarr_store(temp_path)
+
+    return temp_path, category
+
+
+@task(
+    task_run_name="process-batch-{batch_index}",
+)
+def process_batch(batch_files, source_container_name, chunks, batch_index, path_template):
+    """
+    Submit individual file processing as futures and return the results.
+    """
+    futures = []
+
+    for idx, file in enumerate(batch_files):
+        future = process_single_file.submit(file, file[1], source_container_name, chunks, path_template, idx)
+        futures.append(future)
+
+    results = {
+        "short_pulse": [],
+        "long_pulse": [],
+        "exported_ds": []
+    }
+
+    # Collect results as they complete
+    for future in futures:
+        try:
+            temp_path, category = future.result()
+            results[category].append(temp_path)
+        except Exception as e:
+            print(f"Error processing file: {e}")
+
+    return results
+
+
+def concatenate_zarr_files(files, source_container_name, chunks=None, batch_size=10, path_template="/tmp/oceanstream"):
+    temp_paths = {
+        "short_pulse": [],
+        "long_pulse": [],
+        "exported_ds": []
+    }
+
+    futures = []
+    for i in range(0, len(files), batch_size):
+        batch_files = files[i:i + batch_size]
+        future = process_batch.submit(batch_files, source_container_name, chunks, i, path_template)
+        futures.append(future)
+
+    for future in futures:
+        batch_results = future.result()
+        print('Batch results:', batch_results)
+        # Accumulate paths
+        temp_paths["short_pulse"].extend(batch_results["short_pulse"])
+        temp_paths["long_pulse"].extend(batch_results["long_pulse"])
+        temp_paths["exported_ds"].extend(batch_results["exported_ds"])
+
+    short_pulse_ds = concatenate_and_rechunk(temp_paths["short_pulse"], chunks=chunks) if temp_paths["short_pulse"] else None
+    long_pulse_ds = concatenate_and_rechunk(temp_paths["long_pulse"], chunks=chunks) if temp_paths["long_pulse"] else None
+    exported_ds = concatenate_and_rechunk(temp_paths["exported_ds"], chunks=chunks) if temp_paths["exported_ds"] else None
+
+    # Cleanup temporary folders
+    # cleanup_temp_folders(temp_paths["short_pulse"] + temp_paths["long_pulse"] + temp_paths["exported_ds"])
+
+    return short_pulse_ds, long_pulse_ds, exported_ds
+
+
 def export_processed_data_task(cruise_id: str, coordinates=None, container_name=None, filters=None, export_format='netcdf'):
     files = get_files_by_cruise_id(cruise_id, coordinates)
-
-    short_pulse = []
-    long_pulse = []
-    exported_ds_list = []
-
-    for file in files:
-        location, file_name, file_id, location_data, file_freqs, file_start_time, file_end_time = file
-        zarr_path = location
-
-        # Load the zarr store as an xarray dataset
-        ds = open_zarr_store(zarr_path, container_name=PROCESSED_CONTAINER_NAME, chunks=CHUNKS)
-
-        # Merge location data into the dataset
-        ds = merge_location_data(ds, location_data)
-
-        # Categorize datasets by file frequency
-        if file_freqs == "38000.0,200000.0":
-            short_pulse.append(ds)
-        elif file_freqs == "38000.0":
-            long_pulse.append(ds)
-        else:
-            exported_ds_list.append(ds)
-
-    ensure_container_exists(container_name, public_access='container')
-
-    short_pulse_datasets = [
-        ds.rename({"source_filenames": f"source_filenames_{i}"})
-        for i, ds in enumerate(short_pulse)
-    ]
-    short_pulse_ds = xr.merge(short_pulse_datasets) if short_pulse_datasets else None
-
-    long_pulse_datasets = [
-        ds.rename({"source_filenames": f"source_filenames_{i}"})
-        for i, ds in enumerate(long_pulse)
-    ]
-    long_pulse_ds = xr.merge(long_pulse_datasets) if long_pulse_datasets else None
-
-    exported_ds_datasets = [
-        ds.rename({"source_filenames": f"source_filenames_{i}"})
-        for i, ds in enumerate(exported_ds_list)
-    ]
-    exported_ds = xr.merge(exported_ds_datasets) if exported_ds_datasets else None
-
-    # if export_format == 'netcdf':
-    sv_dataset_list = []
-    if short_pulse_ds:
-        save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
-        save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
-        sv_dataset_list.append("short_pulse_data")
-
-    if long_pulse_ds:
-        save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
-        save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
-        sv_dataset_list.append("long_pulse_data")
-
-    if exported_ds:
-        save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
-        save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
-        sv_dataset_list.append("exported_data")
-
-    access_link = generate_container_access_url(container_name)
-    create_link_artifact(
-        key=f"{container_name}-link",
-        link=access_link,
-        link_text="Export link",
-        description="Link to download the exported data."
-    )
-
-    future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)
-    future.result()
+    # ensure_container_exists(container_name, public_access='container')
+    #
+    # short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(files,
+    #                                                                     source_container_name=PROCESSED_CONTAINER_NAME,
+    #                                                                     chunks=CHUNKS)
+    #
+    # print('Concatenated files:', short_pulse_ds, long_pulse_ds, exported_ds)
+    # # if export_format == 'netcdf':
+    # sv_dataset_list = []
+    # if short_pulse_ds:
+    #     save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
+    #     save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
+    #     sv_dataset_list.append("short_pulse_data")
+    #
+    # if long_pulse_ds:
+    #     save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
+    #     save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
+    #     sv_dataset_list.append("long_pulse_data")
+    #
+    # if exported_ds:
+    #     save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
+    #     save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
+    #     sv_dataset_list.append("exported_data")
+    #
+    # access_link = generate_container_access_url(container_name)
+    # create_link_artifact(
+    #     key=f"{container_name}-link",
+    #     link=access_link,
+    #     link_text="Export link",
+    #     description="Link to download the exported data."
+    # )
+    #
+    # future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)
+    # future.result()
 
     # if "mask_transient_noise" in filters:
     #     params = filters["mask_transient_noise"]
@@ -190,7 +242,6 @@ def export_processed_data_task(cruise_id: str, coordinates=None, container_name=
         except Exception as e:
             print(f'Error applying remove_background_noise: {e}')
 
-
     return short_pulse_ds, long_pulse_ds, exported_ds
 
 
@@ -202,7 +253,7 @@ def export_processed_data_task(cruise_id: str, coordinates=None, container_name=
     task_run_name="plot-echograms"
 )
 def plot_sv_data_task(sv_path=None, container_name=None, file_name=None):
-    output_path = f'/tmp/echograms/{container_name}'
+    output_path = f'/tmp/oceanstream/echograms/{container_name}'
     os.makedirs(output_path, exist_ok=True)
 
     if isinstance(sv_path, list):
@@ -255,7 +306,7 @@ def apply_mask_transient_noise(ds_Sv, parameters, chunk_dict):
 )
 def apply_mask_impulse_noise(sv_dataset_list, container_name, params):
     try:
-        output_path = f'/tmp/echograms/{container_name}'
+        output_path = f'/tmp/oceanstream/echograms/{container_name}'
         os.makedirs(output_path, exist_ok=True)
 
         for sv_item in sv_dataset_list:
@@ -344,49 +395,50 @@ def apply_remove_background_noise(ds_Sv, params):
     return ds_Sv
 
 
-def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
-    """
-    Merge location data into the xarray dataset.
-
-    Parameters
-    ----------
-    dataset : xr.Dataset
-        The xarray dataset to update.
-    location_data : list
-        A list of dictionaries containing location data.
-
-    Returns
-    -------
-    xr.Dataset
-        Updated dataset with location data added.
-    """
-    # Convert location_data to a Pandas DataFrame
-    location_df = pd.DataFrame(location_data)
-
-    # Convert timestamp strings to datetime objects
-    location_df['dt'] = pd.to_datetime(location_df['dt'])
-
-    # Create xarray variables from the location data
-    dataset['latitude'] = xr.DataArray(location_df['lat'].values, dims='time',
-                                       coords={'time': location_df['dt'].values})
-    dataset['longitude'] = xr.DataArray(location_df['lon'].values, dims='time',
-                                        coords={'time': location_df['dt'].values})
-    dataset['speed_knots'] = xr.DataArray(location_df['knt'].values, dims='time',
-                                          coords={'time': location_df['dt'].values})
-
-    return dataset
-
-
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def export_processed(cruise_id, coordinates=None, filters=None, export_format='zarr'):
+def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, export_format='zarr'):
     if not coordinates:
         raise ValueError("Coordinates are required for spatial queries.")
 
-    container_name = generate_container_name(cruise_id)
+    files = get_files_by_cruise_id(cruise_id, coordinates)
 
-    future = export_processed_data_task.submit(cruise_id, coordinates, container_name, filters=filters,
-                                               export_format=export_format)
-    return future.result()
+    container_name = generate_container_name(cruise_id)
+    ensure_container_exists(container_name, public_access='container')
+
+    short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+        files,
+        source_container_name=PROCESSED_CONTAINER_NAME,
+        batch_size=batch_size,
+        chunks=CHUNKS)
+
+    print('Concatenated files:', short_pulse_ds, long_pulse_ds, exported_ds)
+    # if export_format == 'netcdf':
+    sv_dataset_list = []
+    if short_pulse_ds:
+        save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
+        save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
+        sv_dataset_list.append("short_pulse_data")
+
+    if long_pulse_ds:
+        save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
+        save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
+        sv_dataset_list.append("long_pulse_data")
+
+    if exported_ds:
+        save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
+        save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
+        sv_dataset_list.append("exported_data")
+
+    access_link = generate_container_access_url(container_name)
+    create_link_artifact(
+        key=f"{container_name}-link",
+        link=access_link,
+        link_text="Export link",
+        description="Link to download the exported data."
+    )
+
+    future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)
+    future.wait()
 
 
 if __name__ == "__main__":
@@ -400,6 +452,7 @@ if __name__ == "__main__":
                 'cruise_id': '',
                 'coordinates': [],
                 'filters': {},
+                'batch_size': BATCH_SIZE,
                 'export_format': 'zarr'
             }
         )
