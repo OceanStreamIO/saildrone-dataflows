@@ -52,7 +52,8 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="convertraw-{file_path.stem}",
 )
-def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None, output_directory=None, reprocess=None,
+def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, store_to_directory=None,
+                        output_directory=None, reprocess=None,
                         apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None,
                         sonar_model='EK80'):
     load_dotenv()
@@ -71,7 +72,7 @@ def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None
         if apply_calibration is not True:
             calibration_file = None
 
-        convert_file_and_save(file_path, cruise_id, sonar_model,
+        convert_file_and_save(file_path, cruise_id, survey_db_id, sonar_model,
                               calibration_file=calibration_file,
                               reprocess=reprocess,
                               converted_container_name=converted_container_name,
@@ -82,13 +83,15 @@ def convert_single_file(file_path: Path, cruise_id=None, store_to_directory=None
         return Completed(message="Task completed with errors")
 
 
-def convert_raw_data(files: List[Path], cruise_id=None, store_to_directory=None, output_directory=None, reprocess=None,
+def convert_raw_data(files: List[Path], cruise_id=None, survey_db_id=None, store_to_directory=None,
+                     output_directory=None, reprocess=None,
                      apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None):
     task_futures = []
 
     for file_path in files:
         future = convert_single_file.submit(file_path,
                                             cruise_id=cruise_id,
+                                            survey_db_id=survey_db_id,
                                             reprocess=reprocess,
                                             store_to_directory=store_to_directory,
                                             output_directory=output_directory,
@@ -118,9 +121,9 @@ def load_and_convert_files_to_zarr(source_directory: str,
         survey_service = SurveyService(db_connection)
 
         # Check if a survey with the given cruise_id exists
-        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
+        survey_db_id = survey_service.get_survey_by_cruise_id(cruise_id)
 
-        if not survey_id:
+        if not survey_db_id:
             print(f"No survey found with cruise ID: {cruise_id}")
             return
 
@@ -131,8 +134,8 @@ def load_and_convert_files_to_zarr(source_directory: str,
             else:
                 condition = ''
 
-            print(f'Survey ID: {survey_id}')
-            file_names = file_service.get_files_with_condition(survey_id, condition)
+            print(f'Survey ID: {survey_db_id}')
+            file_names = file_service.get_files_with_condition(survey_db_id, condition)
             raw_files = [Path(source_directory) / f"{file_name}.raw" for file_name in file_names]
 
     if not get_list_from_db:
@@ -147,6 +150,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
         print(f"Processing batch {i // batch_size + 1}")
         convert_raw_data(batch_files,
                          cruise_id=cruise_id,
+                         survey_db_id=survey_db_id,
                          reprocess=reprocess,
                          store_to_directory=store_to_directory,
                          output_directory=output_directory,

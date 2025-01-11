@@ -2,20 +2,21 @@ import logging
 import os
 import sys
 import traceback
+from datetime import datetime
 
 from pathlib import Path
-from typing import List, Optional, Union, TypedDict
-
+from typing import List, Optional, Union
 from dotenv import load_dotenv
-from prefect import flow, task
+from pydantic import BaseModel, Field
 from dask.distributed import Client
+from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
 
 from saildrone.process import process_converted_file
-from saildrone.store import ensure_container_exists
+from saildrone.store import ensure_container_exists, FileSegmentService
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, SurveyService, list_zarr_files
 
@@ -40,11 +41,43 @@ GPSDATA_CONTAINER_NAME = os.getenv('GPSDATA_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
 CHUNKS = {"ping_time": 500, "range_sample": -1}
+CHUNKS_DENOISING = {"ping_time": 500, "depth": 500}
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 if not AZURE_STORAGE_CONNECTION_STRING:
     logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
     sys.exit(1)
+
+
+class MaskImpulseNoise(BaseModel):
+    depth_bin: int = Field(default=5, description="Donwsampling bin size along vertical range variable (`range_var`) in meters.")
+    num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
+    threshold: float = Field(default=10, description="Impulse noise threshold value (in dB) for the two-side comparison.")
+    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
+
+
+class MaskAttenuatedSignal(BaseModel):
+    upper_limit_sl: int = Field(default=180, description="Upper limit of deep scattering layer line (m).")
+    lower_limit_sl: int = Field(default=300, description="Lower limit of deep scattering layer line (m).")
+    num_side_pings: int = Field(default=15, description="Number of preceding & subsequent pings defining the block.")
+    threshold: float = Field(default=10, description="Attenuation signal threshold value (dB) for the ping-block comparison.")
+    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
+
+
+class TransientNoiseMask(BaseModel):
+    operation: str = Field(default='nanmedian', description="Pooling function used in the pooled Sv aggregation, either 'nanmedian' or 'nanmean'.")
+    depth_bin: int = Field(default=10, description="Bin size for depth calculation.")
+    num_side_pings: int = Field(default=25, description="Number of side pings to include.")
+    exclude_above: float = Field(default=250.0, description="Exclude data above this depth value.")
+    threshold: float = Field(default=8.0, description="Transient noise threshold value (in dB) for the pooling comparison.")
+    range_var: str = Field(default='depth', description="Vertical Range Variable. Can be either `depth` or `echo_range`.")
+
+
+class RemoveBackgroundNoise(BaseModel):
+    ping_num: int = Field(default=20, description="Number of pings to obtain noise estimates")
+    range_sample_num: int = Field(default=20, description="Number of range samples to consider.")
+    background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
+    SNR_threshold: float = Field(default=3.0, description="Signal-to-noise ratio threshold for background noise removal.")
 
 
 @task(
@@ -56,27 +89,35 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     result_storage=None,
     task_run_name="process-{source_path.stem}",
 )
-def process_single_file(source_path: Path,
-                        cruise_id=None,
-                        source_container=None,
-                        output_container=None,
-                        load_from_blobstorage=None,
-                        reprocess=False,
-                        save_to_blobstorage=None,
-                        save_to_directory=None,
-                        chunks_ping_time=None,
-                        encode_mode=None,
-                        waveform_mode=None,
-                        plot_echograms=None,
-                        echograms_container=None,
-                        chunks_range_sample=None):
+def process_single_file(source_path: Path, **kwargs):
+
     try:
+        cruise_id = kwargs.get('cruise_id')
+        load_from_blobstorage = kwargs.get('load_from_blobstorage')
+        source_container = kwargs.get('source_container')
+        save_to_blobstorage = kwargs.get('save_to_blobstorage')
+        output_container = kwargs.get('output_container')
+        save_to_directory = kwargs.get('save_to_directory')
+        output_directory = kwargs.get('output_directory')
+        reprocess = kwargs.get('reprocess')
+        plot_echograms = kwargs.get('plot_echograms')
+        echograms_container = kwargs.get('echograms_container')
+        encode_mode = kwargs.get('encode_mode')
+        waveform_mode = kwargs.get('waveform_mode')
+        depth_offset = kwargs.get('depth_offset')
+        chunks_ping_time = kwargs.get('chunks_ping_time')
+        chunks_range_sample = kwargs.get('chunks_range_sample')
+        mask_transient_noise = kwargs.get('mask_transient_noise')
+        mask_impulse_noise = kwargs.get('mask_impulse_noise')
+        mask_attenuated_signal = kwargs.get('mask_attenuated_signal')
+        remove_background_noise = kwargs.get('remove_background_noise')
+
         chunks = {
             'ping_time': chunks_ping_time,
             'range_sample': chunks_range_sample
         }
 
-        output_path = ECHODATA_OUTPUT_PATH
+        output_path = output_directory
         converted_container_name = None
         processed_container_name = None
 
@@ -95,15 +136,22 @@ def process_single_file(source_path: Path,
                                chunks=chunks,
                                load_from_blobstorage=load_from_blobstorage,
                                converted_container_name=converted_container_name,
+                               save_to_blobstorage=save_to_blobstorage,
+                               save_to_directory=save_to_directory,
+                               processed_container_name=processed_container_name,
                                reprocess=reprocess,
+                               depth_offset=depth_offset,
                                plot_echograms=plot_echograms,
                                echograms_container=echograms_container,
                                gps_container_name=GPSDATA_CONTAINER_NAME,
                                encode_mode=encode_mode,
                                waveform_mode=waveform_mode,
-                               save_to_blobstorage=save_to_blobstorage,
-                               save_to_directory=save_to_directory,
-                               processed_container_name=processed_container_name)
+                               mask_transient_noise=mask_transient_noise,
+                               mask_impulse_noise=mask_impulse_noise,
+                               mask_attenuated_signal=mask_attenuated_signal,
+                               remove_background_noise=remove_background_noise,
+                               chunks_denoising=CHUNKS_DENOISING
+                               )
         print(f"Processed Sv for {source_path.name}")
     except Exception as e:
         print(f"Error processing file: {source_path.name}: ${str(e)}")
@@ -117,37 +165,11 @@ def process_single_file(source_path: Path,
         return Completed(message="Task completed with errors")
 
 
-def process_raw_data(files: List[Path],
-                     cruise_id=None,
-                     source_container=None,
-                     output_container=None,
-                     save_to_blobstorage=None,
-                     plot_echograms=None,
-                     echograms_container=None,
-                     load_from_blobstorage=None,
-                     save_to_directory=None,
-                     encode_mode=None,
-                     waveform_mode=None,
-                     chunks_ping_time=None,
-                     chunks_range_sample=None,
-                     reprocess=None) -> None:
+def process_raw_data(files: List[Path], **kwargs) -> None:
     task_futures = []
 
     for source_path in files:
-        future = process_single_file.submit(source_path,
-                                            cruise_id=cruise_id,
-                                            source_container=source_container,
-                                            output_container=output_container,
-                                            save_to_blobstorage=save_to_blobstorage,
-                                            plot_echograms=plot_echograms,
-                                            echograms_container=echograms_container,
-                                            load_from_blobstorage=load_from_blobstorage,
-                                            save_to_directory=save_to_directory,
-                                            encode_mode=encode_mode,
-                                            waveform_mode=waveform_mode,
-                                            chunks_ping_time=chunks_ping_time,
-                                            chunks_range_sample=chunks_range_sample,
-                                            reprocess=reprocess)
+        future = process_single_file.submit(source_path, **kwargs)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -157,21 +179,30 @@ def process_raw_data(files: List[Path],
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def load_and_process_files_to_zarr(source_directory: str,
-                                   map_to_directory: str,
                                    cruise_id: str,
                                    load_from_blobstorage: bool,
+                                   get_list_from_db: bool,
+                                   start_datetime: datetime,
+                                   end_datetime: datetime,
                                    source_container: str,
                                    save_to_blobstorage: bool,
                                    output_container: str,
                                    save_to_directory: bool,
+                                   output_directory: str,
                                    reprocess: bool,
                                    plot_echograms: bool,
                                    echograms_container: str,
                                    encode_mode: str,
                                    waveform_mode: str,
+                                   depth_offset: float,
                                    chunks_ping_time: int,
-                                   chunks_range_sample: int,
-                                   batch_size: int):
+                                   chunks_range_sample: Optional[int],
+                                   mask_impulse_noise: Optional[MaskImpulseNoise] = None,
+                                   mask_attenuated_signal: Optional[MaskAttenuatedSignal] = None,
+                                   mask_transient_noise: Optional[TransientNoiseMask] = None,
+                                   remove_background_noise: Optional[RemoveBackgroundNoise] = None,
+                                   batch_size: int = BATCH_SIZE):
+    file_names = None
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -182,12 +213,28 @@ def load_and_process_files_to_zarr(source_directory: str,
             survey_id = survey_service.insert_survey(cruise_id)
             logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
 
-    if load_from_blobstorage:
+        if get_list_from_db:
+            file_service = FileSegmentService(db_connection)
+            if not reprocess:
+                condition = 'AND processed IS NOT True'
+            else:
+                condition = ''
+
+            if start_datetime and end_datetime:
+                condition += f" AND file_start_time > '{start_datetime}' AND file_end_time < '{end_datetime}'"
+
+            file_names = file_service.get_files_with_condition(survey_id, condition)
+
+    if file_names and not load_from_blobstorage:
+        files_list = [Path(source_directory) / f"{file_name}.raw" for file_name in file_names]
+    elif file_names and load_from_blobstorage:
+        files_list = list_zarr_files(source_container, cruise_id=cruise_id, file_names=file_names)
+    elif load_from_blobstorage:
         files_list = list_zarr_files(source_container, cruise_id=cruise_id)
     else:
-        files_list = load_local_files(source_directory, map_to_directory, '*.zarr')
+        files_list = load_local_files(source_directory, source_directory, '*.zarr')
 
-    print('source_directory:', source_directory, 'map_to_directory:', map_to_directory)
+    print('source_directory:', source_directory)
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
 
@@ -205,10 +252,16 @@ def load_and_process_files_to_zarr(source_directory: str,
                          echograms_container=echograms_container,
                          save_to_blobstorage=save_to_blobstorage,
                          save_to_directory=save_to_directory,
+                         output_directory=output_directory,
                          encode_mode=encode_mode,
                          waveform_mode=waveform_mode,
+                         depth_offset=depth_offset,
                          chunks_ping_time=chunks_ping_time,
                          chunks_range_sample=chunks_range_sample,
+                         mask_impulse_noise=mask_impulse_noise,
+                         mask_attenuated_signal=mask_attenuated_signal,
+                         mask_transient_noise=mask_transient_noise,
+                         remove_background_noise=remove_background_noise
                          )
 
     logging.info("All batches have been processed.")
@@ -228,20 +281,28 @@ if __name__ == "__main__":
             name='process-echodata-to-sv',
             parameters={
                 'source_directory': RAW_DATA_LOCAL,
-                'map_to_directory': RAW_DATA_LOCAL,
                 'cruise_id': '',
                 'load_from_blobstorage': False,
+                'get_list_from_db': False,
+                'start_datetime': '',
+                'end_datetime': '',
                 'source_container': CONVERTED_CONTAINER_NAME,
                 'save_to_blobstorage': True,
                 'output_container': PROCESSED_CONTAINER_NAME,
                 'save_to_directory': False,
+                'output_directory': '',
                 'reprocess': False,
                 'plot_echograms': False,
                 'echograms_container': WEBAPP_CONTAINER_NAME,
                 'encode_mode': 'complex',
                 'waveform_mode': 'CW',
+                'depth_offset': 0,
                 'chunks_ping_time': 500,
-                'chunks_range_sample': -1,
+                'chunks_range_sample': 500,
+                'mask_transient_noise': None,
+                'mask_impulse_noise': None,
+                'mask_attenuated_signal': None,
+                'remove_background_noise': None,
                 'batch_size': BATCH_SIZE
             }
         )

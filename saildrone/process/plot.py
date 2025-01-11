@@ -10,7 +10,8 @@ import numpy as np
 from saildrone.store import upload_folder_to_blob_storage
 
 
-def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r') -> list:
+def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
+                 depth_var: str = 'range_sample') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -34,14 +35,15 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
 
     echogram_files = []
     for channel in range(ds_Sv.dims['channel']):
-        echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap)
+        echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
+                                                                depth_var)
         echogram_files.append(echogram_file_path)
 
     return echogram_files
 
 
 def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_base_name: str,
-                                       echogram_path: str, cmap: str) -> str:
+                                       echogram_path: str, cmap: str, depth_var='range_sample') -> str:
     """
     Plot and save echogram for a single channel with optional regions and enhancements.
 
@@ -62,7 +64,6 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     Returns:
     - str: The path to the saved echogram file.
     """
-    print('plot_individual_channel_simplified', ds_Sv)
     full_channel_name = ds_Sv.channel.values[channel]
     channel_name = "_".join(full_channel_name.split()[:3])
 
@@ -89,17 +90,17 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     # Determine depths where data exists
     data_exists_along_depth = np.any(finite_mask, axis=0)
 
-    # Get the maximum depth index where data exists
-    max_depth_index = np.max(np.where(data_exists_along_depth))
-
-    # Get the corresponding depth value
-    max_depth = data_array['range_sample'].values[max_depth_index]
+    if np.any(data_exists_along_depth):
+        max_depth_index = np.max(np.where(data_exists_along_depth))
+        max_depth = data_array[depth_var].values[max_depth_index]
+    else:
+        max_depth = 0
 
     plt.figure(figsize=(30, 18))
     try:
         filtered_ds.isel(frequency=channel).T.plot(
             x='ping_time',
-            y='range_sample',
+            y=depth_var,
             yincrease=False,
             vmin=-80,
             vmax=-50,
@@ -124,19 +125,63 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     return echogram_output_path
 
 
-def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, container_name=None, cmap='ocean_r'):
-    echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
-    os.makedirs(echograms_output_path, exist_ok=True)
+def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
+                              output_path=None, container_name=None, cmap='ocean_r', depth_var='depth'):
+    if save_to_blobstorage:
+        echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
+        os.makedirs(echograms_output_path, exist_ok=True)
+    else:
+        echograms_output_path = f'{output_path}/echograms/{file_base_name}'
+        os.makedirs(echograms_output_path, exist_ok=True)
 
     echogram_files = plot_sv_data(sv_dataset,
+                                  depth_var=depth_var,
                                   file_base_name=file_base_name,
                                   output_path=echograms_output_path,
                                   cmap=cmap)
 
-    upload_folder_to_blob_storage(echograms_output_path, container_name, f'{cruise_id}/{file_base_name}')
-
-    shutil.rmtree(echograms_output_path, ignore_errors=True)
-
-    uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
+    if save_to_blobstorage:
+        upload_folder_to_blob_storage(echograms_output_path, container_name, f'{cruise_id}/{file_base_name}')
+        shutil.rmtree(echograms_output_path, ignore_errors=True)
+        uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
+    else:
+        uploaded_files = [str(Path(e).name) for e in echogram_files]
 
     return uploaded_files
+
+
+def plot_noise_mask(mask, file_base_name, echogram_path, depth_var='depth'):
+    mask_channel = mask
+
+    finite_mask = np.isfinite(mask_channel.values)
+    data_exists_along_depth = np.any(finite_mask, axis=0)
+    max_depth_index = np.max(np.where(data_exists_along_depth))
+    max_depth = mask_channel[depth_var].values[max_depth_index]
+
+    plt.figure(figsize=(30, 18))
+    try:
+        mask_channel.plot(
+            x='ping_time',
+            y=depth_var,
+            yincrease=False,
+            cmap='binary',
+            cbar_kwargs={'label': 'Impulse Noise Mask (True/False)'},
+            ylim=(max_depth, 0)
+        )
+    except Exception as e:
+        print(f"Error plotting impulse noise mask: {e}")
+        traceback.print_exc()
+
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.xlabel('Ping time', fontsize=14)
+    plt.ylabel('Depth', fontsize=14)
+    plt.title(f"Impulse Noise Mask", fontsize=16, fontweight='bold')
+
+    mask_file_name = f"{file_base_name}_mask.png"
+    mask_output_path = os.path.join(echogram_path, mask_file_name)
+    plt.savefig(mask_output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    return mask_output_path
+
+

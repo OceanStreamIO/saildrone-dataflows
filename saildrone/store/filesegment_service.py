@@ -15,6 +15,7 @@ class FileSegmentService:
             The database connection object.
         """
         self.db = db
+        self.table_name = 'files_test'
 
     def is_file_processed(self, file_name: str) -> bool:
         """
@@ -30,7 +31,7 @@ class FileSegmentService:
         bool
             Returns True if the file has already been processed, False otherwise.
         """
-        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND processed=TRUE', (file_name,))
+        self.db.cursor.execute(f'SELECT id FROM {self.table_name} WHERE file_name=%s AND processed=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
     def get_file_info(self, file_name: str):
@@ -47,7 +48,7 @@ class FileSegmentService:
         dict
             A dictionary containing information about the file.
         """
-        self.db.cursor.execute('SELECT id, size, converted, processed FROM files WHERE file_name=%s', (file_name,))
+        self.db.cursor.execute(f'SELECT id, size, converted, processed FROM {self.table_name} WHERE file_name=%s', (file_name,))
         row = self.db.cursor.fetchone()
 
         if row:
@@ -69,7 +70,7 @@ class FileSegmentService:
         bool
             Returns True if the file has already been converted, False otherwise.
         """
-        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND converted=TRUE', (file_name,))
+        self.db.cursor.execute(f'SELECT id FROM {self.table_name} WHERE file_name=%s AND converted=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
     def is_file_failed(self, file_name: str) -> bool:
@@ -86,7 +87,7 @@ class FileSegmentService:
         bool
             Returns True if the file has already been converted, False otherwise.
         """
-        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND failed=TRUE', (file_name,))
+        self.db.cursor.execute(f'SELECT id FROM {self.table_name} WHERE file_name=%s AND failed=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
     def is_file_downloaded(self, file_name: str, survey_id: int) -> bool:
@@ -105,7 +106,7 @@ class FileSegmentService:
         bool
             Returns True if the file has already been converted, False otherwise.
         """
-        self.db.cursor.execute('SELECT id FROM files WHERE file_name=%s AND downloaded=TRUE AND survey_db_id=%s',
+        self.db.cursor.execute(f'SELECT id FROM {self.table_name} WHERE file_name=%s AND downloaded=TRUE AND survey_db_id=%s',
                                (file_name,survey_id,))
 
         return self.db.cursor.fetchone() is not None
@@ -233,8 +234,8 @@ class FileSegmentService:
         survey_db_id: Optional[int] = None
     ) -> None:
 
-        self.db.cursor.execute('''
-            UPDATE files
+        self.db.cursor.execute(f'''
+            UPDATE {self.table_name}
             SET file_name = COALESCE(%s, file_name),
                 size = COALESCE(%s, size),
                 processed = COALESCE(%s, processed),
@@ -302,8 +303,8 @@ class FileSegmentService:
                 track_geom_data = f"SRID=4326;{line_string.wkt}"
 
         # Update query
-        self.db.cursor.execute('''
-            UPDATE files
+        self.db.cursor.execute(f'''
+            UPDATE {self.table_name}
             SET bounding_geom = ST_MakeEnvelope(%s, %s, %s, %s, 4326),
                 track_geom = COALESCE(ST_GeomFromEWKT(%s), track_geom)
             WHERE id = %s
@@ -323,12 +324,12 @@ class FileSegmentService:
         file_id : int
             The ID of the file to mark as processed.
         """
-        self.db.cursor.execute('UPDATE files SET processed=TRUE WHERE id=%s', (file_id,))
+        self.db.cursor.execute(f'UPDATE {self.table_name} SET processed=TRUE WHERE id=%s', (file_id,))
         self.db.conn.commit()
 
     def update_processing_report(self, file_id: int, text: str):
-        self.db.cursor.execute('''
-            UPDATE files
+        self.db.cursor.execute(f'''
+            UPDATE {self.table_name}
             SET processing_report = COALESCE(%s, processing_report)
             WHERE id = %s
         ''', (text, file_id))
@@ -344,7 +345,7 @@ class FileSegmentService:
         file_id : int
             The ID of the file to mark as converted.
         """
-        self.db.cursor.execute('UPDATE files SET converted=TRUE WHERE id=%s', (file_id,))
+        self.db.cursor.execute(f'UPDATE {self.table_name} SET converted=TRUE WHERE id=%s', (file_id,))
         self.db.conn.commit()
 
     def get_files_by_polygon_and_survey(self, polygon: str, survey_id: int) -> List[tuple]:
@@ -364,12 +365,12 @@ class FileSegmentService:
             List of files matching the query.
         """
         self.db.cursor.execute(
-            """
+            f"""
             WITH region AS (
                 SELECT ST_GeomFromText(%s, 4326) AS geom
             )
             SELECT location, file_name, id, location_data, file_freqs, file_start_time, file_end_time
-            FROM files, region
+            FROM {self.table_name}, region
             WHERE ST_Intersects(files.bounding_geom, region.geom)
               AND processed = TRUE
               AND survey_db_id = %s
@@ -382,7 +383,7 @@ class FileSegmentService:
     def get_files_with_condition(self, survey_id: int, condition: str) -> list:
         query = f'''
             SELECT file_name
-            FROM files
+            FROM {self.table_name}
             WHERE survey_db_id = %s {condition}
             ORDER BY size ASC
         '''
@@ -405,9 +406,9 @@ class FileSegmentService:
         list
             A list of location_data dictionaries from the database.
         """
-        query = '''
+        query = f'''
             SELECT location_data
-            FROM files
+            FROM {self.table_name}
             WHERE survey_db_id = %s AND location_data IS NOT NULL
         '''
 
@@ -430,9 +431,9 @@ class FileSegmentService:
         list
             A list of location_data dictionaries from the database.
         """
-        query = '''
+        query = f'''
             SELECT id, file_name, size, file_start_time, file_end_time
-            FROM files
+            FROM {self.table_name}
             WHERE survey_db_id = %s
             ORDER BY file_start_time ASC
         '''
@@ -465,5 +466,5 @@ class FileSegmentService:
         bool
             True if the file has location data, False otherwise.
         """
-        self.db.cursor.execute('SELECT location_data FROM files WHERE id=%s', (file_id,))
+        self.db.cursor.execute(f'SELECT location_data FROM {self.table_name} WHERE id=%s', (file_id,))
         return self.db.cursor.fetchone()[0] is not None

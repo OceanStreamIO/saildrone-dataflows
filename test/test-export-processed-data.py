@@ -1,7 +1,5 @@
 import subprocess
 import pytest
-from pathlib import Path
-
 from prefect_flows.export_processed_data import export_processed
 
 
@@ -24,17 +22,97 @@ def set_prefect_server_url():
 
 def test_export_processed_data(set_prefect_server_url):
     coordinates = [
-        [-157.75156, 21.981161],
-        [-157.74477, 21.981161],
-        [-157.74477, 22.000805],
-        [-157.75156, 22.000805],
-        [-157.75156, 21.981161]
+        [
+            -154.9754093230061,
+            18.0249775317156
+        ],
+        [
+            -154.93628125789695,
+            18.0249775317156
+        ],
+        [
+            -154.93628125789695,
+            17.978556131284293
+        ],
+        [
+            -154.9754093230061,
+            17.978556131284293
+        ],
+        [
+            -154.9754093230061,
+            18.0249775317156
+        ]
+    ]
+
+    coordinates2 = [
+        [
+            -155.47070647789164,
+            17.80055053577573
+        ],
+        [
+            -154.6663012654895,
+            17.80055053577573
+        ],
+        [
+            -154.6663012654895,
+            17.347733975514398
+        ],
+        [
+            -155.47070647789164,
+            17.347733975514398
+        ],
+        [
+            -155.47070647789164,
+            17.80055053577573
+        ]
     ]
 
     cruise_id = "SD_TPOS2023_v03"
+    filters = {
+        "mask_transient_noise": {
+            "func": "nanmean",
+            "depth_bin": "10m",
+            "num_side_pings": "25",
+            "exclude_above": "250.0m",
+            "transient_noise_threshold": "12.0dB",
+            "range_var": "depth",
+            "use_index_binning": False
+        },
+        "mask_impulse_noise": {
+            "depth_bin": 5,
+            "num_side_pings": 2,
+            "impulse_noise_threshold": 10,
+            "range_var": "depth",
+            "use_index_binning": False
+        }
+    }
 
-    short_pulse_ds, long_pulse_ds = export_processed(cruise_id=cruise_id, coordinates=coordinates)
-    print('short_pulse_ds', short_pulse_ds)
-    print('long_pulse_ds', long_pulse_ds)
+    filters2 = {
+        "mask_impulse_noise": {
+            "depth_bin": 5,
+            "num_side_pings": 2,
+            "impulse_noise_threshold": 10,
+            "range_var": "depth",
+            "use_index_binning": False
+        },
+        "mask_attenuated_signal": {
+            "upper_limit_sl": 400,
+            "lower_limit_sl": 500,
+            "num_side_pings": 15,
+            "attenuation_signal_threshold": 10,
+            "start": 0,
+            "range_var": "depth"
+        },
+        "remove_background_noise": {
+            "ping_num": "10",
+            "range_sample_num": "50",
+            "background_noise_max": "",
+            "SNR_threshold": "3.0dB"
+        }
+    }
+
+    result = export_processed(cruise_id=cruise_id, coordinates=coordinates, depth_offset=0.1, filters=filters2,
+                              container_name="export-test")
+    print('result:', result)
 
 

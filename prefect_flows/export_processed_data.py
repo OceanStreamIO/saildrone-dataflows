@@ -3,7 +3,9 @@ import os
 import sys
 import time
 import traceback
-from dask.distributed import as_completed
+
+import numpy as np
+import xarray as xr
 
 from dotenv import load_dotenv
 from prefect import flow, task
@@ -13,9 +15,11 @@ from prefect.cache_policies import Inputs
 from prefect.artifacts import create_link_artifact, create_markdown_artifact
 from prefect.states import Completed
 
-from saildrone.process import convert_file_and_save, plot_sv_data
+from saildrone.process import apply_corrections_ds
+from saildrone.process.plot import plot_noise_mask, plot_sv_data
 from saildrone.process.concat import merge_location_data, optimize_zarr_store, concatenate_and_rechunk, \
     cleanup_temp_folders
+from saildrone.denoise import get_impulse_noise_mask, get_attenuation_mask, create_multichannel_mask
 from saildrone.store import (PostgresDB, SurveyService, FileSegmentService, open_zarr_store,
                              upload_folder_to_blob_storage, save_dataset_to_netcdf,
                              save_zarr_store, generate_container_name, ensure_container_exists,
@@ -146,7 +150,7 @@ def concatenate_zarr_files(files, source_container_name, chunks=None, batch_size
     exported_ds = concatenate_and_rechunk(temp_paths["exported_ds"], chunks=chunks) if temp_paths["exported_ds"] else None
 
     # Cleanup temporary folders
-    # cleanup_temp_folders(temp_paths["short_pulse"] + temp_paths["long_pulse"] + temp_paths["exported_ds"])
+    cleanup_temp_folders(temp_paths["short_pulse"] + temp_paths["long_pulse"] + temp_paths["exported_ds"])
 
     return short_pulse_ds, long_pulse_ds, exported_ds
 
@@ -256,16 +260,21 @@ def plot_sv_data_task(sv_path=None, container_name=None, file_name=None):
     output_path = f'/tmp/oceanstream/echograms/{container_name}'
     os.makedirs(output_path, exist_ok=True)
 
-    if isinstance(sv_path, list):
-        for sv_item in sv_path:
-            ds_Sv = open_zarr_store(f'{sv_item}.zarr', container_name=container_name, chunks=CHUNKS)
-            plot_sv_data(ds_Sv, file_base_name=sv_item, output_path=output_path)
-    elif sv_path:
-        ds_Sv = open_zarr_store(sv_path, container_name=container_name, chunks=CHUNKS)
-        plot_sv_data(ds_Sv, file_name, output_path=output_path)
+    try:
+        if isinstance(sv_path, list):
+            for sv_item in sv_path:
+                print('Plotting echogram:', sv_item)
+                ds_Sv = open_zarr_store(f'{sv_item}.zarr', container_name=container_name, chunks=CHUNKS)
+                plot_sv_data(ds_Sv, file_base_name=sv_item, output_path=output_path, depth_var='depth')
+        elif sv_path:
+            ds_Sv = open_zarr_store(sv_path, container_name=container_name, chunks=CHUNKS)
+            plot_sv_data(ds_Sv, file_name, output_path=output_path, depth_var='depth')
 
-    print(f"Uploading echograms to blob storage: {container_name}")
-    upload_folder_to_blob_storage(output_path, container_name, 'echograms')
+        print(f"Uploading echograms to blob storage: {container_name}")
+        upload_folder_to_blob_storage(output_path, container_name, 'echograms')
+    except Exception as e:
+        print(f'Error plotting echograms: {e}')
+        traceback.print_exc()
 
 
 @task(
@@ -312,7 +321,7 @@ def apply_mask_impulse_noise(sv_dataset_list, container_name, params):
         for sv_item in sv_dataset_list:
             ds_Sv = open_zarr_store(f'{sv_item}.zarr', container_name=container_name, chunks=CHUNKS)
             sv_item_denoised = run_impulse_noise_masking(ds_Sv, params)
-            plot_sv_data(sv_item_denoised, file_base_name=sv_item, output_path=output_path)
+            plot_sv_data(sv_item_denoised, file_base_name=sv_item, output_path=output_path, depth_var='depth')
 
         upload_folder_to_blob_storage(output_path, container_name, 'echograms')
     except Exception as e:
@@ -333,7 +342,7 @@ def run_impulse_noise_masking(ds_Sv, params):
         depth_bin=params.get("depth_bin", "5m"),
         num_side_pings=params.get("num_side_pings", 2),
         impulse_noise_threshold=params.get("impulse_noise_threshold", "10.0dB"),
-        range_var=params.get("range_var", "echo_range"),
+        range_var=params.get("range_var", "depth"),
         use_index_binning=params.get("use_index_binning", False)
     )
 
@@ -396,49 +405,143 @@ def apply_remove_background_noise(ds_Sv, params):
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, export_format='zarr'):
+def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, export_format='zarr', depth_offset=None, container_name=None):
     if not coordinates:
         raise ValueError("Coordinates are required for spatial queries.")
 
-    files = get_files_by_cruise_id(cruise_id, coordinates)
+    # files = get_files_by_cruise_id(cruise_id, coordinates)
+    sv_dataset_list = []
+    if container_name is None:
+        container_name = generate_container_name(cruise_id)
 
-    container_name = generate_container_name(cruise_id)
     ensure_container_exists(container_name, public_access='container')
 
-    short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
-        files,
-        source_container_name=PROCESSED_CONTAINER_NAME,
-        batch_size=batch_size,
-        chunks=CHUNKS)
-
-    print('Concatenated files:', short_pulse_ds, long_pulse_ds, exported_ds)
-    # if export_format == 'netcdf':
-    sv_dataset_list = []
-    if short_pulse_ds:
-        save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
-        save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
+    short_pulse_ds = open_zarr_store('short_pulse_data.zarr', container_name=container_name, chunks=CHUNKS)
+    sv_data, sv_denoised = process_sv_dataset(short_pulse_ds, container_name, filters, 'short_pulse', depth_offset)
+    if sv_data:
         sv_dataset_list.append("short_pulse_data")
 
-    if long_pulse_ds:
-        save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
-        save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
-        sv_dataset_list.append("long_pulse_data")
+    # short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+    #     files,
+    #     source_container_name=PROCESSED_CONTAINER_NAME,
+    #     batch_size=batch_size,
+    #     chunks=CHUNKS)
 
-    if exported_ds:
-        save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
-        save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
-        sv_dataset_list.append("exported_data")
+    # if export_format == 'netcdf':
 
-    access_link = generate_container_access_url(container_name)
-    create_link_artifact(
-        key=f"{container_name}-link",
-        link=access_link,
-        link_text="Export link",
-        description="Link to download the exported data."
-    )
+    if short_pulse_ds:
+        pass
+        # sv_data, sv_denoised = process_sv_dataset(short_pulse_ds, container_name, filters, 'short_pulse', depth_offset)
+        # if sv_data:
+        #     sv_dataset_list.append("short_pulse_data")
 
-    future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)
-    future.wait()
+        # if depth_offset is not None:
+        #     short_pulse_ds = apply_corrections_ds(short_pulse_ds, depth_offset=depth_offset)
+        #
+        # if "mask_impulse_noise" in filters:
+        #     params = filters["mask_impulse_noise"]
+        #     # future = apply_mask_impulse_noise.submit(sv_dataset_list, container_name=container_name, params=params)
+        #     apply_mask_impulse_noise(sv_dataset_list, container_name=container_name, params=params)
+        #
+        # save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
+        # save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
+    # if long_pulse_ds:
+    #     sv_data, sv_denoised = process_sv_dataset(long_pulse_ds, container_name, filters, 'long_pulse', depth_offset)
+    #     if sv_data:
+    #         sv_dataset_list.append("long_pulse_data")
+
+    # if long_pulse_ds:
+    #     if depth_offset is not None:
+    #         long_pulse_ds = apply_corrections_ds(long_pulse_ds, depth_offset=depth_offset)
+    #
+    #     save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
+    #     save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
+    #     sv_dataset_list.append("long_pulse_data")
+
+    # if exported_ds:
+    #     if depth_offset is not None:
+    #         exported_ds = apply_corrections_ds(exported_ds, depth_offset=depth_offset)
+    #     save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
+    #     save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
+    #     sv_dataset_list.append("exported_data")
+
+    # access_link = generate_container_access_url(container_name)
+    # create_link_artifact(
+    #     key=f"{container_name}-link",
+    #     link=access_link,
+    #     link_text="Export link",
+    #     description="Link to download the exported data."
+    # )
+
+    plot_sv_data_task(sv_dataset_list, container_name=container_name)
+    # future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)
+    # future.wait()
+
+
+def process_sv_dataset(ds, container_name, filters, ds_name, depth_offset=None):
+    from echopype.mask import apply_mask
+
+    os.makedirs(f"/tmp/oceanstream/echograms/{container_name}", exist_ok=True)
+    corrected_ds = ds
+    corrected_ds_denoised = None
+
+    # if depth_offset is not None:
+    #     corrected_ds = apply_corrections_ds(ds, depth_offset=depth_offset)
+
+    # save_dataset_to_netcdf(corrected_ds, container_name=container_name, ds_path=f"{ds_name}_data.nc")
+    # save_zarr_store(corrected_ds, container_name=container_name, zarr_path=f"{ds_name}_data.zarr")
+
+    """
+    if "mask_impulse_noise" in filters:
+        params = filters["mask_impulse_noise"]
+        mask_channels = []
+
+        for channel in corrected_ds.coords["channel"].values:
+            idx = corrected_ds.channel.values.tolist().index(channel)
+            impulse_noise_mask = get_impulse_noise_mask(corrected_ds, params, desired_channel=channel)
+            plot_noise_mask(impulse_noise_mask, f'{ds_name}_impulse_denoised_{idx}',
+                            echogram_path=f"/tmp/oceanstream/echograms/{container_name}")
+            mask_channels.append(impulse_noise_mask)
+            print("Number of valid mask points:", np.sum(impulse_noise_mask.values))
+            print("Mask contains all False:", np.all(~impulse_noise_mask.values))
+
+        multi_channel_mask = create_multichannel_mask(mask_channels, corrected_ds)
+        corrected_ds_impulse_denoised = apply_mask(corrected_ds, multi_channel_mask, var_name="Sv")
+        # save_dataset_to_netcdf(corrected_ds_impulse_denoised, container_name=container_name,
+        #                        ds_path=f"{ds_name}_impulse_denoised.nc")
+        save_zarr_store(corrected_ds_impulse_denoised, container_name=container_name,
+                        zarr_path=f"{ds_name}_impulse_denoised.zarr")
+        plot_sv_data_task(f"{ds_name}_impulse_denoised.zarr", container_name=container_name,
+                          file_name=f"{ds_name}_impulse_denoised")
+
+    if "mask_attenuated_signal" in filters:
+        params = filters["mask_attenuated_signal"]
+        mask_channels = []
+
+        for channel in corrected_ds.coords["channel"].values:
+            idx = corrected_ds.channel.values.tolist().index(channel)
+            attn_signal_mask = get_attenuation_mask(corrected_ds, params, desired_channel=channel)
+            plot_noise_mask(attn_signal_mask, f'{ds_name}_attn_mask_{idx}',
+                            echogram_path=f"/tmp/oceanstream/echograms/{container_name}")
+
+            # single_channel_ds = corrected_ds.sel(channel=channel)
+            # masked_single_channel_ds = apply_mask(single_channel_ds, attn_signal_mask, var_name="Sv")
+            mask_channels.append(attn_signal_mask)
+            print("Number of valid mask points:", np.sum(attn_signal_mask.values))
+            print("Mask contains all False:", np.all(~attn_signal_mask.values))
+            # processed_channels.append(masked_single_channel_ds)
+
+        multi_channel_mask = create_multichannel_mask(mask_channels, corrected_ds)
+        corrected_ds_attn_denoised = apply_mask(corrected_ds, multi_channel_mask, var_name="Sv")
+        # save_dataset_to_netcdf(corrected_ds_attn_denoised, container_name=container_name,
+        #                        ds_path=f"{ds_name}_attn_denoised.nc")
+
+        save_zarr_store(corrected_ds_attn_denoised, container_name=container_name,
+                        zarr_path=f"{ds_name}_attn_denoised.zarr")
+        plot_sv_data_task(f"{ds_name}_attn_denoised.zarr", container_name=container_name,
+                          file_name=f"{ds_name}_attn_denoised")
+    """
+    return corrected_ds, corrected_ds_denoised
 
 
 if __name__ == "__main__":
@@ -453,6 +556,7 @@ if __name__ == "__main__":
                 'coordinates': [],
                 'filters': {},
                 'batch_size': BATCH_SIZE,
+                'depth_offset': None,
                 'export_format': 'zarr'
             }
         )

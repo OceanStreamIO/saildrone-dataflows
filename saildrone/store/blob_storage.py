@@ -125,7 +125,7 @@ def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINE
     return xr.open_dataset(chunk_store, engine='zarr', chunks=chunks)
 
 
-def list_zarr_files(path, azfs=None, cruise_id=None) -> List[Path]:
+def list_zarr_files(path, azfs=None, cruise_id=None, file_names=None) -> List[Path]:
     """List all Zarr files in the Azure Blob Storage container along with their metadata."""
 
     if azfs is None:
@@ -139,12 +139,17 @@ def list_zarr_files(path, azfs=None, cruise_id=None) -> List[Path]:
     if cruise_id is not None:
         path = f"{path}/{cruise_id}"
 
-    for blob in azfs.ls(path, detail=True):
-        if blob['type'] == 'directory' and not blob['name'].endswith('.zarr'):
-            subdir_files = list_zarr_files(blob['name'], azfs)
-            zarr_files.extend(subdir_files)
-        elif blob['name'].endswith('.zarr'):
-            zarr_files.append(Path(blob['name']))
+    if file_names is not None and cruise_id is not None:
+        for file_name in file_names:
+            file_name = f"{path}/{file_name}.zarr"
+            zarr_files.append(Path(file_name))
+    else:
+        for blob in azfs.ls(path, detail=True):
+            if blob['type'] == 'directory' and not blob['name'].endswith('.zarr'):
+                subdir_files = list_zarr_files(blob['name'], azfs)
+                zarr_files.extend(subdir_files)
+            elif blob['name'].endswith('.zarr'):
+                zarr_files.append(Path(blob['name']))
 
     return zarr_files
 

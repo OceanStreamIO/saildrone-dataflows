@@ -17,8 +17,7 @@ from prefect_dask import DaskTaskRunner
 
 from saildrone.azure_iot import serialize_location_data
 from saildrone.store import PostgresDB, SurveyService, FileSegmentService
-from saildrone.process import (process_geo_location, save_to_partitioned_geoparquet,
-                               create_geodataframe_from_location_data)
+from saildrone.process import save_to_partitioned_geoparquet, create_geodataframe_from_location_data
 
 load_dotenv()
 

@@ -2,6 +2,7 @@ import logging
 import pandas as pd
 import numpy as np
 import geopandas as gpd
+import xarray as xr
 
 from haversine import haversine
 from scipy.signal import savgol_filter
@@ -120,6 +121,86 @@ def ramer_douglas_peucker(points, epsilon):
         return np.vstack((left_points[:-1], right_points))
 
     return np.vstack((points[0], points[-1]))
+
+
+def extract_start_end_lat_lon(ds: xr.Dataset) -> dict[str, float]:
+    """
+    Extract start and end latitude and longitude from an Xarray dataset.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        The input dataset containing latitude and longitude variables.
+        Expected to have 'ping_time' as a dimension.
+
+    Returns
+    -------
+    dict[str, float]
+        A dictionary containing start and end coordinates with keys:
+        - file_start_lat: Starting latitude
+        - file_end_lat: Ending latitude
+        - file_start_lon: Starting longitude
+        - file_end_lon: Ending longitude
+        Returns empty dict if coordinates are not available or invalid.
+
+    Notes
+    -----
+    - Handles NaN values by finding first/last valid coordinates
+    - Validates coordinate ranges: latitude [-90, 90], longitude [-180, 180]
+    """
+    try:
+        # Verify required variables exist
+        if not all(var in ds.data_vars for var in ["latitude", "longitude"]):
+            logging.warning("Dataset missing latitude or longitude variables")
+            return {}
+
+        if "ping_time" not in ds.dims:
+            logging.warning("Dataset missing ping_time dimension")
+            return {}
+
+        # Get coordinate arrays
+        lat = ds["latitude"]
+        lon = ds["longitude"]
+
+        # Find first and last valid values, skipping NaNs
+        start_idx = 0
+        end_idx = -1
+        
+        while start_idx < len(lat) and (np.isnan(lat[start_idx].values) or np.isnan(lon[start_idx].values)):
+            start_idx += 1
+            
+        while end_idx > -len(lat) and (np.isnan(lat[end_idx].values) or np.isnan(lon[end_idx].values)):
+            end_idx -= 1
+
+        if start_idx >= len(lat) or abs(end_idx) > len(lat):
+            logging.warning("No valid coordinate pairs found in dataset")
+            return {}
+
+        # Extract coordinates
+        file_start_lat = float(lat.isel(ping_time=start_idx).values)
+        file_end_lat = float(lat.isel(ping_time=end_idx).values)
+        file_start_lon = float(lon.isel(ping_time=start_idx).values)
+        file_end_lon = float(lon.isel(ping_time=end_idx).values)
+
+        # Validate coordinate ranges
+        if not (-90 <= file_start_lat <= 90 and -90 <= file_end_lat <= 90):
+            logging.warning(f"Invalid latitude values: {file_start_lat}, {file_end_lat}")
+            return {}
+            
+        if not (-180 <= file_start_lon <= 180 and -180 <= file_end_lon <= 180):
+            logging.warning(f"Invalid longitude values: {file_start_lon}, {file_end_lon}")
+            return {}
+
+        return {
+            "file_start_lat": file_start_lat,
+            "file_end_lat": file_end_lat,
+            "file_start_lon": file_start_lon,
+            "file_end_lon": file_end_lon,
+        }
+        
+    except Exception as e:
+        logging.error(f"Error extracting coordinates: {str(e)}")
+        return {}
 
 
 def select_location_points(location_data: pd.DataFrame, num_points: int) -> pd.DataFrame:

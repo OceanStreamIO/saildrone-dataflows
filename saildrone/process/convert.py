@@ -13,7 +13,8 @@ from saildrone.store import save_zarr_store as save_zarr_to_blobstorage
 CHUNKS = {"ping_time": 1000, "range_sample": -1}
 
 
-def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', calibration_file=None, output_path=None,
+def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, sonar_model='EK80',
+                          calibration_file=None, output_path=None,
                           reprocess=None, converted_container_name=None) -> (int, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
@@ -73,6 +74,7 @@ def convert_file_and_save(file_path: Path, cruise_id=None, sonar_model='EK80', c
                     file_name,
                     size=file_path.stat().st_size,
                     location=str(file_path),
+                    survey_db_id=survey_db_id,
                     last_modified=time.ctime(file_path.stat().st_mtime),
                     converted=True
                 )
