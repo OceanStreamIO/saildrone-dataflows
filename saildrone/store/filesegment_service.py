@@ -15,7 +15,7 @@ class FileSegmentService:
             The database connection object.
         """
         self.db = db
-        self.table_name = 'files_test'
+        self.table_name = 'files'
 
     def is_file_processed(self, file_name: str) -> bool:
         """
