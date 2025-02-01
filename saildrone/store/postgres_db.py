@@ -66,6 +66,7 @@ class PostgresDB:
                 file_end_lon REAL,
                 echogram_files TEXT[],
                 failed BOOLEAN DEFAULT FALSE,
+                denoised BOOLEAN DEFAULT FALSE,
                 error_details TEXT,
                 location_data JSON,
                 processing_time_ms INTEGER,
@@ -150,6 +151,21 @@ class PostgresDB:
                 description TEXT
             );
         ''')
+
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nasc_values (
+                id SERIAL PRIMARY KEY,
+                file_id INT NOT NULL,
+                survey_id INT NOT NULL,
+                ping_time TIMESTAMP NOT NULL,
+                depth FLOAT NOT NULL,
+                nasc_value FLOAT NOT NULL,
+                geom GEOMETRY(Point, 4326) NOT NULL
+            );
+        """)
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_id ON nasc_values (file_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_survey_id ON nasc_values (survey_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_geom ON nasc_values USING GIST (geom);")
 
         self.conn.commit()
 

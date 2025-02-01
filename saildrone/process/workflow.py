@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import traceback
 
@@ -11,8 +12,9 @@ from pathlib import Path
 from typing import Optional, Tuple
 from echopype.mask import apply_mask
 from echopype.clean import mask_transient_noise as mask_transient_noise_func
-
 from echopype.calibrate import compute_Sv as sv_computation
+from echopype.commongrid import compute_NASC, compute_MVBS
+
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage)
 from saildrone.azure_iot import serialize_location_data
@@ -25,6 +27,7 @@ from saildrone.denoise import (get_impulse_noise_mask,
 from .plot import plot_and_upload_echograms
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
+from ..store.nascpoint_service import NASCPointService
 
 
 def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = False, **kwargs) -> dict:
@@ -111,6 +114,7 @@ def _process_file_workflow(
     """Core processing logic, encapsulating the main workflow."""
     load_from_blobstorage = kwargs.get("load_from_blobstorage", False)
     converted_container_name = kwargs.get("converted_container_name")
+    colormap = kwargs.get("colormap", "ocean_r")
     chunks = kwargs.get("chunks")
     encode_mode = kwargs.get("encode_mode", "complex")
     waveform_mode = kwargs.get("waveform_mode", "CW")
@@ -122,6 +126,8 @@ def _process_file_workflow(
     processed_container_name = kwargs.get("processed_container_name")
     save_to_directory = kwargs.get("save_to_directory", False)
     gps_container_name = kwargs.get("gps_container_name")
+    compute_nasc_opt = kwargs.get("compute_nasc", False)
+    compute_mvbs_opt = kwargs.get("compute_mvbs", False)
 
     if load_from_blobstorage is True:
         zarr_path = str(source_path)
@@ -139,8 +145,6 @@ def _process_file_workflow(
         zarr_path=zarr_path,
         chunks=chunks
     )
-
-    print('echodata:', echodata)
 
     if echodata.beam is None:
         error_message = f"No beam data found in file: {file_name}"
@@ -170,11 +174,11 @@ def _process_file_workflow(
             _update_file_failure(file_segment_service, file_id, error_message)
         raise RuntimeError(error_message)
 
-    echogram_files = None
-
     #####################################################################
     # 3. Plot echograms
     #####################################################################
+    echogram_files = None
+
     if plot_echograms:
         echogram_files = plot_and_upload_echograms(sv_dataset,
                                                    cruise_id=cruise_id,
@@ -182,6 +186,7 @@ def _process_file_workflow(
                                                    output_path=output_path,
                                                    save_to_blobstorage=save_to_blobstorage,
                                                    depth_var="depth",
+                                                   cmap=colormap,
                                                    container_name=echograms_container)
 
     sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
@@ -189,17 +194,52 @@ def _process_file_workflow(
     if sv_dataset_denoised is not None and plot_echograms:
         echogram_files_denoised = plot_and_upload_echograms(sv_dataset_denoised,
                                                             cruise_id=cruise_id,
-                                                            file_base_name=f"{file_name}_denoised",
+                                                            file_base_name=file_name,
+                                                            file_name=f"{file_name}_denoised",
                                                             output_path=output_path,
                                                             save_to_blobstorage=save_to_blobstorage,
                                                             depth_var="depth",
+                                                            cmap=colormap,
                                                             container_name=echograms_container)
         echogram_files.extend(echogram_files_denoised)
 
     #####################################################################
-    # 4. Gather metadata
+    # 4. Compute MVBS
     #####################################################################
-    print('sv_dataset:', sv_dataset)
+    if compute_mvbs_opt:
+        ds_MVBS = compute_MVBS(
+            sv_dataset,
+            range_var="depth",
+            range_bin='1m',  # in meters
+            ping_time_bin='5s',  # in seconds
+        )
+
+        _save_processed_data(
+            ds_MVBS,
+            cruise_id=cruise_id,
+            base_file_name=file_name,
+            file_name=f"{file_name}_mvbs",
+            processed_container_name=processed_container_name,
+            output_path=output_path,
+            save_to_directory=save_to_directory,
+            save_to_blobstorage=save_to_blobstorage,
+        )
+
+        if plot_echograms:
+            echogram_files_mvbs = plot_and_upload_echograms(ds_MVBS,
+                                                            cruise_id=cruise_id,
+                                                            file_base_name=file_name,
+                                                            file_name=f"{file_name}_mvbs",
+                                                            output_path=output_path,
+                                                            save_to_blobstorage=save_to_blobstorage,
+                                                            depth_var="depth",
+                                                            cmap=colormap,
+                                                            container_name=echograms_container)
+            echogram_files.extend(echogram_files_mvbs)
+
+    #####################################################################
+    # 5. Gather metadata
+    #####################################################################
     payload = _prepare_payload(
         sv_dataset,
         file_name=file_name,
@@ -209,7 +249,7 @@ def _process_file_workflow(
     )
 
     #####################################################################
-    # 5. Add location data if not present in the dataset or the database
+    # 6. Add location data if not present in the dataset or the database
     #####################################################################
     has_location_in_db = _has_location_data_in_db(file_id)
     has_location_data_ds = _has_location_data(sv_dataset)
@@ -233,12 +273,45 @@ def _process_file_workflow(
             })
 
     #####################################################################
-    # 6. Save the processed data to storage
+    # 7. Compute NASC
+    #####################################################################
+    if compute_nasc_opt:
+        ds_NASC = compute_NASC(
+            sv_dataset,
+            range_bin="10m",
+            dist_bin="0.5nmi"
+        )
+
+        # Log-transform the NASC values for plotting
+        ds_NASC["NASC_log"] = 10 * np.log10(ds_NASC["NASC"])
+        ds_NASC["NASC_log"].attrs = {
+            "long_name": "Log of NASC",
+            "units": "m2 nmi-2"
+        }
+        _save_processed_data(
+            ds_NASC,
+            cruise_id=cruise_id,
+            base_file_name=file_name,
+            file_name=f"{file_name}_nasc",
+            processed_container_name=processed_container_name,
+            output_path=output_path,
+            save_to_directory=save_to_directory,
+            save_to_blobstorage=save_to_blobstorage,
+        )
+
+        dist_max = ds_NASC.attrs["distance_max"]
+    else:
+        ds_NASC = None
+        dist_max = None
+
+    #####################################################################
+    # 8. Save the processed data to storage
     #####################################################################
     sv_zarr_path, zarr_store = _save_processed_data(
         sv_dataset,
         cruise_id=cruise_id,
         file_name=file_name,
+        base_file_name=file_name,
         processed_container_name=processed_container_name,
         output_path=output_path,
         save_to_directory=save_to_directory,
@@ -249,6 +322,7 @@ def _process_file_workflow(
         _save_processed_data(
             sv_dataset_denoised,
             cruise_id=cruise_id,
+            base_file_name=file_name,
             file_name=f"{file_name}_denoised",
             processed_container_name=processed_container_name,
             output_path=output_path,
@@ -257,16 +331,20 @@ def _process_file_workflow(
         )
 
     #####################################################################
-    # 7. Update DB with processing results
+    # 9. Update DB with processing results
     #####################################################################
     payload.update({
+        "distance": dist_max,
         "location": sv_zarr_path,
         "denoised": sv_dataset_denoised is not None,
     })
 
     with PostgresDB() as db_connection:
-        file_segment_service = FileSegmentService(db_connection)
+        if ds_NASC:
+            nasc_service = NASCPointService(db_connection)
+            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC)
 
+        file_segment_service = FileSegmentService(db_connection)
         file_segment_service.update_file_record(
             file_id=file_id, **payload, processed=True
         )
@@ -278,6 +356,7 @@ def _save_processed_data(
     sv_dataset: Dataset,
     cruise_id: str = None,
     file_name: str = None,
+    base_file_name: str = None,
     processed_container_name: Optional[str] = None,
     output_path: Optional[str] = None,
     save_to_directory: Optional[bool] = None,
@@ -285,11 +364,12 @@ def _save_processed_data(
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
     if processed_container_name and save_to_blobstorage:
-        sv_zarr_path = f"{cruise_id}/{file_name}.zarr"
+        sv_zarr_path = base_file_name and f"{cruise_id}/{base_file_name}/{file_name}.zarr" or f"{cruise_id}/{file_name}.zarr"
         zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
                                               zarr_path=sv_zarr_path)
     elif output_path and save_to_directory:
-        sv_zarr_path = f"{output_path}/{file_name}.zarr"
+        os.makedirs(f"{output_path}/{base_file_name}", exist_ok=True)
+        sv_zarr_path = f"{output_path}/{base_file_name}/{file_name}.zarr"
         sv_dataset.to_zarr(sv_zarr_path, mode="w")
         zarr_store = sv_zarr_path
     else:
@@ -575,10 +655,10 @@ def apply_denoising(sv_dataset, **kwargs):
         mask_channels = []
 
         params_impulse = {
-            "depth_bin": mask_impulse_noise.depth_bin,
-            "num_side_pings": mask_impulse_noise.num_side_pings,
-            "impulse_noise_threshold": mask_impulse_noise.threshold,
-            "range_var": mask_impulse_noise.range_var
+            "depth_bin": mask_impulse_noise.get('depth_bin'),
+            "num_side_pings": mask_impulse_noise.get('num_side_pings'),
+            "impulse_noise_threshold": mask_impulse_noise.get('threshold'),
+            "range_var": mask_impulse_noise.get('range_var')
         }
 
         for channel in sv_dataset.coords["channel"].values:
@@ -593,19 +673,12 @@ def apply_denoising(sv_dataset, **kwargs):
     if mask_attenuated_signal:
         mask_channels = []
         params_attn = {
-            "upper_limit_sl": mask_attenuated_signal.upper_limit_sl,
-            "lower_limit_sl": mask_attenuated_signal.lower_limit_sl,
-            "num_side_pings": mask_attenuated_signal.num_side_pings,
-            "attenuation_signal_threshold": mask_attenuated_signal.threshold,
-            "range_var": mask_attenuated_signal.range_var
+            "upper_limit_sl": mask_attenuated_signal.get('upper_limit_sl'),
+            "lower_limit_sl": mask_attenuated_signal.get('lower_limit_sl'),
+            "num_side_pings": mask_attenuated_signal.get('num_side_pings'),
+            "attenuation_signal_threshold": mask_attenuated_signal.get('threshold'),
+            "range_var": mask_attenuated_signal.get('range_var')
         }
-
-        print(f'Applying attenuation signal mask with parameters: \n'
-              f'upper_limit_sl={params_attn["upper_limit_sl"]}\n'
-              f'lower_limit_sl={params_attn["lower_limit_sl"]}\n'
-              f'num_side_pings={params_attn["num_side_pings"]}\n'
-              f'attenuation_signal_threshold={params_attn["attenuation_signal_threshold"]}\n'
-              f'range_var={params_attn["range_var"]}\n')
 
         if sv_dataset_denoised is None:
             sv_dataset_denoised = sv_dataset
@@ -620,19 +693,21 @@ def apply_denoising(sv_dataset, **kwargs):
     # Step 3: Apply transient noise mask
     #####################################################################
     if mask_transient_noise:
-        threshold = f'{mask_transient_noise.threshold}dB'
-        exclude_above = f"{mask_transient_noise.exclude_above}m"
+        threshold = f'{mask_transient_noise.get("threshold", 12.0)}dB'
+        exclude_above = f'{mask_transient_noise.get("exclude_above", 250.0)}m'
+        depth_bin = f'{mask_transient_noise.get("depth_bin", "10")}m'
+        num_side_pings = mask_transient_noise.get('num_side_pings', 25)
         if sv_dataset_denoised is None:
             sv_dataset_denoised = sv_dataset
 
         transient_mask = mask_transient_noise_func(
             sv_dataset_denoised,
-            func=mask_transient_noise.operation,
-            depth_bin=mask_transient_noise.depth_bin,
-            num_side_pings=mask_transient_noise.num_side_pings,
+            func=mask_transient_noise.get('operation', 'nanmean'),
+            depth_bin=depth_bin,
+            num_side_pings=num_side_pings,
             exclude_above=exclude_above,
             transient_noise_threshold=threshold,
-            range_var=mask_transient_noise.range_var,
+            range_var=mask_transient_noise.get('range_var', 'depth'),
             use_index_binning=True,
             chunk_dict=chunks_denoising
         )
@@ -652,17 +727,11 @@ def apply_denoising(sv_dataset, **kwargs):
         if sv_dataset_denoised is None:
             sv_dataset_denoised = sv_dataset
 
-        print(f'Removing background noise with parameters: \n'
-              f'ping_num={remove_background_noise.ping_num}\n '
-              f'SNR_threshold={remove_background_noise.SNR_threshold}\n'
-              f'range_sample_num={remove_background_noise.range_sample_num}\n'
-              f'background_noise_max={remove_background_noise.background_noise_max}\n')
-
         sv_dataset_denoised = remove_background_noise_func(sv_dataset_denoised,
-                                                           ping_num=remove_background_noise.ping_num,
-                                                           SNR_threshold=remove_background_noise.SNR_threshold,
-                                                           range_sample_num=remove_background_noise.range_sample_num,
-                                                           background_noise_max=remove_background_noise.background_noise_max
+                                                           ping_num=remove_background_noise.get('ping_num'),
+                                                           SNR_threshold=remove_background_noise.get('SNR_threshold'),
+                                                           range_sample_num=remove_background_noise.get('range_sample_num'),
+                                                           background_noise_max=remove_background_noise.get('background_noise_max')
                                                            )
 
     return sv_dataset_denoised

@@ -17,7 +17,7 @@ GPS_OUTPUT_FOLDER = "./test/gps-processed"
 
 
 def test_file_workflow_saildrone():
-    cluster = LocalCluster(n_workers=2, threads_per_worker=1, memory_limit='12GB')
+    cluster = LocalCluster(n_workers=4, threads_per_worker=1, memory_limit='12GB')
     client = Client(cluster)
 
     source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20230825-T085959-0.zarr')
@@ -29,19 +29,39 @@ def test_file_workflow_saildrone():
     save_to_directory = True
     processed_container_name = 'processedlocal'
     reprocess = True
-    plot_echograms = False
+    plot_echograms = True
     depth_offset = 0
     echograms_container = 'echograms'
     gps_container_name = 'gpsdata'
     encode_mode = 'complex'
     waveform_mode = 'CW'
-    transient_noise_opts = None
-    impulse_noise_opts = None
-    attenuated_signal_opts = None
-    background_noise_opts = None
+    impulse_noise_opts = dict(
+        depth_bin=10,
+        num_side_pings=2,
+        threshold=10,
+        range_var="depth"
+    )
+    attenuated_signal_opts = dict(
+        upper_limit_sl=180,
+        lower_limit_sl=300,
+        num_side_pings=15,
+        threshold=10,
+        range_var="depth"
+    )
 
-    chunks = {'ping_time': 500, 'range_sample': 500}
-    chunks_denoising = {'ping_time': 500, 'depth': 500}
+    transient_noise_opts = dict(
+        exclude_above=250.0,
+        threshold=12.0
+    )
+    background_noise_opts = dict(
+        ping_num=20,
+        range_sample_num=50,
+        background_noise_max=None,
+        SNR_threshold=3.0
+    )
+
+    chunks = {'ping_time': 1000, 'range_sample': 1000}
+    chunks_denoising = {'ping_time': 1000, 'depth': 1000}
 
     payload = process_converted_file(
         source_path,
@@ -60,10 +80,13 @@ def test_file_workflow_saildrone():
         gps_container_name=gps_container_name,
         encode_mode=encode_mode,
         waveform_mode=waveform_mode,
-        mask_transient_noise=transient_noise_opts,
+        compute_nasc=False,
+        compute_mvbs=False,
+        colormap='ocean',
+        # mask_transient_noise=transient_noise_opts,
         mask_impulse_noise=impulse_noise_opts,
-        mask_attenuated_signal=attenuated_signal_opts,
-        remove_background_noise=background_noise_opts,
+        # mask_attenuated_signal=attenuated_signal_opts,
+        # remove_background_noise=background_noise_opts,
         chunks_denoising=chunks_denoising
     )
 

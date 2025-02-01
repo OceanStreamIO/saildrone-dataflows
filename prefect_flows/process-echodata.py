@@ -49,14 +49,19 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     sys.exit(1)
 
 
-class MaskImpulseNoise(BaseModel):
+class DenoiseOptions(BaseModel):
+    def get(self, key, default_value=None):
+        return getattr(self, key, default_value)
+
+
+class MaskImpulseNoise(DenoiseOptions):
     depth_bin: int = Field(default=5, description="Donwsampling bin size along vertical range variable (`range_var`) in meters.")
     num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
     threshold: float = Field(default=10, description="Impulse noise threshold value (in dB) for the two-side comparison.")
     range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
 
 
-class MaskAttenuatedSignal(BaseModel):
+class MaskAttenuatedSignal(DenoiseOptions):
     upper_limit_sl: int = Field(default=180, description="Upper limit of deep scattering layer line (m).")
     lower_limit_sl: int = Field(default=300, description="Lower limit of deep scattering layer line (m).")
     num_side_pings: int = Field(default=15, description="Number of preceding & subsequent pings defining the block.")
@@ -64,16 +69,16 @@ class MaskAttenuatedSignal(BaseModel):
     range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
 
 
-class TransientNoiseMask(BaseModel):
+class TransientNoiseMask(DenoiseOptions):
     operation: str = Field(default='nanmedian', description="Pooling function used in the pooled Sv aggregation, either 'nanmedian' or 'nanmean'.")
     depth_bin: int = Field(default=10, description="Bin size for depth calculation.")
     num_side_pings: int = Field(default=25, description="Number of side pings to include.")
     exclude_above: float = Field(default=250.0, description="Exclude data above this depth value.")
-    threshold: float = Field(default=8.0, description="Transient noise threshold value (in dB) for the pooling comparison.")
+    threshold: float = Field(default=12.0, description="Transient noise threshold value (in dB) for the pooling comparison.")
     range_var: str = Field(default='depth', description="Vertical Range Variable. Can be either `depth` or `echo_range`.")
 
 
-class RemoveBackgroundNoise(BaseModel):
+class RemoveBackgroundNoise(DenoiseOptions):
     ping_num: int = Field(default=20, description="Number of pings to obtain noise estimates")
     range_sample_num: int = Field(default=20, description="Number of range samples to consider.")
     background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
@@ -101,8 +106,11 @@ def process_single_file(source_path: Path, **kwargs):
         output_directory = kwargs.get('output_directory')
         reprocess = kwargs.get('reprocess')
         plot_echograms = kwargs.get('plot_echograms')
+        compute_nasc = kwargs.get('compute_nasc')
+        compute_mvbs = kwargs.get('compute_mvbs')
         echograms_container = kwargs.get('echograms_container')
         encode_mode = kwargs.get('encode_mode')
+        colormap = kwargs.get('colormap')
         waveform_mode = kwargs.get('waveform_mode')
         depth_offset = kwargs.get('depth_offset')
         chunks_ping_time = kwargs.get('chunks_ping_time')
@@ -142,9 +150,12 @@ def process_single_file(source_path: Path, **kwargs):
                                reprocess=reprocess,
                                depth_offset=depth_offset,
                                plot_echograms=plot_echograms,
+                               compute_nasc=compute_nasc,
+                               compute_mvbs=compute_mvbs,
                                echograms_container=echograms_container,
                                gps_container_name=GPSDATA_CONTAINER_NAME,
                                encode_mode=encode_mode,
+                               colormap=colormap,
                                waveform_mode=waveform_mode,
                                mask_transient_noise=mask_transient_noise,
                                mask_impulse_noise=mask_impulse_noise,
@@ -182,8 +193,8 @@ def load_and_process_files_to_zarr(source_directory: str,
                                    cruise_id: str,
                                    load_from_blobstorage: bool,
                                    get_list_from_db: bool,
-                                   start_datetime: datetime,
-                                   end_datetime: datetime,
+                                   start_datetime: Optional[datetime],
+                                   end_datetime: Optional[datetime],
                                    source_container: str,
                                    save_to_blobstorage: bool,
                                    output_container: str,
@@ -191,8 +202,11 @@ def load_and_process_files_to_zarr(source_directory: str,
                                    output_directory: str,
                                    reprocess: bool,
                                    plot_echograms: bool,
+                                   compute_nasc: bool,
+                                   compute_mvbs: bool,
                                    echograms_container: str,
                                    encode_mode: str,
+                                   colormap: str,
                                    waveform_mode: str,
                                    depth_offset: float,
                                    chunks_ping_time: int,
@@ -249,11 +263,14 @@ def load_and_process_files_to_zarr(source_directory: str,
                          output_container=output_container,
                          reprocess=reprocess,
                          plot_echograms=plot_echograms,
+                         compute_nasc=compute_nasc,
+                         compute_mvbs=compute_mvbs,
                          echograms_container=echograms_container,
                          save_to_blobstorage=save_to_blobstorage,
                          save_to_directory=save_to_directory,
                          output_directory=output_directory,
                          encode_mode=encode_mode,
+                         colormap=colormap,
                          waveform_mode=waveform_mode,
                          depth_offset=depth_offset,
                          chunks_ping_time=chunks_ping_time,
@@ -284,8 +301,8 @@ if __name__ == "__main__":
                 'cruise_id': '',
                 'load_from_blobstorage': False,
                 'get_list_from_db': False,
-                'start_datetime': '',
-                'end_datetime': '',
+                'start_datetime': None,
+                'end_datetime': None,
                 'source_container': CONVERTED_CONTAINER_NAME,
                 'save_to_blobstorage': True,
                 'output_container': PROCESSED_CONTAINER_NAME,
@@ -293,8 +310,11 @@ if __name__ == "__main__":
                 'output_directory': '',
                 'reprocess': False,
                 'plot_echograms': False,
+                'compute_nasc': True,
+                'compute_mvbs': True,
                 'echograms_container': WEBAPP_CONTAINER_NAME,
                 'encode_mode': 'complex',
+                'colormap': 'ocean_r',
                 'waveform_mode': 'CW',
                 'depth_offset': 0,
                 'chunks_ping_time': 500,

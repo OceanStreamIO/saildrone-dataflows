@@ -126,17 +126,20 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
-                              output_path=None, container_name=None, cmap='ocean_r', depth_var='depth'):
+                              file_name=None, output_path=None, container_name=None, cmap='ocean_r', depth_var='depth'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
-        os.makedirs(echograms_output_path, exist_ok=True)
     else:
         echograms_output_path = f'{output_path}/echograms/{file_base_name}'
-        os.makedirs(echograms_output_path, exist_ok=True)
+
+    if file_name is None:
+        file_name = file_base_name
+
+    os.makedirs(echograms_output_path, exist_ok=True)
 
     echogram_files = plot_sv_data(sv_dataset,
                                   depth_var=depth_var,
-                                  file_base_name=file_base_name,
+                                  file_base_name=file_name,
                                   output_path=echograms_output_path,
                                   cmap=cmap)
 
