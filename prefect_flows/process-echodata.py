@@ -14,7 +14,6 @@ from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
-from prefect.futures import wait_for
 
 from saildrone.process import process_converted_file
 from saildrone.store import ensure_container_exists, FileSegmentService
