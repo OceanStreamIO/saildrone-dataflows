@@ -253,8 +253,8 @@ def load_and_process_files_to_zarr(source_directory: str,
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
 
-    task_futures = set()
     file_iterator = iter(files_list)  # Iterator for files
+    futures = []
 
     def submit_next_task():
         file = next(file_iterator, None)
@@ -283,16 +283,23 @@ def load_and_process_files_to_zarr(source_directory: str,
                 "mask_transient_noise": mask_transient_noise,
                 "remove_background_noise": remove_background_noise
             })
-            task_futures.add(future)
+            futures.append(future)
 
     for _ in range(min(batch_size, len(files_list))):
         submit_next_task()
 
-    while task_futures:
-        completed_future = wait_for(task_futures)
-        task_futures.remove(completed_future)
+    while futures:
+        completed_future = next(future for future in futures if future.is_completed())
+        futures.remove(completed_future)
         submit_next_task()
 
+    for future in futures:
+        future.wait()
+
+    # while task_futures:
+    #     completed_future = wait_for(task_futures)
+    #     task_futures.remove(completed_future)
+    #     submit_next_task()
     logging.info("All files have been processed.")
 
     # Process files in batches
