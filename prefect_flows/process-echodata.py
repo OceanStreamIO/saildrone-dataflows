@@ -14,7 +14,7 @@ from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
-from concurrent.futures import as_completed
+from prefect.futures import wait_for
 
 from saildrone.process import process_converted_file
 from saildrone.store import ensure_container_exists, FileSegmentService
@@ -289,7 +289,7 @@ def load_and_process_files_to_zarr(source_directory: str,
         submit_next_task()
 
     while task_futures:
-        completed_future = next(as_completed(task_futures))
+        completed_future = wait_for(task_futures)
         task_futures.remove(completed_future)
         submit_next_task()
 
