@@ -14,6 +14,7 @@ from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
+from concurrent.futures import as_completed
 
 from saildrone.process import process_converted_file
 from saildrone.store import ensure_container_exists, FileSegmentService
@@ -252,36 +253,78 @@ def load_and_process_files_to_zarr(source_directory: str,
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
 
-    # Process files in batches
-    for i in range(0, total_files, batch_size):
-        batch_files = files_list[i:i + batch_size]
-        print(f"Processing batch {i // batch_size + 1}")
-        process_raw_data(batch_files,
-                         cruise_id=cruise_id,
-                         load_from_blobstorage=load_from_blobstorage,
-                         source_container=source_container,
-                         output_container=output_container,
-                         reprocess=reprocess,
-                         plot_echograms=plot_echograms,
-                         compute_nasc=compute_nasc,
-                         compute_mvbs=compute_mvbs,
-                         echograms_container=echograms_container,
-                         save_to_blobstorage=save_to_blobstorage,
-                         save_to_directory=save_to_directory,
-                         output_directory=output_directory,
-                         encode_mode=encode_mode,
-                         colormap=colormap,
-                         waveform_mode=waveform_mode,
-                         depth_offset=depth_offset,
-                         chunks_ping_time=chunks_ping_time,
-                         chunks_range_sample=chunks_range_sample,
-                         mask_impulse_noise=mask_impulse_noise,
-                         mask_attenuated_signal=mask_attenuated_signal,
-                         mask_transient_noise=mask_transient_noise,
-                         remove_background_noise=remove_background_noise
-                         )
+    task_futures = set()
+    file_iterator = iter(files_list)  # Iterator for files
 
-    logging.info("All batches have been processed.")
+    def submit_next_task():
+        file = next(file_iterator, None)
+        if file:
+            future = process_single_file.submit(file, **{
+                "cruise_id": cruise_id,
+                "load_from_blobstorage": load_from_blobstorage,
+                "source_container": source_container,
+                "output_container": output_container,
+                "reprocess": reprocess,
+                "plot_echograms": plot_echograms,
+                "compute_nasc": compute_nasc,
+                "compute_mvbs": compute_mvbs,
+                "echograms_container": echograms_container,
+                "save_to_blobstorage": save_to_blobstorage,
+                "save_to_directory": save_to_directory,
+                "output_directory": output_directory,
+                "encode_mode": encode_mode,
+                "colormap": colormap,
+                "waveform_mode": waveform_mode,
+                "depth_offset": depth_offset,
+                "chunks_ping_time": chunks_ping_time,
+                "chunks_range_sample": chunks_range_sample,
+                "mask_impulse_noise": mask_impulse_noise,
+                "mask_attenuated_signal": mask_attenuated_signal,
+                "mask_transient_noise": mask_transient_noise,
+                "remove_background_noise": remove_background_noise
+            })
+            task_futures.add(future)
+
+    for _ in range(min(batch_size, len(files_list))):
+        submit_next_task()
+
+    while task_futures:
+        completed_future = next(as_completed(task_futures))
+        task_futures.remove(completed_future)
+        submit_next_task()
+
+    logging.info("All files have been processed.")
+
+    # Process files in batches
+    # for i in range(0, total_files, batch_size):
+    #     batch_files = files_list[i:i + batch_size]
+    #     print(f"Processing batch {i // batch_size + 1}")
+    #     process_raw_data(batch_files,
+    #                      cruise_id=cruise_id,
+    #                      load_from_blobstorage=load_from_blobstorage,
+    #                      source_container=source_container,
+    #                      output_container=output_container,
+    #                      reprocess=reprocess,
+    #                      plot_echograms=plot_echograms,
+    #                      compute_nasc=compute_nasc,
+    #                      compute_mvbs=compute_mvbs,
+    #                      echograms_container=echograms_container,
+    #                      save_to_blobstorage=save_to_blobstorage,
+    #                      save_to_directory=save_to_directory,
+    #                      output_directory=output_directory,
+    #                      encode_mode=encode_mode,
+    #                      colormap=colormap,
+    #                      waveform_mode=waveform_mode,
+    #                      depth_offset=depth_offset,
+    #                      chunks_ping_time=chunks_ping_time,
+    #                      chunks_range_sample=chunks_range_sample,
+    #                      mask_impulse_noise=mask_impulse_noise,
+    #                      mask_attenuated_signal=mask_attenuated_signal,
+    #                      mask_transient_noise=mask_transient_noise,
+    #                      remove_background_noise=remove_background_noise
+    #                      )
+    #
+    # logging.info("All batches have been processed.")
 
 
 if __name__ == "__main__":
