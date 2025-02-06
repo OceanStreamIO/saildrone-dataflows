@@ -288,7 +288,7 @@ def load_and_process_files_to_zarr(source_directory: str,
         submit_next_task()
 
     while futures:
-        completed_future = next(future for future in futures if future.is_completed())
+        completed_future = next(future for future in futures)
         futures.remove(completed_future)
         submit_next_task()
 
@@ -299,9 +299,7 @@ def load_and_process_files_to_zarr(source_directory: str,
     #     completed_future = wait_for(task_futures)
     #     task_futures.remove(completed_future)
     #     submit_next_task()
-    logging.info("All files have been processed.")
 
-    # Process files in batches
     # for i in range(0, total_files, batch_size):
     #     batch_files = files_list[i:i + batch_size]
     #     print(f"Processing batch {i // batch_size + 1}")
@@ -329,8 +327,8 @@ def load_and_process_files_to_zarr(source_directory: str,
     #                      mask_transient_noise=mask_transient_noise,
     #                      remove_background_noise=remove_background_noise
     #                      )
-    #
-    # logging.info("All batches have been processed.")
+
+    logging.info("All batches have been processed.")
 
 
 if __name__ == "__main__":
