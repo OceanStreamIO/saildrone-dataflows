@@ -252,81 +252,34 @@ def load_and_process_files_to_zarr(source_directory: str,
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
 
-    file_iterator = iter(files_list)  # Iterator for files
-    futures = []
-
-    def submit_next_task():
-        file = next(file_iterator, None)
-        if file:
-            future = process_single_file.submit(file, **{
-                "cruise_id": cruise_id,
-                "load_from_blobstorage": load_from_blobstorage,
-                "source_container": source_container,
-                "output_container": output_container,
-                "reprocess": reprocess,
-                "plot_echograms": plot_echograms,
-                "compute_nasc": compute_nasc,
-                "compute_mvbs": compute_mvbs,
-                "echograms_container": echograms_container,
-                "save_to_blobstorage": save_to_blobstorage,
-                "save_to_directory": save_to_directory,
-                "output_directory": output_directory,
-                "encode_mode": encode_mode,
-                "colormap": colormap,
-                "waveform_mode": waveform_mode,
-                "depth_offset": depth_offset,
-                "chunks_ping_time": chunks_ping_time,
-                "chunks_range_sample": chunks_range_sample,
-                "mask_impulse_noise": mask_impulse_noise,
-                "mask_attenuated_signal": mask_attenuated_signal,
-                "mask_transient_noise": mask_transient_noise,
-                "remove_background_noise": remove_background_noise
-            })
-            futures.append(future)
-
-    for _ in range(min(batch_size, len(files_list))):
-        submit_next_task()
-
-    while futures:
-        completed_future = next(future for future in futures)
-        futures.remove(completed_future)
-        submit_next_task()
-
-    for future in futures:
-        future.wait()
-
-    # while task_futures:
-    #     completed_future = wait_for(task_futures)
-    #     task_futures.remove(completed_future)
-    #     submit_next_task()
-
-    # for i in range(0, total_files, batch_size):
-    #     batch_files = files_list[i:i + batch_size]
-    #     print(f"Processing batch {i // batch_size + 1}")
-    #     process_raw_data(batch_files,
-    #                      cruise_id=cruise_id,
-    #                      load_from_blobstorage=load_from_blobstorage,
-    #                      source_container=source_container,
-    #                      output_container=output_container,
-    #                      reprocess=reprocess,
-    #                      plot_echograms=plot_echograms,
-    #                      compute_nasc=compute_nasc,
-    #                      compute_mvbs=compute_mvbs,
-    #                      echograms_container=echograms_container,
-    #                      save_to_blobstorage=save_to_blobstorage,
-    #                      save_to_directory=save_to_directory,
-    #                      output_directory=output_directory,
-    #                      encode_mode=encode_mode,
-    #                      colormap=colormap,
-    #                      waveform_mode=waveform_mode,
-    #                      depth_offset=depth_offset,
-    #                      chunks_ping_time=chunks_ping_time,
-    #                      chunks_range_sample=chunks_range_sample,
-    #                      mask_impulse_noise=mask_impulse_noise,
-    #                      mask_attenuated_signal=mask_attenuated_signal,
-    #                      mask_transient_noise=mask_transient_noise,
-    #                      remove_background_noise=remove_background_noise
-    #                      )
+    # Process files in batches
+    for i in range(0, total_files, batch_size):
+        batch_files = files_list[i:i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}")
+        process_raw_data(batch_files,
+                         cruise_id=cruise_id,
+                         load_from_blobstorage=load_from_blobstorage,
+                         source_container=source_container,
+                         output_container=output_container,
+                         reprocess=reprocess,
+                         plot_echograms=plot_echograms,
+                         compute_nasc=compute_nasc,
+                         compute_mvbs=compute_mvbs,
+                         echograms_container=echograms_container,
+                         save_to_blobstorage=save_to_blobstorage,
+                         save_to_directory=save_to_directory,
+                         output_directory=output_directory,
+                         encode_mode=encode_mode,
+                         colormap=colormap,
+                         waveform_mode=waveform_mode,
+                         depth_offset=depth_offset,
+                         chunks_ping_time=chunks_ping_time,
+                         chunks_range_sample=chunks_range_sample,
+                         mask_impulse_noise=mask_impulse_noise,
+                         mask_attenuated_signal=mask_attenuated_signal,
+                         mask_transient_noise=mask_transient_noise,
+                         remove_background_noise=remove_background_noise
+                         )
 
     logging.info("All batches have been processed.")
 
