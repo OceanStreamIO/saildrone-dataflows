@@ -409,7 +409,7 @@ def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, e
     if not coordinates:
         raise ValueError("Coordinates are required for spatial queries.")
 
-    # files = get_files_by_cruise_id(cruise_id, coordinates)
+    files = get_files_by_cruise_id(cruise_id, coordinates)
     sv_dataset_list = []
     if container_name is None:
         container_name = generate_container_name(cruise_id)
@@ -421,11 +421,11 @@ def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, e
     if sv_data:
         sv_dataset_list.append("short_pulse_data")
 
-    # short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
-    #     files,
-    #     source_container_name=PROCESSED_CONTAINER_NAME,
-    #     batch_size=batch_size,
-    #     chunks=CHUNKS)
+    short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+        files,
+        source_container_name=PROCESSED_CONTAINER_NAME,
+        batch_size=batch_size,
+        chunks=CHUNKS)
 
     # if export_format == 'netcdf':
 
@@ -445,33 +445,33 @@ def export_processed(cruise_id, coordinates=None, filters=None, batch_size=10, e
         #
         # save_dataset_to_netcdf(short_pulse_ds, container_name=container_name, ds_path="short_pulse_data.nc")
         # save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path="short_pulse_data.zarr")
-    # if long_pulse_ds:
-    #     sv_data, sv_denoised = process_sv_dataset(long_pulse_ds, container_name, filters, 'long_pulse', depth_offset)
-    #     if sv_data:
-    #         sv_dataset_list.append("long_pulse_data")
+    if long_pulse_ds:
+        sv_data, sv_denoised = process_sv_dataset(long_pulse_ds, container_name, filters, 'long_pulse', depth_offset)
+        if sv_data:
+            sv_dataset_list.append("long_pulse_data")
 
-    # if long_pulse_ds:
-    #     if depth_offset is not None:
-    #         long_pulse_ds = apply_corrections_ds(long_pulse_ds, depth_offset=depth_offset)
-    #
-    #     save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
-    #     save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
-    #     sv_dataset_list.append("long_pulse_data")
+    if long_pulse_ds:
+        if depth_offset is not None:
+            long_pulse_ds = apply_corrections_ds(long_pulse_ds, depth_offset=depth_offset)
 
-    # if exported_ds:
-    #     if depth_offset is not None:
-    #         exported_ds = apply_corrections_ds(exported_ds, depth_offset=depth_offset)
-    #     save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
-    #     save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
-    #     sv_dataset_list.append("exported_data")
+        save_dataset_to_netcdf(long_pulse_ds, container_name=container_name, ds_path="long_pulse_data.nc")
+        save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path="long_pulse_data.zarr")
+        sv_dataset_list.append("long_pulse_data")
 
-    # access_link = generate_container_access_url(container_name)
-    # create_link_artifact(
-    #     key=f"{container_name}-link",
-    #     link=access_link,
-    #     link_text="Export link",
-    #     description="Link to download the exported data."
-    # )
+    if exported_ds:
+        if depth_offset is not None:
+            exported_ds = apply_corrections_ds(exported_ds, depth_offset=depth_offset)
+        save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path="exported_data.nc")
+        save_zarr_store(exported_ds, container_name=container_name, zarr_path="exported_data.zarr")
+        sv_dataset_list.append("exported_data")
+
+    access_link = generate_container_access_url(container_name)
+    create_link_artifact(
+        key=f"{container_name}-link",
+        link=access_link,
+        link_text="Export link",
+        description="Link to download the exported data."
+    )
 
     plot_sv_data_task(sv_dataset_list, container_name=container_name)
     # future = plot_sv_data_task.submit(sv_dataset_list, container_name=container_name)

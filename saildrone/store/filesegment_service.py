@@ -1,5 +1,6 @@
 from shapely.geometry import LineString
 from typing import Optional, List
+from datetime import datetime
 
 from saildrone.store import PostgresDB
 
@@ -379,12 +380,12 @@ class FileSegmentService:
               AND processed = TRUE
               AND survey_db_id = %s
             ORDER BY file_start_time ASC
-            """,
-            [polygon, survey_id]
+            """, [polygon, survey_id]
         )
+
         return self.db.cursor.fetchall()
 
-    def get_files_with_condition(self, survey_id: int, condition: str) -> list:
+    def get_files_list_with_condition(self, survey_id: int, condition: str) -> list:
         query = f'''
             SELECT file_name
             FROM {self.table_name}
@@ -396,30 +397,17 @@ class FileSegmentService:
 
         return [row[0] for row in self.db.cursor.fetchall()]
 
-    def fetch_location_data_by_survey_id(self, survey_id: int) -> list:
-        """
-        Fetch location data for all files associated with a given survey ID.
-
-        Parameters
-        ----------
-        survey_id : int
-            The ID of the survey to fetch location data for.
-
-        Returns
-        -------
-        list
-            A list of location_data dictionaries from the database.
-        """
+    def get_files_data_with_dates(self, survey_id: int, start_datetime: datetime, end_datetime: datetime) -> list:
         query = f'''
-            SELECT location_data
+            SELECT location, file_name, id, location_data, file_freqs, file_start_time, file_end_time
             FROM {self.table_name}
-            WHERE survey_db_id = %s AND location_data IS NOT NULL
+            WHERE survey_db_id = %s AND file_start_time > '%s' AND file_end_time < '%s'
+            ORDER BY size ASC
         '''
 
-        self.db.cursor.execute(query, (survey_id,))
-        rows = self.db.cursor.fetchall()
+        self.db.cursor.execute(query, (survey_id, start_datetime, end_datetime))
 
-        return [row[0] for row in rows]
+        return self.db.cursor.fetchall()
 
     def get_files_by_survey_id(self, survey_id: int) -> list:
         """
