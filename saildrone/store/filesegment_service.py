@@ -48,11 +48,22 @@ class FileSegmentService:
         dict
             A dictionary containing information about the file.
         """
-        self.db.cursor.execute(f'SELECT id, size, converted, processed, location, file_name, id, location_data, file_freqs, file_start_time, file_end_time FROM {self.table_name} WHERE file_name=%s', (file_name,))
+        self.db.cursor.execute(f'SELECT id, size, converted, processed, location, file_name, location_data, file_freqs, file_start_time, file_end_time FROM {self.table_name} WHERE file_name=%s', (file_name,))
         row = self.db.cursor.fetchone()
 
         if row:
-            return {'id': row[0], 'size': row[1], 'converted': row[2], 'processed': row[3]}
+            return {
+                'id': row[0],
+                'size': row[1],
+                'converted': row[2],
+                'processed': row[3],
+                'location': row[4],
+                'file_name': row[5],
+                'location_data': row[6],
+                'file_freqs': row[7],
+                'file_start_time': row[8],
+                'file_end_time': row[9]
+            }
 
         return None
 
