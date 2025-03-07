@@ -35,6 +35,27 @@ class FileSegmentService:
         self.db.cursor.execute(f'SELECT id FROM {self.table_name} WHERE file_name=%s AND processed=TRUE', (file_name,))
         return self.db.cursor.fetchone() is not None
 
+    def get_file_metadata(self, file_name: str):
+        """
+        Get metadata for a file from the database.
+        Parameters
+        ----------
+        file_name : str
+            The name of the file to check.
+
+        Returns
+        -------
+        dict
+            A dictionary containing information about the file.
+        """
+        self.db.cursor.execute(f'SELECT id, size, converted, processed, location, file_name, id, location_data, file_freqs, file_start_time, file_end_time FROM {self.table_name} WHERE file_name=%s', (file_name,))
+        row = self.db.cursor.fetchone()
+
+        if row:
+            return {'id': row[0], 'size': row[1], 'converted': row[2], 'processed': row[3]}
+
+        return None
+
     def get_file_info(self, file_name: str):
         """
         Get information about a file from the database.
@@ -195,9 +216,9 @@ class FileSegmentService:
         """
         self.db.cursor.execute('''
             INSERT INTO files (
-                file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time, 
-                file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, 
-                file_end_lat, file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms, 
+                file_name, size, location, processed, converted, last_modified, file_npings, file_nsamples, file_start_time,
+                file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon,
+                file_end_lat, file_end_lon, echogram_files, failed, error_details, location_data, processing_time_ms,
                 survey_db_id, downloaded
             ) VALUES (%s, %s, %s, FALSE, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         ''', (file_name, size, location, converted, last_modified, file_npings, file_nsamples, file_start_time,
