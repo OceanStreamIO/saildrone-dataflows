@@ -3,6 +3,8 @@ import logging
 import xarray as xr
 from pathlib import Path
 from saildrone.store import PostgresDB, FileSegmentService
+from saildrone.process.plot import plot_sv_data
+
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -11,6 +13,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 ZARR_ROOT = Path("./rekaexport")
 OUTPUT_DIR = Path("./netcdf_output")
 OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+# Define where plots should be saved
+PLOT_OUTPUT_DIR = "./echogram_plots"
+os.makedirs(PLOT_OUTPUT_DIR, exist_ok=True)
+
+def plot_netcdf(netcdf_path):
+    """Loads a NetCDF file and plots the echogram."""
+    ds = xr.open_dataset(netcdf_path)
+    file_base_name = os.path.basename(netcdf_path).replace(".nc", "")
+
+    # Generate echograms for each channel
+    plot_sv_data(ds, file_base_name=file_base_name, output_path=PLOT_OUTPUT_DIR, depth_var="depth")
+
+    print(f"Plots saved in: {PLOT_OUTPUT_DIR}")
 
 # Function to find valid file IDs
 def find_valid_ids(base_directory):
@@ -74,5 +91,8 @@ if __name__ == "__main__":
         metadata = fetch_metadata(file_id)
         ds_merged = open_and_merge_zarr(normal_zarr, denoised_zarr, metadata)
         save_to_netcdf(ds_merged, output_file)
+
+        # Plot the newly created NetCDF file
+        plot_netcdf(output_file)
 
     logging.info("Processing complete.")
