@@ -64,6 +64,9 @@ def plot_netcdf(netcdf_path):
     """Loads a NetCDF file and plots the echogram."""
     ds = xr.open_dataset(netcdf_path)
     file_base_name = netcdf_path.stem
+
+    print(f"Plotting echograms for {file_base_name}\n{ds}")
+
     plot_sv_data(ds, file_base_name=file_base_name, output_path=PLOT_OUTPUT_DIR, depth_var="depth")
     logging.info(f"Plots saved in: {PLOT_OUTPUT_DIR}")
 
@@ -78,12 +81,12 @@ if __name__ == "__main__":
             normal_ds = combine_zarr_files(data["normal"])
             output_file = OUTPUT_DIR / f"{category}.nc"
             save_to_netcdf(normal_ds, output_file)
-            # plot_netcdf(output_file)
+            plot_netcdf(output_file)
 
         if data["denoised"]:
             denoised_ds = combine_zarr_files(data["denoised"])
             output_file = OUTPUT_DIR / f"{category}_denoised.nc"
             save_to_netcdf(denoised_ds, output_file)
-            # plot_netcdf(output_file)
+            plot_netcdf(output_file)
 
     logging.info("Processing complete.")
