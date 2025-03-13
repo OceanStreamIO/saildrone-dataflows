@@ -8,19 +8,91 @@ import zarr
 
 
 def merge_location_data(dataset: xr.Dataset, location_data):
+    """Merge location data into the dataset while ensuring it's a variable, not just an attribute."""
     # Convert location_data to a Pandas DataFrame
     location_df = pd.DataFrame(location_data)
 
     # Convert timestamp strings to datetime objects
     location_df['dt'] = pd.to_datetime(location_df['dt'])
 
-    # Create xarray variables from the location data
-    dataset['latitude'] = xr.DataArray(location_df['lat'].values, dims='time',
-                                       coords={'time': location_df['dt'].values})
-    dataset['longitude'] = xr.DataArray(location_df['lon'].values, dims='time',
-                                        coords={'time': location_df['dt'].values})
-    dataset['speed_knots'] = xr.DataArray(location_df['knt'].values, dims='time',
-                                          coords={'time': location_df['dt'].values})
+    # Determine which time dimension to use
+    time_dim = "ping_time" if "ping_time" in dataset.dims else "time" if "time" in dataset.dims else None
+    if not time_dim:
+        return dataset  # Return without merging if no time dimension exists
+
+    # Interpolate location data to match dataset time
+    target_times = dataset[time_dim].values
+
+    lat_interp = np.interp(
+        np.array(pd.to_datetime(target_times).astype(int)),
+        np.array(location_df["dt"].astype(int)),
+        location_df["lat"]
+    )
+
+    lon_interp = np.interp(
+        np.array(pd.to_datetime(target_times).astype(int)),
+        np.array(location_df["dt"].astype(int)),
+        location_df["lon"]
+    )
+
+    speed_interp = np.interp(
+        np.array(pd.to_datetime(target_times).astype(int)),
+        np.array(location_df["dt"].astype(int)),
+        location_df["knt"]
+    )
+
+    # Ensure latitude is stored as a variable, not just an attribute
+    dataset['latitude'] = xr.DataArray(lat_interp, dims=time_dim, coords={time_dim: target_times})
+    dataset['longitude'] = xr.DataArray(lon_interp, dims=time_dim, coords={time_dim: target_times})
+    dataset['speed_knots'] = xr.DataArray(speed_interp, dims=time_dim, coords={time_dim: target_times})
+
+    # Debugging: Print dataset variables after merging
+
+    return dataset
+
+
+def xmerge_location_data(dataset: xr.Dataset, location_data):
+    """Merge location data into the dataset while ensuring time alignment using interpolation."""
+    # Convert location_data to a Pandas DataFrame
+    location_df = pd.DataFrame(location_data)
+
+    # Convert timestamp strings to datetime objects
+    location_df['dt'] = pd.to_datetime(location_df['dt'])
+
+    if "ping_time" in dataset.dims:
+        # Interpolate location data to match 'ping_time'
+        target_times = dataset["ping_time"].values
+
+        lat_interp = np.interp(
+            np.array(pd.to_datetime(target_times).astype(int)),
+            np.array(location_df["dt"].astype(int)),
+            location_df["lat"]
+        )
+
+        lon_interp = np.interp(
+            np.array(pd.to_datetime(target_times).astype(int)),
+            np.array(location_df["dt"].astype(int)),
+            location_df["lon"]
+        )
+
+        speed_interp = np.interp(
+            np.array(pd.to_datetime(target_times).astype(int)),
+            np.array(location_df["dt"].astype(int)),
+            location_df["knt"]
+        )
+
+        dataset['latitude'] = xr.DataArray(lat_interp, dims="ping_time", coords={"ping_time": target_times})
+        dataset['longitude'] = xr.DataArray(lon_interp, dims="ping_time", coords={"ping_time": target_times})
+        dataset['speed_knots'] = xr.DataArray(speed_interp, dims="ping_time", coords={"ping_time": target_times})
+
+    else:
+        # Default behavior: Assign location data based on its own timestamps
+        dataset['latitude'] = xr.DataArray(location_df['lat'].values, dims='time',
+                                           coords={'time': location_df['dt'].values})
+        dataset['longitude'] = xr.DataArray(location_df['lon'].values, dims='time',
+                                            coords={'time': location_df['dt'].values})
+        dataset['speed_knots'] = xr.DataArray(location_df['knt'].values, dims='time',
+                                              coords={'time': location_df['dt'].values})
 
     return dataset
 

@@ -7,6 +7,8 @@ from collections import defaultdict
 
 from saildrone.store import PostgresDB, FileSegmentService
 from saildrone.process.plot import plot_sv_data
+from saildrone.process.concat import merge_location_data
+from echopype.commongrid import compute_NASC, compute_MVBS
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -48,10 +50,35 @@ def find_valid_ids(base_directory):
     return grouped_files
 
 # Function to combine datasets per frequency
-def combine_zarr_files(zarr_files):
+def combine_zarr_files(zarr_files, metadata):
     """Loads and combines multiple Zarr files while ensuring consistent dimension alignment."""
     datasets = [xr.open_zarr(f) for f in zarr_files]
-    return xr.concat(datasets, dim="ping_time")
+
+    # Merge location data for each dataset
+    for i, ds in enumerate(datasets):
+        location_data = metadata[i].get("location_data", {})
+        # datasets[i] = merge_location_data(ds, location_data)
+
+        if "time" in ds.dims:
+            datasets[i] = ds.drop_dims("time", errors="ignore")
+
+        if "filenames" in ds.dims:
+            datasets[i] = ds.drop_dims("filenames", errors="ignore")
+
+    sorted_datasets = sorted(datasets, key=lambda ds: ds["ping_time"].min().values)
+
+    # sorted_datasets = [
+    #     ds.rename({"source_filenames": f"source_filenames_{i}"})
+    #     for i, ds in enumerate(sorted_datasets)
+    # ]
+
+    # Concatenate along the specified dimension
+    concatenated_ds = xr.merge(sorted_datasets)
+
+    if "ping_time" in concatenated_ds.dims and "time" in concatenated_ds.dims:
+        concatenated_ds = concatenated_ds.drop_vars("time", errors="ignore")
+
+    return concatenated_ds
 
 # Function to save as NetCDF
 def save_to_netcdf(dataset, output_path):
@@ -78,15 +105,73 @@ if __name__ == "__main__":
 
         print(f"\n\n---- Processing category: {category}----\n\n")
         if data["normal"]:
-            normal_ds = combine_zarr_files(data["normal"])
+            normal_ds = combine_zarr_files(data["normal"], data["metadata"])
             output_file = OUTPUT_DIR / f"{category}.nc"
+            output_file_mvbs = OUTPUT_DIR / f"{category}_MVBS.nc"
+            output_file_nasc = OUTPUT_DIR / f"{category}_NASC.nc"
+            # netcdf
             save_to_netcdf(normal_ds, output_file)
             plot_netcdf(output_file)
 
+            # MVBS
+            # ds_MVBS = compute_MVBS(
+            #     normal_ds,
+            #     range_var="depth",
+            #     range_bin='1m',  # in meters
+            #     ping_time_bin='5s',  # in seconds
+            # )
+            # save_to_netcdf(ds_MVBS, output_file_mvbs)
+            # plot_netcdf(output_file_mvbs)
+
+            # # NASC
+            # ds_NASC = compute_NASC(
+            #     normal_ds,
+            #     range_bin="10m",
+            #     dist_bin="0.5nmi"
+            # )
+            # # Log-transform the NASC values for plotting
+            # ds_NASC["NASC_log"] = 10 * np.log10(ds_NASC["NASC"])
+            # ds_NASC["NASC_log"].attrs = {
+            #     "long_name": "Log of NASC",
+            #     "units": "m2 nmi-2"
+            # }
+            # save_to_netcdf(ds_NASC, output_file_nasc)
+            # plot_netcdf(output_file_nasc)
+
+
+
         if data["denoised"]:
-            denoised_ds = combine_zarr_files(data["denoised"])
-            output_file = OUTPUT_DIR / f"{category}_denoised.nc"
-            save_to_netcdf(denoised_ds, output_file)
-            plot_netcdf(output_file)
+            denoised_ds = combine_zarr_files(data["denoised"], data["metadata"])
+            output_file_denoised = OUTPUT_DIR / f"{category}_denoised.nc"
+            output_file_denoised_mvbs = OUTPUT_DIR / f"{category}_denoised_MVBS.nc"
+            output_file_denoised_nasc = OUTPUT_DIR / f"{category}_denoised_NASC.nc"
+
+            # MVBS
+            # ds_MVBS = compute_MVBS(
+            #     denoised_ds,
+            #     range_var="depth",
+            #     range_bin='1m',  # in meters
+            #     ping_time_bin='5s',  # in seconds
+            # )
+            # save_to_netcdf(ds_MVBS, output_file_denoised_mvbs)
+            # plot_netcdf(output_file_denoised_mvbs)
+
+            # NASC
+            # ds_NASC = compute_NASC(
+            #     denoised_ds,
+            #     range_bin="10m",
+            #     dist_bin="0.5nmi"
+            # )
+            # # Log-transform the NASC values for plotting
+            # ds_NASC["NASC_log"] = 10 * np.log10(ds_NASC["NASC"])
+            # ds_NASC["NASC_log"].attrs = {
+            #     "long_name": "Log of NASC",
+            #     "units": "m2 nmi-2"
+            # }
+            # save_to_netcdf(ds_NASC, output_file_denoised_nasc)
+            # plot_netcdf(output_file_denoised_nasc)
+
+            save_to_netcdf(denoised_ds, output_file_denoised)
+            plot_netcdf(output_file_denoised)
 
     logging.info("Processing complete.")
