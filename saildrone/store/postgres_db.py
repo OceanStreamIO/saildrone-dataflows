@@ -167,6 +167,21 @@ class PostgresDB:
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_survey_id ON nasc_values (survey_id);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_geom ON nasc_values USING GIST (geom);")
 
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nasc_points_2d (
+                id SERIAL PRIMARY KEY,
+                file_id INT NOT NULL,
+                survey_id INT NOT NULL,
+                ping_time TIMESTAMP NOT NULL,
+                avg_depth FLOAT NOT NULL,
+                nasc_value_avg FLOAT NOT NULL,
+                geom GEOMETRY(Point, 4326) NOT NULL
+            );
+        """)
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_file_id ON nasc_points_2d (file_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_survey_id ON nasc_points_2d (survey_id);")
+        self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_geom ON nasc_points_2d USING GIST (geom);")
+
         self.conn.commit()
 
     def is_file_processed(self, file_name: str) -> bool:

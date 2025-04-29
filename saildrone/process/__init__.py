@@ -7,6 +7,7 @@ from .location import extract_location_data, extract_start_end_lat_lon
 from .process_gps import (consolidate_csv_to_geoparquet_partitioned, query_location_points_between_timestamps,
                           save_to_partitioned_geoparquet, extract_start_end_coordinates)
 from .process_geo_location import create_geodataframe_from_location_data
+from .seabed import get_seabed_mask_multichannel
 
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     'convert_file_and_save',
     'save_to_partitioned_geoparquet',
     'create_geodataframe_from_location_data',
-    'extract_start_end_lat_lon'
+    'extract_start_end_lat_lon',
+    'get_seabed_mask_multichannel'
 ]

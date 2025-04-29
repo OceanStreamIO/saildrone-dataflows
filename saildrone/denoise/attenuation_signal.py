@@ -100,8 +100,6 @@ def echopy_attenuated_signal_mask(
     attenuation_signal_threshold: float,
 ) -> np.ndarray:
     """Single-channel attenuated signal mask computation from echopy."""
-    print(f"Input Sv.shape: {Sv.shape}, range_var.shape: {range_var.shape}")
-
     attenuated_mask = np.zeros(Sv.shape, dtype=bool)
 
     for ping_time_idx in range(Sv.shape[0]):

@@ -6,6 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
+import dask.array as da
 
 from saildrone.store import upload_folder_to_blob_storage
 
@@ -69,11 +70,19 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
     # Extract relevant data and configure axis
     filtered_ds = ds_Sv['Sv']
+
     if 'beam' in filtered_ds.dims:
         filtered_ds = filtered_ds.isel(beam=0).drop('beam')
 
     if 'channel' in filtered_ds.coords:
-        filtered_ds = filtered_ds.assign_coords({'frequency': ds_Sv.frequency_nominal})
+        # Ensure frequency is fully computed for swap_dims
+        if 'frequency' in ds_Sv.coords:
+            freq = ds_Sv['frequency']
+            if isinstance(freq.data, da.Array):
+                freq = freq.compute()
+
+            filtered_ds = filtered_ds.assign_coords(frequency=("channel", np.asarray(freq)))
+
         try:
             filtered_ds = filtered_ds.swap_dims({'channel': 'frequency'})
             # if filtered_ds.frequency.size == 1:

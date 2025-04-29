@@ -18,12 +18,12 @@ from echopype.commongrid import compute_NASC, compute_MVBS
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage)
 from saildrone.azure_iot import serialize_location_data
-
 from saildrone.denoise import (get_impulse_noise_mask,
                                create_multichannel_mask,
                                get_attenuation_mask,
                                remove_background_noise as remove_background_noise_func)
 
+from .seabed import get_seabed_mask_multichannel
 from .plot import plot_and_upload_echograms
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
@@ -128,6 +128,7 @@ def _process_file_workflow(
     gps_container_name = kwargs.get("gps_container_name")
     compute_nasc_opt = kwargs.get("compute_nasc", False)
     compute_mvbs_opt = kwargs.get("compute_mvbs", False)
+    apply_seabed_mask = kwargs.get("apply_seabed_mask", False)
 
     if load_from_blobstorage is True:
         zarr_path = str(source_path)
@@ -191,6 +192,10 @@ def _process_file_workflow(
 
     sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
 
+    if sv_dataset_denoised is not None and apply_seabed_mask:
+        seabed_mask = get_seabed_mask_multichannel(sv_dataset_denoised)
+        sv_dataset_denoised = apply_mask(sv_dataset_denoised, seabed_mask, var_name="Sv")
+
     if sv_dataset_denoised is not None and plot_echograms:
         echogram_files_denoised = plot_and_upload_echograms(sv_dataset_denoised,
                                                             cruise_id=cruise_id,
@@ -202,7 +207,6 @@ def _process_file_workflow(
                                                             cmap=colormap,
                                                             container_name=echograms_container)
         echogram_files.extend(echogram_files_denoised)
-
     #####################################################################
     # 4. Compute MVBS
     #####################################################################
@@ -342,7 +346,8 @@ def _process_file_workflow(
     with PostgresDB() as db_connection:
         if ds_NASC:
             nasc_service = NASCPointService(db_connection)
-            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC)
+            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=False, clearTables=True)
+            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=True)
 
         file_segment_service = FileSegmentService(db_connection)
         file_segment_service.update_file_record(
@@ -363,6 +368,8 @@ def _save_processed_data(
     save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
+    sv_dataset = sv_dataset.chunk({"channel": 1, "ping_time": 512, "depth": 1024})
+
     if processed_container_name and save_to_blobstorage:
         sv_zarr_path = base_file_name and f"{cruise_id}/{base_file_name}/{file_name}.zarr" or f"{cruise_id}/{file_name}.zarr"
         zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
@@ -504,11 +511,12 @@ def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, 
                                  chunks=chunks)
 
     sv_dataset = sv_computation(echodata, waveform_mode=waveform_mode, encode_mode=encode_mode)
-    sv_dataset = enrich_sv_dataset(sv_dataset, echodata, depth_offset=depth_offset)
+    sv_dataset = enrich_sv_dataset(sv_dataset, echodata, depth_offset=depth_offset, waveform_mode=waveform_mode,
+                                   encode_mode=encode_mode)
     sv_dataset = sv_dataset.chunk({
         'channel': 2,
         'ping_time': 1000,
-        'depth': 500
+        'depth': 1000
     })
 
     return sv_dataset
@@ -536,9 +544,7 @@ def enrich_sv_dataset(sv: xr.Dataset, echodata, **kwargs) -> xr.Dataset:
 
     splitbeam_keys = [
         "waveform_mode",
-        "encode_mode",
-        "pulse_compression",
-        "storage_options"
+        "encode_mode"
     ]
     splitbeam_args = {k: kwargs.get(k) for k in splitbeam_keys}
 
@@ -548,7 +554,7 @@ def enrich_sv_dataset(sv: xr.Dataset, echodata, **kwargs) -> xr.Dataset:
         logging.warning(f"Failed to add location due to error: {str(e)}", exc_info=True)
 
     try:
-        sv = add_splitbeam_angle(sv, echodata, **splitbeam_args)
+        sv = add_splitbeam_angle(sv, echodata, to_disk=False, pulse_compression=False, **splitbeam_args)
     except (KeyError, ValueError) as e:
         logging.warning(f"Failed to add split-beam angle due to error: {str(e)}", exc_info=True)
 

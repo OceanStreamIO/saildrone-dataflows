@@ -75,13 +75,28 @@ def concatenate_and_rechunk(paths, dim="ping_time", chunks=None):
         ]
 
         # Concatenate along the specified dimension
-        concatenated_ds = xr.merge(sorted_datasets)
+        concatenated_ds = xr.concat(sorted_datasets, dim=dim)
 
-        # if 'frequency_nominal' in concatenated_ds:
-        #     frequency_1d = concatenated_ds.frequency_nominal.values[0, :]
-        #     concatenated_ds = concatenated_ds.assign_coords(frequency=('channel', frequency_1d))
-        # else:
-        #     print('frequency_nominal not in concatenated_ds')
+        if 'frequency_nominal' in concatenated_ds:
+            freq = concatenated_ds.frequency_nominal
+
+            if freq.ndim == 2:
+                # Ensure unique across files, collapse to 1D if possible
+                unique_rows = np.unique(freq.values, axis=0)
+                if unique_rows.shape[0] == 1:
+                    frequency_1d = unique_rows[0]
+                else:
+                    print("Multiple frequency_nominal rows found; using first row.")
+                    frequency_1d = freq.values[0]
+            else:
+                frequency_1d = freq.values
+
+            frequency_1d = np.asarray(frequency_1d).astype(np.float64)
+            concatenated_ds = concatenated_ds.assign_coords({
+                "frequency": ("channel", frequency_1d)
+            })
+        else:
+            print('frequency_nominal not in concatenated_ds')
 
         return concatenated_ds.chunk(chunks)
 

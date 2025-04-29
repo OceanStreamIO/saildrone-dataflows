@@ -44,7 +44,8 @@ def remove_background_noise(
     Sv_noise = estimate_background_noise(
         ds_Sv, ping_num, range_sample_num, background_noise_max=background_noise_max
     )
-    Sv_noise = Sv_noise.clip(min=-120, max=-60)
+
+    ds_Sv = ds_Sv.assign(sound_absorption=0.001)
 
     # Step 2: Convert Sv and noise to linear scale
     linear_Sv = 10 ** (ds_Sv["Sv"] / 10)

@@ -54,13 +54,13 @@ def test_file_workflow_saildrone():
         threshold=12.0
     )
     background_noise_opts = dict(
-        ping_num=20,
-        range_sample_num=50,
+        ping_num=5,
+        range_sample_num=30,
         background_noise_max=None,
         SNR_threshold=3.0
     )
 
-    chunks = {'ping_time': 1000, 'range_sample': 1000}
+    chunks = {'ping_time': 2000, 'range_sample': 2000}
     chunks_denoising = {'ping_time': 1000, 'depth': 1000}
 
     payload = process_converted_file(
@@ -82,12 +82,13 @@ def test_file_workflow_saildrone():
         waveform_mode=waveform_mode,
         compute_nasc=False,
         compute_mvbs=False,
-        colormap='ocean',
+        colormap='ocean_r',
         # mask_transient_noise=transient_noise_opts,
         mask_impulse_noise=impulse_noise_opts,
-        # mask_attenuated_signal=attenuated_signal_opts,
-        # remove_background_noise=background_noise_opts,
-        chunks_denoising=chunks_denoising
+        mask_attenuated_signal=attenuated_signal_opts,
+        remove_background_noise=background_noise_opts,
+        chunks_denoising=chunks_denoising,
+        apply_seabed_mask=False,
     )
 
     print(payload)
