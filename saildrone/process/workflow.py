@@ -23,7 +23,7 @@ from saildrone.denoise import (get_impulse_noise_mask,
                                get_attenuation_mask,
                                remove_background_noise as remove_background_noise_func)
 
-from .seabed import get_seabed_mask_multichannel
+#from .seabed import get_seabed_mask_multichannel
 from .plot import plot_and_upload_echograms
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
@@ -192,9 +192,9 @@ def _process_file_workflow(
 
     sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
 
-    if sv_dataset_denoised is not None and apply_seabed_mask:
-        seabed_mask = get_seabed_mask_multichannel(sv_dataset_denoised)
-        sv_dataset_denoised = apply_mask(sv_dataset_denoised, seabed_mask, var_name="Sv")
+    # if sv_dataset_denoised is not None and apply_seabed_mask:
+    #     seabed_mask = get_seabed_mask_multichannel(sv_dataset_denoised)
+    #     sv_dataset_denoised = apply_mask(sv_dataset_denoised, seabed_mask, var_name="Sv")
 
     if sv_dataset_denoised is not None and plot_echograms:
         echogram_files_denoised = plot_and_upload_echograms(sv_dataset_denoised,
