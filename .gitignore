@@ -121,3 +121,8 @@ raw-data/
 calibration/*.ecs
 calibration/*.xlsx
 
+# the .zarr files Reka wanted to be exported as .nc
+rekaexport/*
+netcdf_output/*
+
+
