@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from dask.distributed import Client
 from prefect import flow, task
+from prefect.futures import as_completed
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
@@ -42,6 +43,8 @@ BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
 CHUNKS = {"ping_time": 500, "range_sample": -1}
 CHUNKS_DENOISING = {"ping_time": 500, "depth": 500}
+DEFAULT_TASK_TIMEOUT = 3_600
+MAX_RUNTIME_SECONDS = 3_300
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 if not AZURE_STORAGE_CONNECTION_STRING:
@@ -92,6 +95,7 @@ class RemoveBackgroundNoise(DenoiseOptions):
     retry_jitter_factor=0.1,
     refresh_cache=True,
     result_storage=None,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="process-{source_path.stem}",
 )
 def process_single_file(source_path: Path, **kwargs):
@@ -253,35 +257,77 @@ def load_and_process_files_to_zarr(source_directory: str,
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
 
+    in_flight = []
+
+    for src in files_list:
+        # Submit task
+        future = process_single_file.submit(src,
+                                            cruise_id=cruise_id,
+                                            load_from_blobstorage=load_from_blobstorage,
+                                            source_container=source_container,
+                                            output_container=output_container,
+                                            reprocess=reprocess,
+                                            plot_echograms=plot_echograms,
+                                            compute_nasc=compute_nasc,
+                                            compute_mvbs=compute_mvbs,
+                                            echograms_container=echograms_container,
+                                            save_to_blobstorage=save_to_blobstorage,
+                                            save_to_directory=save_to_directory,
+                                            output_directory=output_directory,
+                                            encode_mode=encode_mode,
+                                            colormap=colormap,
+                                            waveform_mode=waveform_mode,
+                                            depth_offset=depth_offset,
+                                            chunks_ping_time=chunks_ping_time,
+                                            chunks_range_sample=chunks_range_sample,
+                                            mask_impulse_noise=mask_impulse_noise,
+                                            mask_attenuated_signal=mask_attenuated_signal,
+                                            mask_transient_noise=mask_transient_noise,
+                                            remove_background_noise=remove_background_noise,
+                                            apply_seabed_mask=apply_seabed_mask
+                                            )
+        in_flight.append(future)
+
+        # Throttle when max concurrent tasks reached
+        if len(in_flight) >= batch_size:
+            finished = next(as_completed(in_flight))
+            in_flight.remove(finished)
+
+    # Wait for remaining tasks
+    for future_task in in_flight:
+        future_task.result()
+
+    # wait(in_flight)
+
     # Process files in batches
-    for i in range(0, total_files, batch_size):
-        batch_files = files_list[i:i + batch_size]
-        print(f"Processing batch {i // batch_size + 1}")
-        process_raw_data(batch_files,
-                         cruise_id=cruise_id,
-                         load_from_blobstorage=load_from_blobstorage,
-                         source_container=source_container,
-                         output_container=output_container,
-                         reprocess=reprocess,
-                         plot_echograms=plot_echograms,
-                         compute_nasc=compute_nasc,
-                         compute_mvbs=compute_mvbs,
-                         echograms_container=echograms_container,
-                         save_to_blobstorage=save_to_blobstorage,
-                         save_to_directory=save_to_directory,
-                         output_directory=output_directory,
-                         encode_mode=encode_mode,
-                         colormap=colormap,
-                         waveform_mode=waveform_mode,
-                         depth_offset=depth_offset,
-                         chunks_ping_time=chunks_ping_time,
-                         chunks_range_sample=chunks_range_sample,
-                         mask_impulse_noise=mask_impulse_noise,
-                         mask_attenuated_signal=mask_attenuated_signal,
-                         mask_transient_noise=mask_transient_noise,
-                         remove_background_noise=remove_background_noise,
-                         apply_seabed_mask=apply_seabed_mask
-                         )
+    # for i in range(0, total_files, batch_size):
+    #     batch_files = files_list[i:i + batch_size]
+    #     print(f"Processing batch {i // batch_size + 1}")
+    #     process_raw_data(batch_files,
+    #                      cruise_id=cruise_id,
+    #                      load_from_blobstorage=load_from_blobstorage,
+    #                      source_container=source_container,
+    #                      output_container=output_container,
+    #                      reprocess=reprocess,
+    #                      plot_echograms=plot_echograms,
+    #                      compute_nasc=compute_nasc,
+    #                      compute_mvbs=compute_mvbs,
+    #                      echograms_container=echograms_container,
+    #                      save_to_blobstorage=save_to_blobstorage,
+    #                      save_to_directory=save_to_directory,
+    #                      output_directory=output_directory,
+    #                      encode_mode=encode_mode,
+    #                      colormap=colormap,
+    #                      waveform_mode=waveform_mode,
+    #                      depth_offset=depth_offset,
+    #                      chunks_ping_time=chunks_ping_time,
+    #                      chunks_range_sample=chunks_range_sample,
+    #                      mask_impulse_noise=mask_impulse_noise,
+    #                      mask_attenuated_signal=mask_attenuated_signal,
+    #                      mask_transient_noise=mask_transient_noise,
+    #                      remove_background_noise=remove_background_noise,
+    #                      apply_seabed_mask=apply_seabed_mask
+    #                      )
 
     logging.info("All batches have been processed.")
 
