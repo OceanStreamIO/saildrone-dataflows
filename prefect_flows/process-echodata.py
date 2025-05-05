@@ -3,6 +3,7 @@ import os
 import sys
 import traceback
 from datetime import datetime
+from dask.distributed import get_worker
 
 from pathlib import Path
 from typing import List, Optional, Union
@@ -89,18 +90,21 @@ class RemoveBackgroundNoise(DenoiseOptions):
 
 
 @task(
-    retries=10,
-    retry_delay_seconds=[10, 60, 120],
+    retries=3,
+    retry_delay_seconds=60,
     cache_policy=input_cache_policy,
     retry_jitter_factor=0.1,
     refresh_cache=True,
     result_storage=None,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    log_prints=True,
     task_run_name="process-{source_path.stem}",
 )
 def process_single_file(source_path: Path, **kwargs):
-
     try:
+        worker = get_worker()
+        print(f"Running on Dask worker: {worker.address}")
+
         cruise_id = kwargs.get('cruise_id')
         load_from_blobstorage = kwargs.get('load_from_blobstorage')
         source_container = kwargs.get('source_container')
