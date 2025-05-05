@@ -3,6 +3,7 @@ import os
 import sys
 import traceback
 from datetime import datetime
+from dask.distributed import get_worker
 
 from pathlib import Path
 from typing import List, Optional, Union
@@ -101,6 +102,9 @@ class RemoveBackgroundNoise(DenoiseOptions):
 )
 def process_single_file(source_path: Path, **kwargs):
     try:
+        worker = get_worker()
+        print(f"Running on Dask worker: {worker.address}")
+
         cruise_id = kwargs.get('cruise_id')
         load_from_blobstorage = kwargs.get('load_from_blobstorage')
         source_container = kwargs.get('source_container')
