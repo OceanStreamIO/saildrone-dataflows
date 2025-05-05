@@ -43,7 +43,7 @@ BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
 CHUNKS = {"ping_time": 500, "range_sample": -1}
 CHUNKS_DENOISING = {"ping_time": 500, "depth": 500}
-DEFAULT_TASK_TIMEOUT = 3_600
+DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
 AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
@@ -90,7 +90,7 @@ class RemoveBackgroundNoise(DenoiseOptions):
 
 @task(
     retries=10,
-    retry_delay_seconds=[10, 30, 60],
+    retry_delay_seconds=[10, 60, 120],
     cache_policy=input_cache_policy,
     retry_jitter_factor=0.1,
     refresh_cache=True,
