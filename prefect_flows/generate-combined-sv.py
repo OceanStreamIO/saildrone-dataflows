@@ -138,25 +138,20 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
     return results
 
 
-def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=None, batch_size=10, temp_container_name=None):
+def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=None, temp_container_name=None, batch_index=None):
     ds_list = {
         "short_pulse": [],
         "long_pulse": [],
         "exported_ds": []
     }
 
-    futures = []
-    for i in range(0, len(files), batch_size):
-        batch_files = files[i:i+batch_size]
-        future = process_batch.submit(batch_files, source_container_name, cruise_id, chunks, temp_container_name, i)
-        futures.append(future)
+    future = process_batch.submit(files, source_container_name, cruise_id, chunks, temp_container_name, batch_index)
+    batch_results = future.result()
 
-    for future in futures:
-        batch_results = future.result()
-        # Accumulate paths
-        ds_list["short_pulse"].extend(batch_results["short_pulse"])
-        ds_list["long_pulse"].extend(batch_results["long_pulse"])
-        ds_list["exported_ds"].extend(batch_results["exported_ds"])
+    # Accumulate paths
+    ds_list["short_pulse"].extend(batch_results["short_pulse"])
+    ds_list["long_pulse"].extend(batch_results["long_pulse"])
+    ds_list["exported_ds"].extend(batch_results["exported_ds"])
 
     short_pulse_ds = concatenate_and_rechunk(ds_list["short_pulse"], chunks=chunks) if ds_list["short_pulse"] else None
     long_pulse_ds = concatenate_and_rechunk(ds_list["long_pulse"], chunks=chunks) if ds_list["long_pulse"] else None
@@ -196,22 +191,39 @@ def load_and_process_files_to_zarr(cruise_id: str,
     temp_container_name = generate_container_name(cruise_id)
     ensure_container_exists(temp_container_name)
 
-    short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
-        files_list,
-        source_container,
-        cruise_id=cruise_id,
-        batch_size=batch_size,
-        temp_container_name=temp_container_name,
-        chunks=chunks)
+    for i in range(0, total_files, batch_size):
+        batch_files = files_list[i:i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}")
 
-    if short_pulse_ds:
-        save_zarr_store(short_pulse_ds, container_name=output_container, zarr_path=f"{cruise_id}/short_pulse.zarr")
+        short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+            batch_files,
+            source_container,
+            cruise_id=cruise_id,
+            temp_container_name=temp_container_name,
+            chunks=chunks,
+            batch_index=i
+        )
 
-    if long_pulse_ds:
-        save_zarr_store(long_pulse_ds, container_name=output_container, zarr_path=f"{cruise_id}/long_pulse.zarr")
+        if short_pulse_ds:
+            save_zarr_store(short_pulse_ds,
+                            container_name=output_container,
+                            zarr_path=f"{cruise_id}/short_pulse.zarr",
+                            mode="a",
+                            append_dim="ping_time")
 
-    if exported_ds:
-        save_zarr_store(exported_ds, container_name=output_container, zarr_path=f"{cruise_id}/{cruise_id}.zarr")
+        if long_pulse_ds:
+            save_zarr_store(long_pulse_ds,
+                            container_name=output_container,
+                            zarr_path=f"{cruise_id}/long_pulse.zarr",
+                            mode="a",
+                            append_dim="ping_time")
+
+        if exported_ds:
+            save_zarr_store(exported_ds,
+                            container_name=output_container,
+                            zarr_path=f"{cruise_id}/{cruise_id}.zarr",
+                            mode="a",
+                            append_dim="ping_time")
 
     logging.info("All batches have been processed.")
 

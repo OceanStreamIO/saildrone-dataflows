@@ -87,7 +87,7 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
         raise
 
 
-def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None):
+def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None):
     if container_name is not None and survey_id is not None:
         zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
     elif container_name is not None:
@@ -103,7 +103,10 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     if isinstance(echodata_or_sv_ds, xr.Dataset):
         # echodata_or_sv_ds.to_zarr(store=zarr_store, mode='w')
         rechunked_ds = echodata_or_sv_ds.chunk({dim: -1 for dim in echodata_or_sv_ds.dims})
-        rechunked_ds.to_zarr(store=zarr_store, mode='w')
+        if mode == "w":
+            rechunked_ds.to_zarr(store=zarr_store, mode='w')
+        elif mode == "a" and append_dim is not None:
+            rechunked_ds.to_zarr(store=zarr_store, mode='a', append_dim=append_dim)
     else:
         echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
