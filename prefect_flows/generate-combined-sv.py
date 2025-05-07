@@ -146,12 +146,10 @@ def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=
     }
 
     futures = []
-    # for i in range(0, len(files), batch_size):
-    i = 0
-    batch_files = files[i:i+batch_size]
-
-    future = process_batch.submit(batch_files, source_container_name, cruise_id, chunks, temp_container_name, i)
-    futures.append(future)
+    for i in range(0, len(files), batch_size):
+        batch_files = files[i:i+batch_size]
+        future = process_batch.submit(batch_files, source_container_name, cruise_id, chunks, temp_container_name, i)
+        futures.append(future)
 
     for future in futures:
         batch_results = future.result()
