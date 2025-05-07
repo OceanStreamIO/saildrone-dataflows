@@ -209,21 +209,21 @@ def load_and_process_files_to_zarr(cruise_id: str,
             save_zarr_store(short_pulse_ds,
                             container_name=output_container,
                             zarr_path=f"{cruise_id}/short_pulse.zarr",
-                            mode="a",
+                            mode=i == 0 and "w" or "a",
                             append_dim="ping_time")
 
         if long_pulse_ds:
             save_zarr_store(long_pulse_ds,
                             container_name=output_container,
                             zarr_path=f"{cruise_id}/long_pulse.zarr",
-                            mode="a",
+                            mode=i == 0 and "w" or "a",
                             append_dim="ping_time")
 
         if exported_ds:
             save_zarr_store(exported_ds,
                             container_name=output_container,
                             zarr_path=f"{cruise_id}/{cruise_id}.zarr",
-                            mode="a",
+                            mode=i == 0 and "w" or "a",
                             append_dim="ping_time")
 
     logging.info("All batches have been processed.")
