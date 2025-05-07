@@ -9,6 +9,7 @@ from dask.distributed import Client
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
+from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
 
 from saildrone.store import FileSegmentService
@@ -104,7 +105,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id, chunk
 
         create_markdown_artifact(markdown_report)
 
-        raise e
+        return Completed(message="Task completed with errors")
 
 
 @task(
