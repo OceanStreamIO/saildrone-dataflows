@@ -423,10 +423,11 @@ class FileSegmentService:
         list
             A list of location_data dictionaries from the database.
         """
+
         query = f'''
-            SELECT id, file_name, size, file_start_time, file_end_time
+            SELECT location, file_name, id, location_data, file_freqs, file_start_time, file_end_time
             FROM {self.table_name}
-            WHERE survey_db_id = %s
+            WHERE survey_db_id = %s AND processed = TRUE
             ORDER BY file_start_time ASC
         '''
 
@@ -435,11 +436,13 @@ class FileSegmentService:
 
         return [
             {
-                'id': row[0],
+                'location': row[0],
                 'file_name': row[1],
-                'size': row[2],
-                'file_start_time': row[3],
-                'file_end_time': row[4]
+                'id': row[2],
+                'location_data': row[3],
+                'file_freqs': row[4],
+                'file_start_time': row[5],
+                'file_end_time': row[6]
             }
             for row in rows
         ]

@@ -1,13 +1,13 @@
 import os
 import shutil
-
+import json
 import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
 
 
-def merge_location_data(dataset: xr.Dataset, location_data):
+def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
     # Convert location_data to a Pandas DataFrame
     location_df = pd.DataFrame(location_data)
 
@@ -63,44 +63,62 @@ def rechunk_datasets(datasets, chunks):
 
 def concatenate_and_rechunk(paths, dim="ping_time", chunks=None):
     """
-    Concatenate datasets from Zarr paths along the given dimension and rechunk.
+    Concatenate datasets from a mixed list containing
+    * Zarr paths (str),
+    * Zarr stores (BaseStore subclasses), or
+    * any MutableMapping store (e.g. fsspec.FSMap from Azure/GCS/S3)
+
+    Parameters
+    ----------
+    paths   : list[str | BaseStore | MutableMapping]
+    dim     : str
+        Dimension along which to concatenate.
+    chunks  : dict
+        Desired chunk layout for the output dataset.
+
+    Returns
+    -------
+    xarray.Dataset | None
     """
-    if paths and chunks:
-        datasets = [xr.open_zarr(path, chunks=chunks) for path in paths]
-        sorted_datasets = sorted(datasets, key=lambda ds: ds[dim].min().values)
+    if not paths or not chunks:
+        return None
 
-        sorted_datasets = [
-            ds.rename({"source_filenames": f"source_filenames_{i}"})
-            for i, ds in enumerate(sorted_datasets)
-        ]
+    datasets = [xr.open_zarr(path, chunks=chunks) for path in paths]
 
-        # Concatenate along the specified dimension
-        concatenated_ds = xr.concat(sorted_datasets, dim=dim)
+    datasets.sort(key=lambda ds: ds[dim].min().values)
+    # Avoid variable‑name collision for source_filenames
+    cleaned = [
+        ds.rename({"source_filenames": f"source_filenames_{i}"})
+        if "source_filenames" in ds else ds
+        for i, ds in enumerate(datasets)
+    ]
 
-        if 'frequency_nominal' in concatenated_ds:
-            freq = concatenated_ds.frequency_nominal
+    # Concatenate along the specified dimension
+    concatenated_ds = xr.concat(cleaned, dim=dim)
 
-            if freq.ndim == 2:
-                # Ensure unique across files, collapse to 1D if possible
-                unique_rows = np.unique(freq.values, axis=0)
-                if unique_rows.shape[0] == 1:
-                    frequency_1d = unique_rows[0]
-                else:
-                    print("Multiple frequency_nominal rows found; using first row.")
-                    frequency_1d = freq.values[0]
+    if 'frequency_nominal' in concatenated_ds:
+        freq = concatenated_ds.frequency_nominal
+
+        if freq.ndim == 2:
+            # Ensure unique across files, collapse to 1D if possible
+            unique_rows = np.unique(freq.values, axis=0)
+            if unique_rows.shape[0] == 1:
+                frequency_1d = unique_rows[0]
             else:
-                frequency_1d = freq.values
-
-            frequency_1d = np.asarray(frequency_1d).astype(np.float64)
-            concatenated_ds = concatenated_ds.assign_coords({
-                "frequency": ("channel", frequency_1d)
-            })
+                print("Multiple frequency_nominal rows found; using first row.")
+                frequency_1d = freq.values[0]
         else:
-            print('frequency_nominal not in concatenated_ds')
+            frequency_1d = freq.values
 
-        return concatenated_ds.chunk(chunks)
+        frequency_1d = np.asarray(frequency_1d).astype(np.float64)
+        concatenated_ds = concatenated_ds.assign_coords({
+            "frequency": ("channel", frequency_1d)
+        })
+    else:
+        print('frequency_nominal not in concatenated_ds')
 
-    return None
+    return concatenated_ds.chunk(chunks)
+
 
 
 

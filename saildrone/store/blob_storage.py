@@ -110,15 +110,16 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     return zarr_store
 
 
-def open_zarr_store(zarr_path, survey_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
+def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
     """Open a Zarr store from Azure Blob Storage."""
     azfs = get_azure_blob_filesystem()
 
-    if survey_id is not None:
-        zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
+    if cruise_id is not None:
+        zarr_path_full = f"{container_name}/{cruise_id}/{zarr_path}"
     else:
         zarr_path_full = f"{container_name}/{zarr_path}"
 
+    print('Opening Zarr store:', zarr_path_full)
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
 
