@@ -109,6 +109,12 @@ def process_single_file(file, file_name, source_container_name, cruise_id, chunk
 
 
 @task(
+    log_prints=True,
+    retries=2,
+    retry_delay_seconds=60,
+    retry_jitter_factor=0.1,
+    refresh_cache=True,
+    result_storage=None,
     task_run_name="process-batch-{batch_index}",
 )
 def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_container_name, batch_index):
@@ -191,21 +197,21 @@ def generate_combined_sv(cruise_id: str,
 
     temp_container_name = generate_container_name(cruise_id)
     ensure_container_exists(temp_container_name)
-
+    batch_index = 0
     for i in range(0, total_files, batch_size):
         batch_files = files_list[i:i + batch_size]
+        batch_index += 1
         print(f"Processing batch {i // batch_size + 1}")
 
-        short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
-            batch_files,
-            source_container,
-            cruise_id=cruise_id,
-            temp_container_name=temp_container_name,
-            chunks=chunks,
-            batch_index=i
-        )
-
         try:
+            short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+                batch_files,
+                source_container,
+                cruise_id=cruise_id,
+                temp_container_name=temp_container_name,
+                chunks=chunks,
+                batch_index=batch_index
+            )
 
             if short_pulse_ds:
                 save_zarr_store(short_pulse_ds,
