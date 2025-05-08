@@ -174,41 +174,45 @@ def concatenate_zarr_files(files, source_container_name, output_container, cruis
                            temp_container_name=None,
                            write_mode_dict=None,
                            batch_index=None):
-    ds_list = {
-        "short_pulse": [],
-        "long_pulse": [],
-        "exported_ds": []
-    }
 
     future = process_batch.submit(files, source_container_name, cruise_id, chunks, temp_container_name, batch_index)
     batch_results = future.result()
 
-    # Accumulate paths
-    ds_list["short_pulse"].extend(batch_results["short_pulse"])
-    ds_list["long_pulse"].extend(batch_results["long_pulse"])
-    ds_list["exported_ds"].extend(batch_results["exported_ds"])
-
-    short_pulse_ds = concatenate_and_rechunk(ds_list["short_pulse"], container_name=temp_container_name, chunks=chunks) if ds_list["short_pulse"] else None
-    long_pulse_ds = concatenate_and_rechunk(ds_list["long_pulse"], container_name=temp_container_name, chunks=chunks) if ds_list["long_pulse"] else None
-    exported_ds = concatenate_and_rechunk(ds_list["exported_ds"], container_name=temp_container_name, chunks=chunks) if ds_list["exported_ds"] else None
-
-    if short_pulse_ds:
+    if batch_results["short_pulse"]:
+        short_pulse_ds = concatenate_and_rechunk(batch_results["short_pulse"],
+                                                 container_name=temp_container_name,
+                                                 chunks=chunks)
         mode = get_write_mode("short_pulse", write_mode_dict)
+
+        print(f"Saving short pulse dataset with mode: {mode}")
+        print(f"  - dims: {short_pulse_ds.dims}")
+        print(f"  - variables: {list(short_pulse_ds.data_vars)}")
+        print(f"  - chunks: {short_pulse_ds.chunks}")
         save_zarr_store(short_pulse_ds,
                         container_name=output_container,
                         zarr_path=f"{cruise_id}/short_pulse.zarr",
                         mode=mode,
                         append_dim="ping_time")
 
-    if long_pulse_ds:
+    if batch_results["long_pulse"]:
+        long_pulse_ds = concatenate_and_rechunk(batch_results["long_pulse"],
+                                                container_name=temp_container_name,
+                                                chunks=chunks)
         mode = get_write_mode("long_pulse", write_mode_dict)
+        print(f"Saving long pulse dataset with mode: {mode}")
+        print(f"  - dims: {long_pulse_ds.dims}")
+        print(f"  - variables: {list(long_pulse_ds.data_vars)}")
+        print(f"  - chunks: {long_pulse_ds.chunks}")
         save_zarr_store(long_pulse_ds,
                         container_name=output_container,
                         zarr_path=f"{cruise_id}/long_pulse.zarr",
                         mode=mode,
                         append_dim="ping_time")
 
-    if exported_ds:
+    if batch_results["exported_ds"]:
+        exported_ds = concatenate_and_rechunk(batch_results["exported_ds"],
+                                              container_name=temp_container_name,
+                                              chunks=chunks)
         mode = get_write_mode("exported_ds", write_mode_dict)
         save_zarr_store(exported_ds,
                         container_name=output_container,
