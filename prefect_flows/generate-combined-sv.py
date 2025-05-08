@@ -137,8 +137,14 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
     # Collect results as they complete
     for future in futures:
         try:
-            zarr_store, category = future.result()
-            results[category].append(zarr_store)
+            result = future.result()
+
+            if not isinstance(result, tuple) or len(result) != 2:
+                continue
+
+            zarr_store, category = result
+            if zarr_store:
+                results[category].append(zarr_store)
         except Exception as e:
             print(f"Error processing file: {e}")
 
