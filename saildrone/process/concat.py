@@ -1,6 +1,5 @@
 import os
 import shutil
-import json
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -8,19 +7,24 @@ import zarr
 
 
 def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
-    # Convert location_data to a Pandas DataFrame
+    # Convert location_data list of dicts to DataFrame
     location_df = pd.DataFrame(location_data)
-
-    # Convert timestamp strings to datetime objects
     location_df['dt'] = pd.to_datetime(location_df['dt'])
 
-    # Create xarray variables from the location data
-    dataset['latitude'] = xr.DataArray(location_df['lat'].values, dims='time',
-                                       coords={'time': location_df['dt'].values})
-    dataset['longitude'] = xr.DataArray(location_df['lon'].values, dims='time',
-                                        coords={'time': location_df['dt'].values})
-    dataset['speed_knots'] = xr.DataArray(location_df['knt'].values, dims='time',
-                                          coords={'time': location_df['dt'].values})
+    # Create a 1D time-aligned xarray Dataset
+    nav_ds = xr.Dataset({
+        "latitude": ("time", location_df["lat"].values),
+        "longitude": ("time", location_df["lon"].values),
+        "speed_knots": ("time", location_df["knt"].values)
+    }, coords={"time": location_df["dt"].values})
+
+    if "ping_time" in dataset.coords:
+        nav_interp = nav_ds.interp(time=dataset["ping_time"], kwargs={"fill_value": "extrapolate"})
+    else:
+        nav_interp = nav_ds
+
+    for var in nav_interp.data_vars:
+        dataset[var] = nav_interp[var]
 
     return dataset
 
@@ -62,39 +66,24 @@ def rechunk_datasets(datasets, chunks):
 
 
 def concatenate_and_rechunk(paths, dim="ping_time", chunks=None):
-    """
-    Concatenate datasets from a mixed list containing
-    * Zarr paths (str),
-    * Zarr stores (BaseStore subclasses), or
-    * any MutableMapping store (e.g. fsspec.FSMap from Azure/GCS/S3)
-
-    Parameters
-    ----------
-    paths   : list[str | BaseStore | MutableMapping]
-    dim     : str
-        Dimension along which to concatenate.
-    chunks  : dict
-        Desired chunk layout for the output dataset.
-
-    Returns
-    -------
-    xarray.Dataset | None
-    """
     if not paths or not chunks:
         return None
 
-    datasets = [xr.open_zarr(path, chunks=chunks) for path in paths]
+    datasets = []
+    for path in paths:
+        ds = xr.open_zarr(path, chunks=None)
+
+        # Drop range_sample if present (e.g. redundant indexing axis)
+        for var in ["range_sample", "source_filenames"]:
+            if var in ds:
+                ds = ds.drop_vars(var)
+
+        datasets.append(ds)
 
     datasets.sort(key=lambda ds: ds[dim].min().values)
-    # Avoid variable‑name collision for source_filenames
-    cleaned = [
-        ds.rename({"source_filenames": f"source_filenames_{i}"})
-        if "source_filenames" in ds else ds
-        for i, ds in enumerate(datasets)
-    ]
 
     # Concatenate along the specified dimension
-    concatenated_ds = xr.concat(cleaned, dim=dim)
+    concatenated_ds = xr.concat(datasets, dim=dim)
 
     if 'frequency_nominal' in concatenated_ds:
         freq = concatenated_ds.frequency_nominal

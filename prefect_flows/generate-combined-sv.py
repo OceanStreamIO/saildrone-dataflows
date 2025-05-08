@@ -13,8 +13,8 @@ from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
 
 from saildrone.store import FileSegmentService
-from saildrone.process.concat import merge_location_data, optimize_zarr_store, concatenate_and_rechunk
-from saildrone.store import (PostgresDB, SurveyService, list_zarr_files, open_zarr_store, generate_container_name,
+from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
+from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generate_container_name,
                              ensure_container_exists, save_zarr_store)
 
 input_cache_policy = Inputs()
@@ -162,12 +162,12 @@ def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_process_files_to_zarr(cruise_id: str,
-                                   source_container: str,
-                                   output_container: str,
-                                   chunks_ping_time: int,
-                                   chunks_depth: Optional[int],
-                                   batch_size: int = BATCH_SIZE):
+def generate_combined_sv(cruise_id: str,
+                         source_container: str,
+                         output_container: str,
+                         chunks_ping_time: int,
+                         chunks_depth: Optional[int],
+                         batch_size: int = BATCH_SIZE):
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -233,8 +233,7 @@ if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
     try:
-        # Start the flow
-        load_and_process_files_to_zarr.serve(
+        generate_combined_sv.serve(
             name='generate-combined-sv',
             parameters={
                 'cruise_id': '',
@@ -242,7 +241,7 @@ if __name__ == "__main__":
                 'output_container': '',
                 'chunks_ping_time': 500,
                 'chunks_depth': 500,
-                'batch_size': BATCH_SIZE
+                'batch_size': 4
             }
         )
     except Exception as e:
