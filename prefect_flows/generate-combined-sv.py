@@ -205,26 +205,40 @@ def generate_combined_sv(cruise_id: str,
             batch_index=i
         )
 
-        if short_pulse_ds:
-            save_zarr_store(short_pulse_ds,
-                            container_name=output_container,
-                            zarr_path=f"{cruise_id}/short_pulse.zarr",
-                            mode=i == 0 and "w" or "a",
-                            append_dim="ping_time")
+        try:
 
-        if long_pulse_ds:
-            save_zarr_store(long_pulse_ds,
-                            container_name=output_container,
-                            zarr_path=f"{cruise_id}/long_pulse.zarr",
-                            mode=i == 0 and "w" or "a",
-                            append_dim="ping_time")
+            if short_pulse_ds:
+                save_zarr_store(short_pulse_ds,
+                                container_name=output_container,
+                                zarr_path=f"{cruise_id}/short_pulse.zarr",
+                                mode=i == 0 and "w" or "a",
+                                append_dim="ping_time")
 
-        if exported_ds:
-            save_zarr_store(exported_ds,
-                            container_name=output_container,
-                            zarr_path=f"{cruise_id}/{cruise_id}.zarr",
-                            mode=i == 0 and "w" or "a",
-                            append_dim="ping_time")
+            if long_pulse_ds:
+                save_zarr_store(long_pulse_ds,
+                                container_name=output_container,
+                                zarr_path=f"{cruise_id}/long_pulse.zarr",
+                                mode=i == 0 and "w" or "a",
+                                append_dim="ping_time")
+
+            if exported_ds:
+                save_zarr_store(exported_ds,
+                                container_name=output_container,
+                                zarr_path=f"{cruise_id}/{cruise_id}.zarr",
+                                mode=i == 0 and "w" or "a",
+                                append_dim="ping_time")
+        except Exception as e:
+            logging.error(f"Error saving Zarr store: {e}")
+            markdown_report = f"""# Error saving Zarr store: {e}
+            {str(e)}
+            ## Error details
+            - **Error Message**: {str(e)}
+            - **Traceback**: {traceback.format_exc()}
+            """
+
+            create_markdown_artifact(markdown_report)
+
+            raise e
 
     logging.info("All batches have been processed.")
 
