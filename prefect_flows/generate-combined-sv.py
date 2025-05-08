@@ -151,7 +151,16 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
     return results
 
 
-def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=None, temp_container_name=None, batch_index=None):
+@task(
+    log_prints=True,
+    retries=2,
+    retry_delay_seconds=60,
+    retry_jitter_factor=0.1,
+    refresh_cache=True,
+    result_storage=None,
+    task_run_name="concatenate-zarr-files-{batch_index}",
+)
+def concatenate_zarr_files(files, source_container_name, output_container, cruise_id=None, chunks=None, temp_container_name=None, batch_index=None):
     ds_list = {
         "short_pulse": [],
         "long_pulse": [],
@@ -170,7 +179,26 @@ def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=
     long_pulse_ds = concatenate_and_rechunk(ds_list["long_pulse"], container_name=temp_container_name, chunks=chunks) if ds_list["long_pulse"] else None
     exported_ds = concatenate_and_rechunk(ds_list["exported_ds"], container_name=temp_container_name, chunks=chunks) if ds_list["exported_ds"] else None
 
-    return short_pulse_ds, long_pulse_ds, exported_ds
+    if short_pulse_ds:
+        save_zarr_store(short_pulse_ds,
+                        container_name=output_container,
+                        zarr_path=f"{cruise_id}/short_pulse.zarr",
+                        mode=batch_index == 0 and "w" or "a",
+                        append_dim="ping_time")
+
+    if long_pulse_ds:
+        save_zarr_store(long_pulse_ds,
+                        container_name=output_container,
+                        zarr_path=f"{cruise_id}/long_pulse.zarr",
+                        mode=batch_index == 0 and "w" or "a",
+                        append_dim="ping_time")
+
+    if exported_ds:
+        save_zarr_store(exported_ds,
+                        container_name=output_container,
+                        zarr_path=f"{cruise_id}/{cruise_id}.zarr",
+                        mode=batch_index == 0 and "w" or "a",
+                        append_dim="ping_time")
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
@@ -206,39 +234,19 @@ def generate_combined_sv(cruise_id: str,
     batch_index = 0
     for i in range(0, total_files, batch_size):
         batch_files = files_list[i:i + batch_size]
-        batch_index += 1
         print(f"Processing batch {i // batch_size + 1}")
 
         try:
-            short_pulse_ds, long_pulse_ds, exported_ds = concatenate_zarr_files(
+            concatenate_zarr_files(
                 batch_files,
                 source_container,
+                output_container,
                 cruise_id=cruise_id,
                 temp_container_name=temp_container_name,
                 chunks=chunks,
                 batch_index=batch_index
             )
-
-            if short_pulse_ds:
-                save_zarr_store(short_pulse_ds,
-                                container_name=output_container,
-                                zarr_path=f"{cruise_id}/short_pulse.zarr",
-                                mode=i == 0 and "w" or "a",
-                                append_dim="ping_time")
-
-            if long_pulse_ds:
-                save_zarr_store(long_pulse_ds,
-                                container_name=output_container,
-                                zarr_path=f"{cruise_id}/long_pulse.zarr",
-                                mode=i == 0 and "w" or "a",
-                                append_dim="ping_time")
-
-            if exported_ds:
-                save_zarr_store(exported_ds,
-                                container_name=output_container,
-                                zarr_path=f"{cruise_id}/{cruise_id}.zarr",
-                                mode=i == 0 and "w" or "a",
-                                append_dim="ping_time")
+            batch_index += 1
         except Exception as e:
             logging.error(f"Error saving Zarr store: {e}")
             markdown_report = f"""# Error saving Zarr store: {e}
