@@ -151,6 +151,16 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
     return results
 
 
+def get_write_mode(key: str, write_mode_dict: dict) -> str:
+    """
+    Determine whether to write or append based on if the key has been seen before.
+    Updates the dict to set mode to 'a' after first use.
+    """
+    mode = write_mode_dict.setdefault(key, 'w')  # Use 'w' on first write
+    write_mode_dict[key] = 'a'                   # Ensure next time it's 'a'
+    return mode
+
+
 @task(
     log_prints=True,
     retries=2,
@@ -160,7 +170,10 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
     result_storage=None,
     task_run_name="concatenate-zarr-files-{batch_index}",
 )
-def concatenate_zarr_files(files, source_container_name, output_container, cruise_id=None, chunks=None, temp_container_name=None, batch_index=None):
+def concatenate_zarr_files(files, source_container_name, output_container, cruise_id=None, chunks=None,
+                           temp_container_name=None,
+                           write_mode_dict=None,
+                           batch_index=None):
     ds_list = {
         "short_pulse": [],
         "long_pulse": [],
@@ -180,24 +193,27 @@ def concatenate_zarr_files(files, source_container_name, output_container, cruis
     exported_ds = concatenate_and_rechunk(ds_list["exported_ds"], container_name=temp_container_name, chunks=chunks) if ds_list["exported_ds"] else None
 
     if short_pulse_ds:
+        mode = get_write_mode("short_pulse", write_mode_dict)
         save_zarr_store(short_pulse_ds,
                         container_name=output_container,
                         zarr_path=f"{cruise_id}/short_pulse.zarr",
-                        mode=batch_index == 0 and "w" or "a",
+                        mode=mode,
                         append_dim="ping_time")
 
     if long_pulse_ds:
+        mode = get_write_mode("long_pulse", write_mode_dict)
         save_zarr_store(long_pulse_ds,
                         container_name=output_container,
                         zarr_path=f"{cruise_id}/long_pulse.zarr",
-                        mode=batch_index == 0 and "w" or "a",
+                        mode=mode,
                         append_dim="ping_time")
 
     if exported_ds:
+        mode = get_write_mode("exported_ds", write_mode_dict)
         save_zarr_store(exported_ds,
                         container_name=output_container,
                         zarr_path=f"{cruise_id}/{cruise_id}.zarr",
-                        mode=batch_index == 0 and "w" or "a",
+                        mode=mode,
                         append_dim="ping_time")
 
 
@@ -232,6 +248,8 @@ def generate_combined_sv(cruise_id: str,
     temp_container_name = generate_container_name(cruise_id)
     ensure_container_exists(temp_container_name)
     batch_index = 0
+    write_mode_dict = {}
+
     for i in range(0, total_files, batch_size):
         batch_files = files_list[i:i + batch_size]
         print(f"Processing batch {i // batch_size + 1}")
@@ -244,6 +262,7 @@ def generate_combined_sv(cruise_id: str,
                 cruise_id=cruise_id,
                 temp_container_name=temp_container_name,
                 chunks=chunks,
+                write_mode_dict=write_mode_dict,
                 batch_index=batch_index
             )
             batch_index += 1
