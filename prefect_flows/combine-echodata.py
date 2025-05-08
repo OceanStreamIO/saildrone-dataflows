@@ -119,7 +119,7 @@ def load_and_combine_zarr_stores(source_directory: str,
         # Save the combined EchoData object to a new Zarr store
         # The appending operation only happens when relevant data needs to be save to disk
         if container_name != '':
-            zarr_store = save_zarr_store(ed_combined, combined_zarr_name, survey_id=survey_id,
+            save_zarr_store(ed_combined, combined_zarr_name, survey_id=survey_id,
                                          container_name=container_name)
         else:
             ed_combined.to_zarr(

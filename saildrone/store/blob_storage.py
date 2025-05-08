@@ -110,7 +110,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     else:
         echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
-    return zarr_store
+    return zarr_path_full
 
 
 def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
