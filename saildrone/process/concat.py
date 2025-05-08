@@ -5,6 +5,8 @@ import pandas as pd
 import xarray as xr
 import zarr
 
+from saildrone.store import open_zarr_store
+
 
 def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
     # Convert location_data list of dicts to DataFrame
@@ -65,13 +67,13 @@ def rechunk_datasets(datasets, chunks):
     return [ds.chunk(chunks) for ds in datasets]
 
 
-def concatenate_and_rechunk(paths, dim="ping_time", chunks=None):
+def concatenate_and_rechunk(paths, container_name, dim="ping_time", chunks=None):
     if not paths or not chunks:
         return None
 
     datasets = []
     for path in paths:
-        ds = xr.open_zarr(path, chunks=None)
+        ds = open_zarr_store(path, container_name=container_name, chunks=None)
 
         # Drop range_sample if present (e.g. redundant indexing axis)
         for var in ["range_sample", "source_filenames"]:

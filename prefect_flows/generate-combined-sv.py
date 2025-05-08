@@ -77,10 +77,10 @@ def process_single_file(file, file_name, source_container_name, cruise_id, chunk
         category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
 
         temp_path = f"{file_name}_{file_index}.zarr"
-        zarr_store = save_zarr_store(ds, container_name=temp_container_name, zarr_path=temp_path)
+        zarr_path = save_zarr_store(ds, container_name=temp_container_name, zarr_path=temp_path)
         # optimize_zarr_store(temp_path)
 
-        return zarr_store, category
+        return zarr_path, category
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
@@ -142,9 +142,9 @@ def process_batch(batch_files, source_container_name, cruise_id, chunks, temp_co
             if not isinstance(result, tuple) or len(result) != 2:
                 continue
 
-            zarr_store, category = result
-            if zarr_store:
-                results[category].append(zarr_store)
+            zarr_path, category = result
+            if zarr_path:
+                results[category].append(zarr_path)
         except Exception as e:
             print(f"Error processing file: {e}")
 
@@ -166,9 +166,9 @@ def concatenate_zarr_files(files, source_container_name, cruise_id=None, chunks=
     ds_list["long_pulse"].extend(batch_results["long_pulse"])
     ds_list["exported_ds"].extend(batch_results["exported_ds"])
 
-    short_pulse_ds = concatenate_and_rechunk(ds_list["short_pulse"], chunks=chunks) if ds_list["short_pulse"] else None
-    long_pulse_ds = concatenate_and_rechunk(ds_list["long_pulse"], chunks=chunks) if ds_list["long_pulse"] else None
-    exported_ds = concatenate_and_rechunk(ds_list["exported_ds"], chunks=chunks) if ds_list["exported_ds"] else None
+    short_pulse_ds = concatenate_and_rechunk(ds_list["short_pulse"], container_name=temp_container_name, chunks=chunks) if ds_list["short_pulse"] else None
+    long_pulse_ds = concatenate_and_rechunk(ds_list["long_pulse"], container_name=temp_container_name, chunks=chunks) if ds_list["long_pulse"] else None
+    exported_ds = concatenate_and_rechunk(ds_list["exported_ds"], container_name=temp_container_name, chunks=chunks) if ds_list["exported_ds"] else None
 
     return short_pulse_ds, long_pulse_ds, exported_ds
 

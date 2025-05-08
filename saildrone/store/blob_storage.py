@@ -88,9 +88,10 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
 
 
 def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None):
-    if container_name is not None and survey_id is not None:
-        zarr_path_full = f"{container_name}/{survey_id}/{zarr_path}"
-    elif container_name is not None:
+    if survey_id is not None:
+        zarr_path = f"{survey_id}/{zarr_path}"
+
+    if container_name is not None:
         zarr_path_full = f"{container_name}/{zarr_path}"
     else:
         zarr_path_full = zarr_path
@@ -110,7 +111,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     else:
         echodata_or_sv_ds.to_zarr(save_path=zarr_store, overwrite=True)
 
-    return zarr_path_full
+    return zarr_path
 
 
 def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
@@ -122,7 +123,6 @@ def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINE
     else:
         zarr_path_full = f"{container_name}/{zarr_path}"
 
-    print('Opening Zarr store:', zarr_path_full)
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
 
