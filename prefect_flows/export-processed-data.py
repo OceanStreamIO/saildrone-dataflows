@@ -9,7 +9,8 @@ from typing import List, Optional, Union
 import numpy as np
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from dask.distributed import Client
+from dask.distributed import Client, Lock
+
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
@@ -24,6 +25,9 @@ from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generat
                              ensure_container_exists, save_zarr_store, save_dataset_to_netcdf)
 
 from echopype.commongrid import compute_NASC, compute_MVBS
+
+
+NC_LOCK = Lock("netcdf-write")
 
 input_cache_policy = Inputs()
 
@@ -47,6 +51,7 @@ AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 if not AZURE_STORAGE_CONNECTION_STRING:
     logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
     sys.exit(1)
+
 
 class DenoiseOptions(BaseModel):
     def get(self, key, default_value=None):
@@ -133,7 +138,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{category}/{file_name}/{file_name}.zarr"
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
-        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path)
+        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, lock=NC_LOCK)
 
         # Apply denoising if specified
         zarr_path_denoised = None
@@ -156,7 +161,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
             nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
             save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name,
-                                   ds_path=nc_file_path_denoised)
+                                   ds_path=nc_file_path_denoised, lock=NC_LOCK)
 
         # compute NASC if specified
         zarr_path_nasc = None
@@ -178,7 +183,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                              zarr_path=file_path_nasc)
             nc_file_path_nasc = f"{category}/{file_name}--NASC.nc"
             save_dataset_to_netcdf(ds_NASC, container_name=export_container_name,
-                                   ds_path=nc_file_path_nasc)
+                                   ds_path=nc_file_path_nasc, lock=NC_LOCK)
 
         return zarr_path, zarr_path_denoised, zarr_path_nasc, category
     except Exception as e:
@@ -290,7 +295,7 @@ def export_processed_data(cruise_id: str,
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
-        
+
     print("All files have been processed.")
 
 

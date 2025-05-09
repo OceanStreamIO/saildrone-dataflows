@@ -224,7 +224,8 @@ def save_dataset_to_netcdf(
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
-    compression_level: int = 5
+    compression_level: int = 5,
+    lock=None
 ):
     # Construct full local path
     full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
@@ -237,6 +238,8 @@ def save_dataset_to_netcdf(
         path=str(full_dataset_path),
         format='NETCDF4',
         engine='netcdf4',
+        compute=True,
+        lock=lock,
         encoding=get_variable_encoding(ds, compression_level)
     )
 
