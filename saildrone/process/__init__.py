@@ -2,7 +2,7 @@ from .calibrate import apply_calibration
 from .plot import plot_sv_data, plot_and_upload_echograms
 from .process_raw_file import process_raw_file
 from .convert import convert_file_and_save
-from .workflow import process_converted_file
+from .workflow import process_converted_file, apply_denoising
 from .location import extract_location_data, extract_start_end_lat_lon
 from .process_gps import (consolidate_csv_to_geoparquet_partitioned, query_location_points_between_timestamps,
                           save_to_partitioned_geoparquet, extract_start_end_coordinates)
@@ -19,6 +19,7 @@ __all__ = [
     'extract_start_end_coordinates',
     'process_raw_file',
     'process_converted_file',
+    'apply_denoising',
     'extract_location_data',
     'convert_file_and_save',
     'save_to_partitioned_geoparquet',

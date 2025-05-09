@@ -114,7 +114,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     return zarr_path
 
 
-def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None):
+def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None, rechunk_after=False):
     """Open a Zarr store from Azure Blob Storage."""
     azfs = get_azure_blob_filesystem()
 
@@ -125,6 +125,11 @@ def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINE
 
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
+
+    if rechunk_after and chunks is not None:
+        ds = xr.open_dataset(chunk_store, engine='zarr', chunks=None)
+        ds = ds.chunk(chunks)
+        return ds
 
     return xr.open_dataset(chunk_store, engine='zarr', chunks=chunks)
 
@@ -221,20 +226,22 @@ def save_dataset_to_netcdf(
     ds_path: str = "short_pulse_data.nc",
     compression_level: int = 5
 ):
-    container_local_path = os.path.join(base_local_temp_path, container_name)
-    os.makedirs(container_local_path, exist_ok=True)
+    # Construct full local path
+    full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
 
-    full_dataset_path = os.path.join(container_local_path, ds_path)
+    # Ensure the directory structure exists
+    full_dataset_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save the datasets locally
+    # Save the dataset to the full path
     ds.to_netcdf(
-        path=full_dataset_path,
+        path=str(full_dataset_path),
         format='NETCDF4',
         engine='netcdf4',
         encoding=get_variable_encoding(ds, compression_level)
     )
 
-    upload_file_to_blob(full_dataset_path, ds_path, container_name=container_name)
+    # Upload using relative ds_path (cloud upload should retain logical structure)
+    upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
 
 
 def save_datasets_to_netcdf(

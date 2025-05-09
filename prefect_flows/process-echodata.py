@@ -264,7 +264,6 @@ def load_and_process_files_to_zarr(source_directory: str,
     in_flight = []
 
     for src in files_list:
-        # Submit task
         future = process_single_file.submit(src,
                                             cruise_id=cruise_id,
                                             load_from_blobstorage=load_from_blobstorage,
