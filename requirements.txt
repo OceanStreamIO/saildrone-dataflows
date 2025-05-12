@@ -10,7 +10,8 @@ numcodecs==0.14.1
 pydantic==2.10.1
 pydantic_core==2.27.1
 cloudpickle==3.0.0
-xarray==2024.11.0
+#xarray==2024.11.0
+xarray
 dask-expr==1.1.14
 python-dotenv==1.0.1
 typing_extensions

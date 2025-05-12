@@ -1,6 +1,6 @@
 import os
 import re
-import random
+import shutil
 
 import pandas as pd
 import xarray as xr
@@ -220,7 +220,7 @@ def get_variable_encoding(ds: xr.Dataset, compression_level):
     return encoding
 
 
-def save_dataset_to_netcdf(
+def __save_dataset_to_netcdf(
     ds: xr.Dataset,
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
@@ -253,6 +253,32 @@ def save_dataset_to_netcdf(
         output_path = future.result()
         print('Saved dataset to:', output_path)
         upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
+
+
+def save_dataset_to_netcdf(
+    ds: xr.Dataset,
+    container_name: str = None,
+    base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
+    ds_path: str = "short_pulse_data.nc",
+    compression_level: int = 5,
+    use_delayed: bool = False
+):
+    # Construct full local path
+    full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
+
+    # Ensure the directory structure exists
+    full_dataset_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save the dataset to the full path
+    ds.to_netcdf(
+        path=str(full_dataset_path),
+        format='NETCDF4',
+        engine='netcdf4',
+        encoding=get_variable_encoding(ds, compression_level)
+    )
+
+    # Upload using relative ds_path (cloud upload should retain logical structure)
+    upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
 
 
 def save_datasets_to_netcdf(
