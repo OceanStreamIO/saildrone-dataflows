@@ -231,29 +231,24 @@ def save_dataset_to_netcdf(
     # Construct full local path
     full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
 
-    # Ensure the directory structure exists
-    full_dataset_path.parent.mkdir(parents=True, exist_ok=True)
     enc = get_variable_encoding(ds, compression_level)
 
-    def _write_nc(d, p, e):
+    def _write_nc(d, path_str, e):
+        p = Path(path_str)
+        p.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
+        os.chmod(p.parent, 0o775)
         d.load()
         d.to_netcdf(p, engine="netcdf4", format="NETCDF4", encoding=e)
         return p
 
     # Save the dataset to the full path
     with get_dask_client() as client:
-        workers = list(client.scheduler_info()["workers"])
-        chosen = random.choice(workers)
-
         future = client.submit(
             _write_nc,
             ds,
             str(full_dataset_path),
             enc,
-            workers=[chosen],
-            allow_other_workers=False,
-            pure=False,
-            key=f"write-netcdf-{full_dataset_path}",
+            pure=False
         )
         output_path = future.result()
         print('Saved dataset to:', output_path)
