@@ -1,6 +1,6 @@
 import os
 import re
-import shutil
+import random
 
 import pandas as pd
 import xarray as xr
@@ -242,10 +242,11 @@ def save_dataset_to_netcdf(
     # Save the dataset to the full path
     with get_dask_client() as client:
         info = client.scheduler_info()
-        first_worker = next(iter(info["workers"]))
+        workers = list(info["workers"])
+        chosen = random.choice(workers)
         future = client.submit(
             _write_nc, ds, str(full_dataset_path), enc,
-            workers=[first_worker], allow_other_workers=False,
+            workers=[chosen], allow_other_workers=False,
             key=f"write-netcdf-{full_dataset_path}",
         )
         output_path = future.result()
