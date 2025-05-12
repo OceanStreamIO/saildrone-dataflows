@@ -136,6 +136,17 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{category}/{file_name}/{file_name}.zarr"
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
+        if plot_echograms:
+            upload_path = f"{category}/{file_name}"
+            echogram_files = plot_and_upload_echograms(ds,
+                                                       cruise_id=cruise_id,
+                                                       file_base_name=file_name,
+                                                       save_to_blobstorage=True,
+                                                       depth_var="depth",
+                                                       upload_path=upload_path,
+                                                       cmap=colormap,
+                                                       container_name=export_container_name)
+
         save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path)
 
         # Apply denoising if specified
@@ -150,7 +161,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                 upload_path = f"{category}/{file_name}"
                 echogram_files = plot_and_upload_echograms(sv_dataset_denoised,
                                                            cruise_id=cruise_id,
-                                                           file_base_name=file_name,
+                                                           file_base_name=f'{file_name}--denoised',
                                                            save_to_blobstorage=True,
                                                            depth_var="depth",
                                                            upload_path=upload_path,
