@@ -136,7 +136,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{category}/{file_name}/{file_name}.zarr"
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
-        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, use_delayed=False)
+        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, use_delayed=True)
 
         # Apply denoising if specified
         zarr_path_denoised = None
