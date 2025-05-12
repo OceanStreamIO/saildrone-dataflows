@@ -251,8 +251,7 @@ def save_dataset_to_netcdf(
             key=f"write-netcdf-{full_dataset_path}",
         )
         output_path = future.result()
-
-        # Upload using relative ds_path (cloud upload should retain logical structure)
+        print('Saved dataset to:', output_path)
         upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
 
 
