@@ -235,16 +235,19 @@ def save_dataset_to_netcdf(
     enc = get_variable_encoding(ds, compression_level)
 
     def _write_nc(d, p, e):
-        # single-process writer
+        d.load()
         d.to_netcdf(p, engine="netcdf4", format="NETCDF4", encoding=e)
+        return p
 
     # Save the dataset to the full path
     with get_dask_client() as client:
-        fut = client.submit(
+        single = next(client.scheduler_info()["workers"])
+        future = client.submit(
             _write_nc, ds, str(full_dataset_path), enc,
+            workers=[single], allow_other_workers=False,
             key=f"write-netcdf-{full_dataset_path}",
         )
-        fut.result()
+        output_path = future.result()
 
         # Upload using relative ds_path (cloud upload should retain logical structure)
         upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
