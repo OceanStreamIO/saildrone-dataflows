@@ -8,6 +8,7 @@ import geopandas as gpd
 import logging
 import uuid
 
+from dask.distributed import Lock
 from pathlib import Path
 from datetime import timedelta, datetime
 from typing import List, Union, TypedDict
@@ -224,7 +225,8 @@ def save_dataset_to_netcdf(
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
-    compression_level: int = 5
+    compression_level: int = 5,
+    use_delayed: bool = False
 ):
     # Construct full local path
     full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
@@ -233,13 +235,24 @@ def save_dataset_to_netcdf(
     full_dataset_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save the dataset to the full path
-    ds.to_netcdf(
-        path=str(full_dataset_path),
-        format='NETCDF4',
-        engine='netcdf4',
-        compute=True,
-        encoding=get_variable_encoding(ds, compression_level)
-    )
+    if use_delayed:
+        delayed = ds.to_netcdf(
+            str(full_dataset_path),
+            engine="netcdf4",
+            format="NETCDF4",
+            compute=False,
+            encoding=get_variable_encoding(ds, compression_level),
+        )
+        with Lock("netcdf-global-write"):
+            delayed.compute()
+    else:
+        ds.to_netcdf(
+            path=str(full_dataset_path),
+            format='NETCDF4',
+            engine='netcdf4',
+            compute=True,
+            encoding=get_variable_encoding(ds, compression_level)
+        )
 
     # Upload using relative ds_path (cloud upload should retain logical structure)
     upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)

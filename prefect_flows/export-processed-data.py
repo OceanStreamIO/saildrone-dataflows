@@ -121,6 +121,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     apply_seabed_mask = kwargs.get("apply_seabed_mask", False)
     plot_echograms = kwargs.get("plot_echograms", False)
     colormap = kwargs.get("colormap", "ocean_r")
+    category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
 
     try:
         print(f"Processing file {zarr_path} with frequencies {file_freqs}")
@@ -132,13 +133,10 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         # Merge location data
         ds = merge_location_data(ds, location_data)
 
-        # Save the dataset to the export container
-        category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
-
         file_path = f"{category}/{file_name}/{file_name}.zarr"
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
-        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, lock=NC_LOCK)
+        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, use_delayed=False)
 
         # Apply denoising if specified
         zarr_path_denoised = None
@@ -160,8 +158,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                                            container_name=export_container_name)
 
             nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
-            save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name,
-                                   ds_path=nc_file_path_denoised, lock=NC_LOCK)
+            save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name, ds_path=nc_file_path_denoised, use_delayed=True)
 
         # compute NASC if specified
         zarr_path_nasc = None
@@ -182,8 +179,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                              container_name=export_container_name,
                                              zarr_path=file_path_nasc)
             nc_file_path_nasc = f"{category}/{file_name}--NASC.nc"
-            save_dataset_to_netcdf(ds_NASC, container_name=export_container_name,
-                                   ds_path=nc_file_path_nasc, lock=NC_LOCK)
+            save_dataset_to_netcdf(ds_NASC, container_name=export_container_name, ds_path=nc_file_path_nasc, use_delayed=True)
 
         return zarr_path, zarr_path_denoised, zarr_path_nasc, category
     except Exception as e:
