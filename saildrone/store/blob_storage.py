@@ -1,4 +1,5 @@
 import os
+import random
 import re
 import shutil
 
@@ -220,7 +221,7 @@ def get_variable_encoding(ds: xr.Dataset, compression_level):
     return encoding
 
 
-def __save_dataset_to_netcdf(
+def save_dataset_to_netcdf(
     ds: xr.Dataset,
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
@@ -241,12 +242,16 @@ def __save_dataset_to_netcdf(
 
     # Save the dataset to the full path
     with get_dask_client() as client:
+        workers = list(client.scheduler_info()["workers"])
+        chosen = random.choice(workers)
+
         future = client.submit(
             _write_nc,
             ds,
             str(full_dataset_path),
             enc,
-            resources={"netcdf": 1},
+            workers=[chosen],
+            allow_other_workers=False,
             pure=False,
             key=f"write-netcdf-{full_dataset_path}",
         )
@@ -254,14 +259,13 @@ def __save_dataset_to_netcdf(
         print('Saved dataset to:', output_path)
         upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
 
-
+"""
 def save_dataset_to_netcdf(
     ds: xr.Dataset,
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
-    compression_level: int = 5,
-    use_delayed: bool = False
+    compression_level: int = 5
 ):
     # Construct full local path
     full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
@@ -279,6 +283,7 @@ def save_dataset_to_netcdf(
 
     # Upload using relative ds_path (cloud upload should retain logical structure)
     upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
+"""
 
 
 def save_datasets_to_netcdf(
