@@ -136,7 +136,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{category}/{file_name}/{file_name}.zarr"
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
-        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path, use_delayed=True)
+        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path)
 
         # Apply denoising if specified
         zarr_path_denoised = None
@@ -158,7 +158,8 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                                            container_name=export_container_name)
 
             nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
-            save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name, ds_path=nc_file_path_denoised, use_delayed=True)
+            save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name,
+                                   ds_path=nc_file_path_denoised)
 
         # compute NASC if specified
         zarr_path_nasc = None
@@ -179,7 +180,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                              container_name=export_container_name,
                                              zarr_path=file_path_nasc)
             nc_file_path_nasc = f"{category}/{file_name}--NASC.nc"
-            save_dataset_to_netcdf(ds_NASC, container_name=export_container_name, ds_path=nc_file_path_nasc, use_delayed=True)
+            save_dataset_to_netcdf(ds_NASC, container_name=export_container_name, ds_path=nc_file_path_nasc)
 
         return zarr_path, zarr_path_denoised, zarr_path_nasc, category
     except Exception as e:
