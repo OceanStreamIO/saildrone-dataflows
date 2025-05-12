@@ -233,26 +233,28 @@ def save_dataset_to_netcdf(
 
     enc = get_variable_encoding(ds, compression_level)
 
-    def _write_nc(d, path_str, e):
+    def _write_and_upload(d, path_str, encoding, filename, container):
         p = Path(path_str)
         p.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
         os.chmod(p.parent, 0o775)
         d.load()
-        d.to_netcdf(p, engine="netcdf4", format="NETCDF4", encoding=e)
-        return p
+        d.to_netcdf(str(p), engine="netcdf4", format="NETCDF4", encoding=encoding)
+        upload_file_to_blob(str(p), filename, container_name=container)
+        return str(p)
 
     # Save the dataset to the full path
     with get_dask_client() as client:
         future = client.submit(
-            _write_nc,
+            _write_and_upload,
             ds,
             str(full_dataset_path),
             enc,
+            ds_path,
+            container_name,
             pure=False
         )
         output_path = future.result()
         print('Saved dataset to:', output_path)
-        upload_file_to_blob(str(full_dataset_path), ds_path, container_name=container_name)
 
 """
 def save_dataset_to_netcdf(
