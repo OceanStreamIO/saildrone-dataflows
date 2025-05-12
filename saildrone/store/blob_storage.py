@@ -241,12 +241,13 @@ def save_dataset_to_netcdf(
 
     # Save the dataset to the full path
     with get_dask_client() as client:
-        info = client.scheduler_info()
-        workers = list(info["workers"])
-        chosen = random.choice(workers)
         future = client.submit(
-            _write_nc, ds, str(full_dataset_path), enc,
-            workers=[chosen], allow_other_workers=False,
+            _write_nc,
+            ds,
+            str(full_dataset_path),
+            enc,
+            resources={"netcdf": 1},
+            pure=False,
             key=f"write-netcdf-{full_dataset_path}",
         )
         output_path = future.result()
