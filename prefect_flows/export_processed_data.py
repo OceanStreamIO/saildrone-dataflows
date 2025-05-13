@@ -338,8 +338,9 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
     zarr_path = f"{category}/{file_name}/{file_name}.zarr"
     zarr_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr" if denoising_applied else None
 
+    futures = []
     if plot_echograms:
-        task_plot_echograms.submit(
+        future = task_plot_echograms.submit(
             zarr_path,
             zarr_path_denoised,
             file_name,
@@ -348,12 +349,13 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
             chunks,
             colormap
         )
+        futures.append(future)
 
     if save_to_netcdf:
         nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc" if denoising_applied else None
 
-        task_save_to_netcdf.submit(
+        future_nc = task_save_to_netcdf.submit(
             zarr_path,
             zarr_path_denoised,
             nc_file_path,
@@ -361,6 +363,9 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
             container_name,
             chunks
         )
+        futures.append(future_nc)
+
+    _submit_and_collect(*futures)
 
 
 @flow(
@@ -415,12 +420,8 @@ def export_processed_data(cruise_id: str,
         ensure_container_exists(export_container_name, public_access='container')
 
     in_flight = []
-
     workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
-
-    if plot_echograms or save_to_netcdf:
-        batch_size = batch_size * 2
 
     for idx, file in enumerate(files_list):
         target_worker = workers[idx % n_workers]
@@ -447,7 +448,7 @@ def export_processed_data(cruise_id: str,
         if plot_echograms or save_to_netcdf:
             side_tasks = fan_out_side_tasks.submit(future, file['file_name'], export_container_name, chunks, colormap,
                                                    plot_echograms, save_to_netcdf)
-            in_flight.append(side_tasks)
+            # in_flight.append(side_tasks)
 
         in_flight.append(future)
 
@@ -464,6 +465,15 @@ def export_processed_data(cruise_id: str,
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
 
     print("All files have been processed.")
+
+
+def _submit_and_collect(*calls) -> list:
+    """Submit multiple tasks and synchronously wait for them to finish."""
+    futures = [call for call in calls if call is not None]
+    for future in as_completed(futures):
+        future.wait()
+
+    return futures
 
 
 if __name__ == "__main__":
