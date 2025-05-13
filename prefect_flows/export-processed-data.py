@@ -9,7 +9,7 @@ from typing import List, Optional, Union
 import numpy as np
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from dask.distributed import Client, Lock
+from dask.distributed import Client, Lock, annotate
 
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
@@ -272,24 +272,32 @@ def export_processed_data(cruise_id: str,
         ensure_container_exists(export_container_name, public_access='container')
 
     in_flight = []
+    with get_dask_client() as c:
+        workers = list(c.scheduler_info()["workers"])
+
+    n_workers = len(workers)
+
     for idx, file in enumerate(files_list):
-        future = process_single_file.submit(file,
-                                            file_name=file['file_name'],
-                                            source_container_name=source_container,
-                                            cruise_id=cruise_id,
-                                            chunks=chunks,
-                                            export_container_name=export_container_name,
-                                            file_index=idx,
-                                            total=len(files_list),
-                                            plot_echograms=plot_echograms,
-                                            colormap=colormap,
-                                            compute_nasc=compute_nasc,
-                                            mask_impulse_noise=mask_impulse_noise,
-                                            mask_attenuated_signal=mask_attenuated_signal,
-                                            mask_transient_noise=mask_transient_noise,
-                                            remove_background_noise=remove_background_noise,
-                                            apply_seabed_mask=apply_seabed_mask
-                                            )
+        target_worker = workers[idx % n_workers]
+
+        with annotate(workers=[target_worker], allow_other_workers=False):
+            future = process_single_file.submit(file,
+                                                file_name=file['file_name'],
+                                                source_container_name=source_container,
+                                                cruise_id=cruise_id,
+                                                chunks=chunks,
+                                                export_container_name=export_container_name,
+                                                file_index=idx,
+                                                total=len(files_list),
+                                                plot_echograms=plot_echograms,
+                                                colormap=colormap,
+                                                compute_nasc=compute_nasc,
+                                                mask_impulse_noise=mask_impulse_noise,
+                                                mask_attenuated_signal=mask_attenuated_signal,
+                                                mask_transient_noise=mask_transient_noise,
+                                                remove_background_noise=remove_background_noise,
+                                                apply_seabed_mask=apply_seabed_mask
+                                                )
         in_flight.append(future)
 
         # Throttle when max concurrent tasks reached
@@ -298,8 +306,8 @@ def export_processed_data(cruise_id: str,
             in_flight.remove(finished)
 
     # Wait for remaining tasks
-    for future_task in in_flight:
-        future_task.result()
+    for remaining in in_flight:
+        remaining.result()
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
