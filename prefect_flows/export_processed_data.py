@@ -27,7 +27,6 @@ from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generat
 
 from echopype.commongrid import compute_NASC, compute_MVBS
 
-
 input_cache_policy = Inputs()
 
 logging.basicConfig(
@@ -57,34 +56,44 @@ class DenoiseOptions(BaseModel):
 
 
 class MaskImpulseNoise(DenoiseOptions):
-    depth_bin: int = Field(default=10, description="Donwsampling bin size along vertical range variable (`range_var`) in meters.")
+    depth_bin: int = Field(default=10,
+                           description="Donwsampling bin size along vertical range variable (`range_var`) in meters.")
     num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
-    threshold: float = Field(default=10, description="Impulse noise threshold value (in dB) for the two-side comparison.")
-    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
+    threshold: float = Field(default=10,
+                             description="Impulse noise threshold value (in dB) for the two-side comparison.")
+    range_var: str = Field(default='depth',
+                           description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
 
 
 class MaskAttenuatedSignal(DenoiseOptions):
     upper_limit_sl: int = Field(default=180, description="Upper limit of deep scattering layer line (m).")
     lower_limit_sl: int = Field(default=300, description="Lower limit of deep scattering layer line (m).")
     num_side_pings: int = Field(default=15, description="Number of preceding & subsequent pings defining the block.")
-    threshold: float = Field(default=10, description="Attenuation signal threshold value (dB) for the ping-block comparison.")
-    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
+    threshold: float = Field(default=10,
+                             description="Attenuation signal threshold value (dB) for the ping-block comparison.")
+    range_var: str = Field(default='depth',
+                           description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
 
 
 class TransientNoiseMask(DenoiseOptions):
-    operation: str = Field(default='nanmedian', description="Pooling function used in the pooled Sv aggregation, either 'nanmedian' or 'nanmean'.")
+    operation: str = Field(default='nanmedian',
+                           description="Pooling function used in the pooled Sv aggregation, either 'nanmedian' or 'nanmean'.")
     depth_bin: int = Field(default=10, description="Bin size for depth calculation.")
     num_side_pings: int = Field(default=25, description="Number of side pings to include.")
     exclude_above: float = Field(default=250.0, description="Exclude data above this depth value.")
-    threshold: float = Field(default=12.0, description="Transient noise threshold value (in dB) for the pooling comparison.")
-    range_var: str = Field(default='depth', description="Vertical Range Variable. Can be either `depth` or `echo_range`.")
+    threshold: float = Field(default=12.0,
+                             description="Transient noise threshold value (in dB) for the pooling comparison.")
+    range_var: str = Field(default='depth',
+                           description="Vertical Range Variable. Can be either `depth` or `echo_range`.")
 
 
 class RemoveBackgroundNoise(DenoiseOptions):
     ping_num: int = Field(default=5, description="Number of pings to obtain noise estimates")
     range_sample_num: int = Field(default=30, description="Number of range samples to consider.")
-    background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
-    SNR_threshold: float = Field(default=3.0, description="Signal-to-noise ratio threshold for background noise removal.")
+    background_noise_max: float = Field(default=-125,
+                                        description="Maximum allowable background noise estimation (in dB).")
+    SNR_threshold: float = Field(default=3.0,
+                                 description="Signal-to-noise ratio threshold for background noise removal.")
 
 
 @task(log_prints=True)
@@ -96,6 +105,88 @@ def get_worker_addresses(scheduler: str) -> list[str]:
     """
     with Client(scheduler, name="discover-workers", timeout="5s") as c:
         return list(c.scheduler_info()["workers"])
+
+
+@task(
+    log_prints=True,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="plot_echograms--{file_name}"
+)
+def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name, upload_path, chunks=None,
+                        cmap='ocean_r'):
+    try:
+        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+
+        plot_and_upload_echograms(ds,
+                                  file_base_name=file_name,
+                                  save_to_blobstorage=True,
+                                  depth_var="depth",
+                                  upload_path=upload_path,
+                                  cmap=cmap,
+                                  container_name=container_name)
+
+        if zarr_path_denoised:
+            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
+                                          rechunk_after=True)
+
+            plot_and_upload_echograms(ds_denoised,
+                                      file_base_name=file_name,
+                                      save_to_blobstorage=True,
+                                      depth_var="depth",
+                                      upload_path=upload_path,
+                                      cmap=cmap,
+                                      container_name=container_name)
+    except Exception as e:
+        print(f"Error plotting echograms: {zarr_path}: ${str(e)}")
+        traceback.print_exc()
+
+        markdown_report = f"""# Error report for {zarr_path}
+        Error occurred while plotting echograms: {zarr_path}
+
+        {str(e)}
+        
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return Completed(message="plot_echograms completed with errors")
+
+
+@task(
+    log_prints=True,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="save_to_netcdf--{file_name}"
+)
+def task_save_to_netcdf(zarr_path, zarr_path_denoised, nc_file_path, nc_file_path_denoised, container_name,
+                        chunks=None):
+    try:
+        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+        save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path)
+
+        if zarr_path_denoised:
+            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
+                                          rechunk_after=True)
+            save_dataset_to_netcdf(ds_denoised, container_name=container_name, ds_path=nc_file_path_denoised)
+    except Exception as e:
+        print(f"Error saving to NetCDF: {zarr_path}: ${str(e)}")
+        traceback.print_exc()
+
+        markdown_report = f"""# Error report for {zarr_path}
+        Error occurred while saving to NetCDF: {zarr_path}
+
+        {str(e)}
+        
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return Completed(message="save_to_netcdf completed with errors")
 
 
 @task(
@@ -127,6 +218,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     file_name = file['file_name']
 
     compute_nasc_opt = kwargs.get("compute_nasc", False)
+    save_to_netcdf = kwargs.get("save_to_netcdf", False)
     apply_seabed_mask = kwargs.get("apply_seabed_mask", False)
     plot_echograms = kwargs.get("plot_echograms", False)
     colormap = kwargs.get("colormap", "ocean_r")
@@ -143,44 +235,43 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         ds = merge_location_data(ds, location_data)
 
         file_path = f"{category}/{file_name}/{file_name}.zarr"
-        nc_file_path = f"{category}/{file_name}/{file_name}.nc"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
-        if plot_echograms:
-            upload_path = f"{category}/{file_name}"
-            echogram_files = plot_and_upload_echograms(ds,
-                                                       cruise_id=cruise_id,
-                                                       file_base_name=file_name,
-                                                       save_to_blobstorage=True,
-                                                       depth_var="depth",
-                                                       upload_path=upload_path,
-                                                       cmap=colormap,
-                                                       container_name=export_container_name)
-
-        save_dataset_to_netcdf(ds, container_name=export_container_name, ds_path=nc_file_path)
 
         # Apply denoising if specified
-        zarr_path_denoised = None
+        denoising_applied = False
         sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
+
         if sv_dataset_denoised is not None:
+            denoising_applied = True
             file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr"
-            zarr_path_denoised = save_zarr_store(sv_dataset_denoised, container_name=export_container_name,
-                                                 zarr_path=file_path_denoised)
+            save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised)
 
-            if plot_echograms:
-                upload_path = f"{category}/{file_name}"
-                echogram_files = plot_and_upload_echograms(sv_dataset_denoised,
-                                                           cruise_id=cruise_id,
-                                                           file_base_name=f'{file_name}--denoised',
-                                                           save_to_blobstorage=True,
-                                                           depth_var="depth",
-                                                           upload_path=upload_path,
-                                                           cmap=colormap,
-                                                           container_name=export_container_name)
+        # if plot_echograms:
+        #     upload_path = f"{category}/{file_name}"
+        #     future = task_plot_echograms.submit(file_path,
+        #                                         file_path_denoised,
+        #                                         file_name,
+        #                                         container_name=export_container_name,
+        #                                         upload_path=upload_path,
+        #                                         chunks=chunks,
+        #                                         cmap=colormap)
+        #     future.result()
+        #
+        # if save_to_netcdf:
+        #     nc_file_path = f"{category}/{file_name}/{file_name}.nc"
+        #     nc_file_path_denoised = None
+        #
+        #     if sv_dataset_denoised is not None:
+        #         nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
+        #
+        #     task_save_to_netcdf.submit(file_path,
+        #                                file_path_denoised,
+        #                                nc_file_path,
+        #                                nc_file_path_denoised,
+        #                                container_name=export_container_name,
+        #                                chunks=chunks)
 
-            nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
-            save_dataset_to_netcdf(sv_dataset_denoised, container_name=export_container_name,
-                                   ds_path=nc_file_path_denoised)
-
+        ##################################
         # compute NASC if specified
         zarr_path_nasc = None
         if compute_nasc_opt:
@@ -202,7 +293,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
             nc_file_path_nasc = f"{category}/{file_name}--NASC.nc"
             save_dataset_to_netcdf(ds_NASC, container_name=export_container_name, ds_path=nc_file_path_nasc)
 
-        return zarr_path, zarr_path_denoised, zarr_path_nasc, category
+        return denoising_applied, zarr_path_nasc, category
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
@@ -230,6 +321,48 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         return Completed(message="Task completed with errors")
 
 
+@task(
+    retries = 3,
+    retry_delay_seconds = 60,
+    cache_policy = input_cache_policy,
+    retry_jitter_factor = 0.1,
+    refresh_cache = True,
+    result_storage = None,
+    timeout_seconds = DEFAULT_TASK_TIMEOUT,
+    log_prints = True,
+    task_run_name="fan_out_side_tasks--{file_name}",
+)
+def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot_echograms, save_to_netcdf):
+    denoising_applied, zarr_path_nasc, category = future
+    upload_path = f"{category}/{file_name}"
+    zarr_path = f"{category}/{file_name}/{file_name}.zarr"
+    zarr_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr" if denoising_applied else None
+
+    if plot_echograms:
+        task_plot_echograms.submit(
+            zarr_path,
+            zarr_path_denoised,
+            file_name,
+            container_name,
+            upload_path,
+            chunks,
+            colormap
+        )
+
+    if save_to_netcdf:
+        nc_file_path = f"{category}/{file_name}/{file_name}.nc"
+        nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc" if denoising_applied else None
+
+        task_save_to_netcdf.submit(
+            zarr_path,
+            zarr_path_denoised,
+            nc_file_path,
+            nc_file_path_denoised,
+            container_name,
+            chunks
+        )
+
+
 @flow(
     task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS)
 )
@@ -241,6 +374,7 @@ def export_processed_data(cruise_id: str,
                           plot_echograms: bool = False,
                           colormap: str = 'ocean_r',
                           compute_nasc: bool = False,
+                          save_to_netcdf: bool = False,
                           mask_impulse_noise: Optional[MaskImpulseNoise] = None,
                           mask_attenuated_signal: Optional[MaskAttenuatedSignal] = None,
                           mask_transient_noise: Optional[TransientNoiseMask] = None,
@@ -300,12 +434,19 @@ def export_processed_data(cruise_id: str,
                                                 plot_echograms=plot_echograms,
                                                 colormap=colormap,
                                                 compute_nasc=compute_nasc,
+                                                save_to_netcdf=save_to_netcdf,
                                                 mask_impulse_noise=mask_impulse_noise,
                                                 mask_attenuated_signal=mask_attenuated_signal,
                                                 mask_transient_noise=mask_transient_noise,
                                                 remove_background_noise=remove_background_noise,
                                                 apply_seabed_mask=apply_seabed_mask
                                                 )
+        if plot_echograms or save_to_netcdf:
+            side_tasks = fan_out_side_tasks.submit(future, file['file_name'], export_container_name, chunks, colormap,
+                                                   plot_echograms, save_to_netcdf)
+            in_flight.append(side_tasks)
+            batch_size += 1
+
         in_flight.append(future)
 
         # Throttle when max concurrent tasks reached
@@ -344,6 +485,7 @@ if __name__ == "__main__":
                 'chunks_ping_time': 500,
                 'chunks_depth': 500,
                 'compute_nasc': False,
+                'save_to_netcdf': False,
                 'mask_impulse_noise': None,
                 'mask_attenuated_signal': None,
                 'mask_transient_noise': None,

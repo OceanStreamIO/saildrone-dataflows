@@ -105,7 +105,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     else:
         max_depth = 0
 
-    plt.figure(figsize=(30, 18))
+    plt.figure(figsize=(10, 6))
     try:
         filtered_ds.isel(frequency=channel).T.plot(
             x='ping_time',
@@ -128,7 +128,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
     echogram_file_name = f"{file_base_name}_{channel_name}.png"
     echogram_output_path = os.path.join(echogram_path, echogram_file_name)
-    plt.savefig(echogram_output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(echogram_output_path, dpi=150, bbox_inches='tight')
     plt.close()
 
     return echogram_output_path
