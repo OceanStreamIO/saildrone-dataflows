@@ -136,11 +136,13 @@ def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name
                                       upload_path=upload_path,
                                       cmap=cmap,
                                       container_name=container_name)
+
+        return Completed(message="plot_echograms completed successfully")
     except Exception as e:
         print(f"Error plotting echograms: {zarr_path}: ${str(e)}")
         traceback.print_exc()
 
-        markdown_report = f"""# Error report for {zarr_path}
+        markdown_report = f"""# Error during plot_echograms
         Error occurred while plotting echograms: {zarr_path}
 
         {str(e)}
@@ -170,11 +172,13 @@ def task_save_to_netcdf(zarr_path, zarr_path_denoised, nc_file_path, nc_file_pat
             ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
                                           rechunk_after=True)
             save_dataset_to_netcdf(ds_denoised, container_name=container_name, ds_path=nc_file_path_denoised)
+
+        return Completed(message="save_to_netcdf completed successfully")
     except Exception as e:
         print(f"Error saving to NetCDF: {zarr_path}: ${str(e)}")
         traceback.print_exc()
 
-        markdown_report = f"""# Error report for {zarr_path}
+        markdown_report = f"""# Error during save_to_netcdf
         Error occurred while saving to NetCDF: {zarr_path}
 
         {str(e)}
@@ -333,6 +337,9 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     task_run_name="fan_out_side_tasks--{file_name}",
 )
 def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot_echograms, save_to_netcdf):
+    if future is None:
+        return None
+
     denoising_applied, zarr_path_nasc, category = future
     upload_path = f"{category}/{file_name}"
     zarr_path = f"{category}/{file_name}/{file_name}.zarr"
@@ -422,6 +429,7 @@ def export_processed_data(cruise_id: str,
     in_flight = []
     workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
+    side_running_tasks = []
 
     for idx, file in enumerate(files_list):
         target_worker = workers[idx % n_workers]
@@ -448,7 +456,7 @@ def export_processed_data(cruise_id: str,
         if plot_echograms or save_to_netcdf:
             side_tasks = fan_out_side_tasks.submit(future, file['file_name'], export_container_name, chunks, colormap,
                                                    plot_echograms, save_to_netcdf)
-            # in_flight.append(side_tasks)
+            side_running_tasks.append(side_tasks)
 
         in_flight.append(future)
 
@@ -458,7 +466,7 @@ def export_processed_data(cruise_id: str,
             in_flight.remove(finished)
 
     # Wait for remaining tasks
-    for remaining in in_flight:
+    for remaining in in_flight + side_running_tasks:
         remaining.result()
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
