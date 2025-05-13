@@ -3,13 +3,14 @@ import os
 import shutil
 import sys
 import traceback
+import dask
+import numpy as np
+
 from datetime import datetime
 from typing import List, Optional, Union
-
-import numpy as np
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from dask.distributed import Client, Lock, annotate
+from dask.distributed import Client, Lock
 
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
@@ -27,8 +28,6 @@ from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generat
 from echopype.commongrid import compute_NASC, compute_MVBS
 
 
-NC_LOCK = Lock("netcdf-write")
-
 input_cache_policy = Inputs()
 
 logging.basicConfig(
@@ -38,7 +37,6 @@ logging.basicConfig(
 )
 
 load_dotenv()
-
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
@@ -87,6 +85,17 @@ class RemoveBackgroundNoise(DenoiseOptions):
     range_sample_num: int = Field(default=30, description="Number of range samples to consider.")
     background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
     SNR_threshold: float = Field(default=3.0, description="Signal-to-noise ratio threshold for background noise removal.")
+
+
+@task(log_prints=True)
+def get_worker_addresses(scheduler: str) -> list[str]:
+    """
+    A tiny prefect task that opens a short-lived Dask Client,
+    asks the scheduler for the current workers, and returns *only*
+    a list of their addresses (plain strings).
+    """
+    with Client(scheduler, name="discover-workers", timeout="5s") as c:
+        return list(c.scheduler_info()["workers"])
 
 
 @task(
@@ -272,15 +281,14 @@ def export_processed_data(cruise_id: str,
         ensure_container_exists(export_container_name, public_access='container')
 
     in_flight = []
-    with get_dask_client() as c:
-        workers = list(c.scheduler_info()["workers"])
 
+    workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
 
     for idx, file in enumerate(files_list):
         target_worker = workers[idx % n_workers]
 
-        with annotate(workers=[target_worker], allow_other_workers=False):
+        with dask.annotate(workers=[target_worker], allow_other_workers=False):
             future = process_single_file.submit(file,
                                                 file_name=file['file_name'],
                                                 source_container_name=source_container,
@@ -317,6 +325,10 @@ def export_processed_data(cruise_id: str,
 
 if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
+    info = client.scheduler_info()
+    workers_info = list(info["workers"])
+
+    print(f"Running on dask cluster {info['address']} with {len(workers_info)} workers.")
 
     try:
         export_processed_data.serve(
