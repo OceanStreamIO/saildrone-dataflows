@@ -322,14 +322,14 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
 
 @task(
-    retries = 3,
-    retry_delay_seconds = 60,
-    cache_policy = input_cache_policy,
-    retry_jitter_factor = 0.1,
-    refresh_cache = True,
-    result_storage = None,
-    timeout_seconds = DEFAULT_TASK_TIMEOUT,
-    log_prints = True,
+    retries=3,
+    retry_delay_seconds=60,
+    cache_policy=input_cache_policy,
+    retry_jitter_factor=0.1,
+    refresh_cache=True,
+    result_storage=None,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    log_prints=True,
     task_run_name="fan_out_side_tasks--{file_name}",
 )
 def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot_echograms, save_to_netcdf):
@@ -419,6 +419,9 @@ def export_processed_data(cruise_id: str,
     workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
 
+    if plot_echograms or save_to_netcdf:
+        batch_size = batch_size * 2
+
     for idx, file in enumerate(files_list):
         target_worker = workers[idx % n_workers]
 
@@ -445,7 +448,6 @@ def export_processed_data(cruise_id: str,
             side_tasks = fan_out_side_tasks.submit(future, file['file_name'], export_container_name, chunks, colormap,
                                                    plot_echograms, save_to_netcdf)
             in_flight.append(side_tasks)
-            batch_size += 1
 
         in_flight.append(future)
 
