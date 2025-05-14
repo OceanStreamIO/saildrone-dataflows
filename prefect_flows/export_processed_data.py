@@ -315,7 +315,9 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
     if future is None:
         return None
 
-    denoising_applied, zarr_path_nasc, category = future.result()
+    state = future.wait()
+
+    denoising_applied, zarr_path_nasc, category = state.result()
     upload_path = f"{category}/{file_name}"
     zarr_path = f"{category}/{file_name}/{file_name}.zarr"
     zarr_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr" if denoising_applied else None
