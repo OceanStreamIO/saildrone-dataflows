@@ -15,7 +15,7 @@ from dask.distributed import Client, Lock
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
-from prefect.states import Completed
+from prefect.states import Completed, Failed
 from prefect.artifacts import create_markdown_artifact
 from prefect.futures import as_completed
 
@@ -130,7 +130,7 @@ def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name
                                           rechunk_after=True)
 
             plot_and_upload_echograms(ds_denoised,
-                                      file_base_name=file_name,
+                                      file_base_name=f"{file_name}--denoised",
                                       save_to_blobstorage=True,
                                       depth_var="depth",
                                       upload_path=upload_path,
@@ -250,31 +250,6 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
             file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr"
             save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised)
 
-        # if plot_echograms:
-        #     upload_path = f"{category}/{file_name}"
-        #     future = task_plot_echograms.submit(file_path,
-        #                                         file_path_denoised,
-        #                                         file_name,
-        #                                         container_name=export_container_name,
-        #                                         upload_path=upload_path,
-        #                                         chunks=chunks,
-        #                                         cmap=colormap)
-        #     future.result()
-        #
-        # if save_to_netcdf:
-        #     nc_file_path = f"{category}/{file_name}/{file_name}.nc"
-        #     nc_file_path_denoised = None
-        #
-        #     if sv_dataset_denoised is not None:
-        #         nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
-        #
-        #     task_save_to_netcdf.submit(file_path,
-        #                                file_path_denoised,
-        #                                nc_file_path,
-        #                                nc_file_path_denoised,
-        #                                container_name=export_container_name,
-        #                                chunks=chunks)
-
         ##################################
         # compute NASC if specified
         zarr_path_nasc = None
@@ -340,7 +315,7 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
     if future is None:
         return None
 
-    denoising_applied, zarr_path_nasc, category = future
+    denoising_applied, zarr_path_nasc, category = future.result()
     upload_path = f"{category}/{file_name}"
     zarr_path = f"{category}/{file_name}/{file_name}.zarr"
     zarr_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr" if denoising_applied else None
@@ -479,7 +454,7 @@ def _submit_and_collect(*calls) -> list:
     """Submit multiple tasks and synchronously wait for them to finish."""
     futures = [call for call in calls if call is not None]
     for future in as_completed(futures):
-        future.wait()
+        future.result()
 
     return futures
 

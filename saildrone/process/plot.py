@@ -105,7 +105,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     else:
         max_depth = 0
 
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(20, 12))
     try:
         filtered_ds.isel(frequency=channel).T.plot(
             x='ping_time',
