@@ -196,7 +196,7 @@ def task_save_to_netcdf(future, file_name, container_name, chunks=None):
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
         nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
-                                                     base_local_temp_path=NETCDF_ROOT_DIR)
+                                                     base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
         saved_paths.append(nc_file_output_path)
 
         if zarr_path_denoised:
@@ -204,7 +204,8 @@ def task_save_to_netcdf(future, file_name, container_name, chunks=None):
                                           rechunk_after=True)
             nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
                                                                   ds_path=nc_file_path_denoised,
-                                                                  base_local_temp_path=NETCDF_ROOT_DIR)
+                                                                  base_local_temp_path=NETCDF_ROOT_DIR,
+                                                                  is_temp_dir=False)
             saved_paths.append(nc_file_denoised_output_path)
 
         return saved_paths

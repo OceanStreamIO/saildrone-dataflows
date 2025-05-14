@@ -240,7 +240,8 @@ def save_dataset_to_netcdf(
     container_name: str = None,
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
-    compression_level: int = 5
+    compression_level: int = 5,
+    is_temp_dir: bool = True
 ):
     # Construct full local path
     full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
@@ -249,8 +250,12 @@ def save_dataset_to_netcdf(
 
     def _write_and_upload(d, path_str, encoding, filename, container):
         p = Path(path_str)
-        p.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
-        os.chmod(p.parent, 0o775)
+        if is_temp_dir:
+            p.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
+            os.chmod(p.parent, 0o775)
+        else:
+            p.parent.mkdir(parents=True, exist_ok=True)
+
         d.load()
         d.to_netcdf(str(p), engine="netcdf4", format="NETCDF4", encoding=encoding)
         upload_file_to_blob(str(p), filename, container_name=container)
