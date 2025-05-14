@@ -162,7 +162,7 @@ def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="save_to_netcdf--{file_name}"
 )
-def task_save_to_netcdf(zarr_path, zarr_path_denoised, nc_file_path, nc_file_path_denoised, container_name,
+def task_save_to_netcdf(zarr_path, zarr_path_denoised, file_name, nc_file_path, nc_file_path_denoised, container_name,
                         chunks=None):
     try:
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
@@ -340,6 +340,7 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
         future_nc = task_save_to_netcdf.submit(
             zarr_path,
             zarr_path_denoised,
+            file_name,
             nc_file_path,
             nc_file_path_denoised,
             container_name,
@@ -454,7 +455,7 @@ def _submit_and_collect(*calls) -> list:
     """Submit multiple tasks and synchronously wait for them to finish."""
     futures = [call for call in calls if call is not None]
     for future in as_completed(futures):
-        future.result()
+        future.wait()
 
     return futures
 
