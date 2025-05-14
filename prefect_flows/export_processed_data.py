@@ -12,12 +12,13 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from dask.distributed import Client, Lock
 
+from prefect.context import FlowRunContext, TaskRunContext
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed, Failed
 from prefect.artifacts import create_markdown_artifact
-from prefect.futures import as_completed
+from prefect.futures import as_completed, PrefectFuture
 
 from saildrone.store import FileSegmentService
 from saildrone.process import apply_denoising, plot_and_upload_echograms
@@ -112,9 +113,9 @@ def get_worker_addresses(scheduler: str) -> list[str]:
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="plot_echograms--{file_name}"
 )
-def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='ocean_r'):
+def task_plot_echograms(parent_future, main_future, file_name, container_name, chunks=None, cmap='ocean_r'):
     try:
-        denoising_applied, zarr_path_nasc, category = future
+        denoising_applied, zarr_path_nasc, category = main_future
         file_path = f"{category}/{file_name}/{file_name}"
         upload_path = f"{category}/{file_name}"
         zarr_path = f"{file_path}.zarr"
@@ -166,9 +167,9 @@ def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='oc
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="save_to_netcdf--{file_name}"
 )
-def task_save_to_netcdf(future, file_name, container_name, chunks=None):
+def task_save_to_netcdf(parent_future, main_future, file_name, container_name, chunks=None):
     try:
-        denoising_applied, zarr_path_nasc, category = future
+        denoising_applied, zarr_path_nasc, category = main_future
 
         file_path = f"{category}/{file_name}/{file_name}"
 
@@ -328,12 +329,15 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
         return None
 
     futures = []
+    task_run_ctx = TaskRunContext.get()
+    current_future = PrefectFuture.from_task_run(task_run_ctx)
+
     if plot_echograms:
-        future_plot_task = task_plot_echograms.submit(future, file_name, container_name, chunks, colormap)
+        future_plot_task = task_plot_echograms.submit(current_future, future, file_name, container_name, chunks, colormap)
         futures.append(future_plot_task)
 
     if save_to_netcdf:
-        future_nc_task = task_save_to_netcdf.submit(future, file_name, container_name, chunks)
+        future_nc_task = task_save_to_netcdf.submit(current_future, future, file_name, container_name, chunks)
         futures.append(future_nc_task)
 
     _submit_and_collect(*futures)
