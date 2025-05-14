@@ -19,10 +19,9 @@ from prefect.states import Completed, Failed
 from prefect.artifacts import create_markdown_artifact
 from prefect.futures import as_completed, PrefectFuture
 
-from saildrone.store import FileSegmentService
 from saildrone.process import apply_denoising, plot_and_upload_echograms
 from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
-from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generate_container_name,
+from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store, generate_container_name,
                              ensure_container_exists, save_zarr_store, zip_and_save_netcdf_files,
                              save_dataset_to_netcdf)
 

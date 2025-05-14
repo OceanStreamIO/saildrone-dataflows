@@ -26,6 +26,18 @@ CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
 
 
+def zip_and_save_netcdf_files(file_paths, zip_name, container_name):
+    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmpfile:
+        zip_path = Path(tmpfile.name)
+
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for path in file_paths:
+            archive.write(path, arcname=Path(path).name)
+            logger.info(f"Added to archive: {path}")
+
+    upload_file_to_blob(str(zip_path), zip_name, container_name)
+
+
 def create_blob_service_client(connect_str=None) -> BlobServiceClient:
     """
     Create an Azure Blob Storage client.
@@ -257,18 +269,6 @@ def save_dataset_to_netcdf(
         )
         output_path = future.result()
         print('Saved dataset to:', output_path)
-
-
-def zip_and_save_netcdf_files(file_paths, zip_name, container_name):
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmpfile:
-        zip_path = Path(tmpfile.name)
-
-    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for path in file_paths:
-            archive.write(path, arcname=Path(path).name)
-            logger.info(f"Added to archive: {path}")
-
-    upload_file_to_blob(str(zip_path), zip_name, container_name)
 
 
 def save_datasets_to_netcdf(
