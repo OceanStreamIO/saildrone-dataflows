@@ -428,12 +428,12 @@ def export_processed_data(cruise_id: str,
         remaining.result()
 
     if save_to_netcdf:
-        zip_netcdf_outputs.submit(
+        future_zip = zip_netcdf_outputs.submit(
             nc_file_paths=netcdf_outputs,
             zip_name=f"{cruise_id}-exported-netcdfs.zip",
             container_name=export_container_name
         )
-        zip_netcdf_outputs.result()
+        future_zip.result()
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
