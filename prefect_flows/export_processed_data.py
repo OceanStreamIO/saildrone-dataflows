@@ -12,7 +12,6 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from dask.distributed import Client, Lock
 
-from prefect.context import FlowRunContext, TaskRunContext
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
@@ -24,7 +23,8 @@ from saildrone.store import FileSegmentService
 from saildrone.process import apply_denoising, plot_and_upload_echograms
 from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
 from saildrone.store import (PostgresDB, SurveyService, open_zarr_store, generate_container_name,
-                             ensure_container_exists, save_zarr_store, save_dataset_to_netcdf)
+                             ensure_container_exists, save_zarr_store, zip_and_save_netcdf_files,
+                             save_dataset_to_netcdf)
 
 from echopype.commongrid import compute_NASC, compute_MVBS
 
@@ -108,6 +108,12 @@ def get_worker_addresses(scheduler: str) -> list[str]:
         return list(c.scheduler_info()["workers"])
 
 
+@task(log_prints=True)
+def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
+    zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name)
+    logging.info(f"Uploaded archive {zip_name} to container {container_name}")
+
+
 @task(
     log_prints=True,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
@@ -173,15 +179,15 @@ def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='oc
 )
 def task_save_to_netcdf(future, file_name, container_name, chunks=None):
     if future is None:
-        return None
+        return []
 
     try:
         denoising_applied, _, category = future
 
         file_path = f"{category}/{file_name}/{file_name}"
-
         zarr_path = f"{file_path}.zarr"
         nc_file_path = f"{file_path}.nc"
+        saved_paths = [nc_file_path]
 
         zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
         nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
@@ -193,8 +199,9 @@ def task_save_to_netcdf(future, file_name, container_name, chunks=None):
             ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
                                           rechunk_after=True)
             save_dataset_to_netcdf(ds_denoised, container_name=container_name, ds_path=nc_file_path_denoised)
+            saved_paths.append(nc_file_path_denoised)
 
-        return Completed(message="save_to_netcdf completed successfully")
+        return saved_paths
     except Exception as e:
         traceback.print_exc()
 
@@ -210,7 +217,7 @@ def task_save_to_netcdf(future, file_name, container_name, chunks=None):
 
         create_markdown_artifact(markdown_report)
 
-        return Completed(message="save_to_netcdf completed with errors")
+        return []
 
 
 @task(
@@ -375,6 +382,7 @@ def export_processed_data(cruise_id: str,
     workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
     side_running_tasks = []
+    netcdf_outputs = []
 
     for idx, file in enumerate(files_list):
         target_worker = workers[idx % n_workers]
@@ -405,6 +413,7 @@ def export_processed_data(cruise_id: str,
         if save_to_netcdf:
             future_nc_task = task_save_to_netcdf.submit(future, file['file_name'], export_container_name, chunks)
             side_running_tasks.append(future_nc_task)
+            netcdf_outputs.append(future_nc_task)
 
         in_flight.append(future)
 
@@ -416,6 +425,13 @@ def export_processed_data(cruise_id: str,
     # Wait for remaining tasks
     for remaining in in_flight + side_running_tasks:
         remaining.result()
+
+    if save_to_netcdf:
+        zip_netcdf_outputs.submit(
+            nc_file_paths=netcdf_outputs,
+            zip_name=f"{cruise_id}-exported-netcdfs.zip",
+            container_name=export_container_name
+        )
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
