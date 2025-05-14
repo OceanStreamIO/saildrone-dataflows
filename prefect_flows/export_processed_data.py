@@ -174,7 +174,7 @@ def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='oc
 def task_save_to_netcdf(future, file_name, container_name, chunks=None):
     if future is None:
         return None
-    
+
     try:
         denoising_applied, _, category = future
 
@@ -421,15 +421,6 @@ def export_processed_data(cruise_id: str,
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
 
     print("All files have been processed.")
-
-
-def _submit_and_collect(*calls) -> list:
-    """Submit multiple tasks and synchronously wait for them to finish."""
-    futures = [call for call in calls if call is not None]
-    for future in as_completed(futures):
-        future.wait()
-
-    return futures
 
 
 if __name__ == "__main__":
