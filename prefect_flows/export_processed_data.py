@@ -113,9 +113,13 @@ def get_worker_addresses(scheduler: str) -> list[str]:
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="plot_echograms--{file_name}"
 )
-def task_plot_echograms(parent_future, main_future, file_name, container_name, chunks=None, cmap='ocean_r'):
+def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='ocean_r'):
+    if future is None:
+        return None
+
     try:
-        denoising_applied, zarr_path_nasc, category = main_future
+        denoising_applied, _, category = future
+
         file_path = f"{category}/{file_name}/{file_name}"
         upload_path = f"{category}/{file_name}"
         zarr_path = f"{file_path}.zarr"
@@ -167,9 +171,12 @@ def task_plot_echograms(parent_future, main_future, file_name, container_name, c
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="save_to_netcdf--{file_name}"
 )
-def task_save_to_netcdf(parent_future, main_future, file_name, container_name, chunks=None):
+def task_save_to_netcdf(future, file_name, container_name, chunks=None):
+    if future is None:
+        return None
+    
     try:
-        denoising_applied, zarr_path_nasc, category = main_future
+        denoising_applied, _, category = future
 
         file_path = f"{category}/{file_name}/{file_name}"
 
@@ -313,36 +320,6 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         return Completed(message="Task completed with errors")
 
 
-@task(
-    retries=3,
-    retry_delay_seconds=60,
-    cache_policy=input_cache_policy,
-    retry_jitter_factor=0.1,
-    refresh_cache=True,
-    result_storage=None,
-    timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    log_prints=True,
-    task_run_name="fan_out_side_tasks--{file_name}",
-)
-def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot_echograms, save_to_netcdf):
-    if future is None:
-        return None
-
-    futures = []
-    task_run_ctx = TaskRunContext.get()
-    current_future = PrefectFuture.from_task_run(task_run_ctx)
-
-    if plot_echograms:
-        future_plot_task = task_plot_echograms.submit(current_future, future, file_name, container_name, chunks, colormap)
-        futures.append(future_plot_task)
-
-    if save_to_netcdf:
-        future_nc_task = task_save_to_netcdf.submit(current_future, future, file_name, container_name, chunks)
-        futures.append(future_nc_task)
-
-    _submit_and_collect(*futures)
-
-
 @flow(
     task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS)
 )
@@ -421,10 +398,13 @@ def export_processed_data(cruise_id: str,
                                                 remove_background_noise=remove_background_noise,
                                                 apply_seabed_mask=apply_seabed_mask
                                                 )
-        if plot_echograms or save_to_netcdf:
-            side_tasks = fan_out_side_tasks.submit(future, file['file_name'], export_container_name, chunks, colormap,
-                                                   plot_echograms, save_to_netcdf)
-            side_running_tasks.append(side_tasks)
+        if plot_echograms:
+            future_plot_task = task_plot_echograms.submit(future, file['file_name'], export_container_name, chunks, colormap)
+            side_running_tasks.append(future_plot_task)
+
+        if save_to_netcdf:
+            future_nc_task = task_save_to_netcdf.submit(future, file['file_name'], export_container_name, chunks)
+            side_running_tasks.append(future_nc_task)
 
         in_flight.append(future)
 
