@@ -110,7 +110,9 @@ def get_worker_addresses(scheduler: str) -> list[str]:
 
 @task(log_prints=True)
 def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
-    zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name)
+    flat_paths = [p for group in nc_file_paths for p in group if p]  # flatten and skip empty
+
+    zip_and_save_netcdf_files(flat_paths, zip_name, container_name)
     logging.info(f"Uploaded archive {zip_name} to container {container_name}")
 
 

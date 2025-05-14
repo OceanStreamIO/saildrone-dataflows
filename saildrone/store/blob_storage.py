@@ -259,14 +259,12 @@ def save_dataset_to_netcdf(
         print('Saved dataset to:', output_path)
 
 
-def zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name):
-    flat_paths = [p for group in nc_file_paths for p in group if p]  # flatten and skip empty
-
+def zip_and_save_netcdf_files(file_paths, zip_name, container_name):
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmpfile:
         zip_path = Path(tmpfile.name)
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for path in flat_paths:
+        for path in file_paths:
             archive.write(path, arcname=Path(path).name)
             logger.info(f"Added to archive: {path}")
 
