@@ -40,7 +40,7 @@ DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
-NETCDF_ROOT_DIR = '/media/saildronedata'
+NETCDF_ROOT_DIR = '/mnt/saildronedata'
 CHUNKS = {"ping_time": 500, "range_sample": -1}
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
