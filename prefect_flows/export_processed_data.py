@@ -112,9 +112,14 @@ def get_worker_addresses(scheduler: str) -> list[str]:
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="plot_echograms--{file_name}"
 )
-def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name, upload_path, chunks=None,
-                        cmap='ocean_r'):
+def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='ocean_r'):
     try:
+        denoising_applied, zarr_path_nasc, category = future
+        file_path = f"{category}/{file_name}/{file_name}"
+        upload_path = f"{category}/{file_name}"
+        zarr_path = f"{file_path}.zarr"
+        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
+
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
 
         plot_and_upload_echograms(ds,
@@ -139,11 +144,10 @@ def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name
 
         return Completed(message="plot_echograms completed successfully")
     except Exception as e:
-        print(f"Error plotting echograms: {zarr_path}: ${str(e)}")
         traceback.print_exc()
 
         markdown_report = f"""# Error during plot_echograms
-        Error occurred while plotting echograms: {zarr_path}
+        Error occurred while plotting echograms: {file_name}
 
         {str(e)}
         
@@ -162,9 +166,18 @@ def task_plot_echograms(zarr_path, zarr_path_denoised, file_name, container_name
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="save_to_netcdf--{file_name}"
 )
-def task_save_to_netcdf(zarr_path, zarr_path_denoised, file_name, nc_file_path, nc_file_path_denoised, container_name,
-                        chunks=None):
+def task_save_to_netcdf(future, file_name, container_name, chunks=None):
     try:
+        denoising_applied, zarr_path_nasc, category = future
+
+        file_path = f"{category}/{file_name}/{file_name}"
+
+        zarr_path = f"{file_path}.zarr"
+        nc_file_path = f"{file_path}.nc"
+
+        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
+        nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
+
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
         save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path)
 
@@ -175,11 +188,10 @@ def task_save_to_netcdf(zarr_path, zarr_path_denoised, file_name, nc_file_path, 
 
         return Completed(message="save_to_netcdf completed successfully")
     except Exception as e:
-        print(f"Error saving to NetCDF: {zarr_path}: ${str(e)}")
         traceback.print_exc()
 
         markdown_report = f"""# Error during save_to_netcdf
-        Error occurred while saving to NetCDF: {zarr_path}
+        Error occurred while saving to NetCDF: {file_name}
 
         {str(e)}
         
@@ -315,38 +327,14 @@ def fan_out_side_tasks(future, file_name, container_name, chunks, colormap, plot
     if future is None:
         return None
 
-    denoising_applied, zarr_path_nasc, category = future
-    upload_path = f"{category}/{file_name}"
-    zarr_path = f"{category}/{file_name}/{file_name}.zarr"
-    zarr_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr" if denoising_applied else None
-
     futures = []
     if plot_echograms:
-        future = task_plot_echograms.submit(
-            zarr_path,
-            zarr_path_denoised,
-            file_name,
-            container_name,
-            upload_path,
-            chunks,
-            colormap
-        )
-        futures.append(future)
+        future_plot_task = task_plot_echograms.submit(future, file_name, container_name, chunks, colormap)
+        futures.append(future_plot_task)
 
     if save_to_netcdf:
-        nc_file_path = f"{category}/{file_name}/{file_name}.nc"
-        nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc" if denoising_applied else None
-
-        future_nc = task_save_to_netcdf.submit(
-            zarr_path,
-            zarr_path_denoised,
-            file_name,
-            nc_file_path,
-            nc_file_path_denoised,
-            container_name,
-            chunks
-        )
-        futures.append(future_nc)
+        future_nc_task = task_save_to_netcdf.submit(future, file_name, container_name, chunks)
+        futures.append(future_nc_task)
 
     _submit_and_collect(*futures)
 
