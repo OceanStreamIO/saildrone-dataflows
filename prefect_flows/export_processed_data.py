@@ -40,6 +40,7 @@ DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
+NETCDF_ROOT_DIR = '/media/saildronedata'
 CHUNKS = {"ping_time": 500, "range_sample": -1}
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
@@ -188,19 +189,23 @@ def task_save_to_netcdf(future, file_name, container_name, chunks=None):
         file_path = f"{category}/{file_name}/{file_name}"
         zarr_path = f"{file_path}.zarr"
         nc_file_path = f"{file_path}.nc"
-        saved_paths = [nc_file_path]
+        saved_paths = []
 
         zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
         nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-        save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path)
+        nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
+                                                     base_local_temp_path=NETCDF_ROOT_DIR)
+        saved_paths.append(nc_file_output_path)
 
         if zarr_path_denoised:
             ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
                                           rechunk_after=True)
-            save_dataset_to_netcdf(ds_denoised, container_name=container_name, ds_path=nc_file_path_denoised)
-            saved_paths.append(nc_file_path_denoised)
+            nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
+                                                                  ds_path=nc_file_path_denoised,
+                                                                  base_local_temp_path=NETCDF_ROOT_DIR)
+            saved_paths.append(nc_file_denoised_output_path)
 
         return saved_paths
     except Exception as e:
@@ -428,12 +433,13 @@ def export_processed_data(cruise_id: str,
         remaining.result()
 
     if save_to_netcdf:
-        future_zip = zip_netcdf_outputs.submit(
-            nc_file_paths=netcdf_outputs,
-            zip_name=f"{cruise_id}-exported-netcdfs.zip",
-            container_name=export_container_name
-        )
-        future_zip.result()
+        with dask.annotate(resources={"large_mem": 1}):
+            future_zip = zip_netcdf_outputs.submit(
+                nc_file_paths=netcdf_outputs,
+                zip_name=f"{cruise_id}-exported-netcdfs.zip",
+                container_name=export_container_name
+            )
+            future_zip.wait()
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)

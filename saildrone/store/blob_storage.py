@@ -270,6 +270,8 @@ def save_dataset_to_netcdf(
         output_path = future.result()
         print('Saved dataset to:', output_path)
 
+    return full_dataset_path
+
 
 def save_datasets_to_netcdf(
     short_pulse_ds: xr.Dataset,
