@@ -112,7 +112,7 @@ def get_worker_addresses(scheduler: str) -> list[str]:
 def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
     flat_paths = [p for group in nc_file_paths for p in group if p]  # flatten and skip empty
 
-    zip_and_save_netcdf_files(flat_paths, zip_name, container_name)
+    zip_and_save_netcdf_files(flat_paths, zip_name, container_name, tmp_dir=NETCDF_ROOT_DIR + '/tmp')
     logging.info(f"Uploaded archive {zip_name} to container {container_name}")
 
 
@@ -434,6 +434,7 @@ def export_processed_data(cruise_id: str,
         remaining.result()
 
     if save_to_netcdf:
+        # with dask.annotate(resources={"large_mem": 1}):
         future_zip = zip_netcdf_outputs.submit(
             nc_file_paths=netcdf_outputs,
             zip_name=f"{cruise_id}-exported-netcdfs.zip",

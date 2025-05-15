@@ -26,8 +26,14 @@ CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
 
 
-def zip_and_save_netcdf_files(file_paths, zip_name, container_name):
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmpfile:
+def zip_and_save_netcdf_files(file_paths, zip_name, container_name, tmp_dir=None):
+    if (tmp_dir is not None) and os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+        os.makedirs(tmp_dir, exist_ok=True)
+    else:
+        tmp_dir = tempfile.mkdtemp()
+
+    with tempfile.NamedTemporaryFile(suffix=".zip", dir=tmp_dir, delete=False) as tmpfile:
         zip_path = Path(tmpfile.name)
 
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
