@@ -434,7 +434,6 @@ def export_processed_data(cruise_id: str,
         remaining.result()
 
     if save_to_netcdf:
-        # with dask.annotate(resources={"large_mem": 1}):
         future_zip = zip_netcdf_outputs.submit(
             nc_file_paths=netcdf_outputs,
             zip_name=f"{cruise_id}-exported-netcdfs.zip",
