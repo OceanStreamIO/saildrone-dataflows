@@ -27,8 +27,9 @@ PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
 
 
 def zip_and_save_netcdf_files(file_paths, zip_name, container_name, tmp_dir=None):
-    if (tmp_dir is not None) and os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
+    if tmp_dir is not None:
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
         os.makedirs(tmp_dir, exist_ok=True)
     else:
         tmp_dir = tempfile.mkdtemp()
