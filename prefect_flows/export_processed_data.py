@@ -18,6 +18,7 @@ from prefect.cache_policies import Inputs
 from prefect.states import Completed, Failed
 from prefect.artifacts import create_markdown_artifact
 from prefect.futures import as_completed, PrefectFuture
+from prefect.deployments import run_deployment
 
 from saildrone.process import apply_denoising, plot_and_upload_echograms
 from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
@@ -334,6 +335,24 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         return Completed(message="Task completed with errors")
 
 
+@task
+def trigger_netcdf_flow(container, file_list):
+    flat_paths = [p for group in file_list for p in group if p]  # flatten and skip empty
+
+    print('Triggering NetCDF flow with container:', flat_paths)
+
+    state = run_deployment(
+        name="generate-netcdf-zip-export/generate-netcdf-zip",
+        parameters={
+            "output_container": container,
+            "file_list": flat_paths
+        },
+        timeout=0
+    )
+
+    return state
+
+
 @flow(
     task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS)
 )
@@ -414,7 +433,8 @@ def export_processed_data(cruise_id: str,
                                                 apply_seabed_mask=apply_seabed_mask
                                                 )
         if plot_echograms:
-            future_plot_task = task_plot_echograms.submit(future, file['file_name'], export_container_name, chunks, colormap)
+            future_plot_task = task_plot_echograms.submit(future, file['file_name'], export_container_name, chunks,
+                                                          colormap)
             side_running_tasks.append(future_plot_task)
 
         if save_to_netcdf:
@@ -434,10 +454,9 @@ def export_processed_data(cruise_id: str,
         remaining.result()
 
     if save_to_netcdf:
-        future_zip = zip_netcdf_outputs.submit(
-            nc_file_paths=netcdf_outputs,
-            zip_name=f"{cruise_id}-exported-netcdfs.zip",
-            container_name=export_container_name
+        future_zip = trigger_netcdf_flow.submit(
+            file_list=netcdf_outputs,
+            container=export_container_name
         )
         future_zip.wait()
 
