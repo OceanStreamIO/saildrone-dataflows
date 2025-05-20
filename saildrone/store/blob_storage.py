@@ -128,11 +128,6 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     if isinstance(echodata_or_sv_ds, xr.Dataset):
         ds = echodata_or_sv_ds
 
-        if "range_sample" in ds.coords:
-            rs_numpy = ds.range_sample.compute().data
-            ds = ds.assign_coords(range_sample=("range_sample", rs_numpy))
-            ds["range_sample"].encoding.clear()
-
         rechunked_ds = fix_chunking(ds)
 
         if chunks is not None:
@@ -246,17 +241,24 @@ def fix_chunking(ds: xr.Dataset, *, tiny_limit: int = 10_000) -> xr.Dataset:
     • For the rest: drop an incompatible `encoding["chunks"]`.
     """
     for name, var in list(ds.variables.items()):
-
-        # Skip large data vars that we WANT to stay Dask-chunked
         if name in {"Sv", "angle_alongship", "angle_athwartship", "depth"}:
             continue
 
-        # tiny calibration / coord → materialise
+        # case A: tiny array → compute to NumPy
         if var.size <= tiny_limit:
-            ds[name] = xr.DataArray(var.compute().data, dims=var.dims)
+            arr = var.compute().data  # NumPy array, no encoding
+            if name in ds.coords:
+                # re-attach as a coordinate
+                ds = ds.assign_coords({name: (var.dims, arr)})
+            else:
+                # re-attach as a data variable
+                ds[name] = (var.dims, arr)
+
+            # clear any leftover encoding on the new object
+            ds[name].encoding.clear()
             continue
 
-        # bigger var: keep Dask but strip stale hint if necessary
+        # case B: larger array → keep lazy but fix the hint if it mismatches
         enc = var.encoding
         if "chunks" in enc:
             dask_chunks = getattr(var.data, "chunks", None)

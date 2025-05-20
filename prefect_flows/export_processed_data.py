@@ -274,7 +274,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         ds = merge_location_data(ds, location_data)
 
         file_path = f"{category}/{file_name}/{file_name}.zarr"
-        zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path)
+        zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
 
         # Apply denoising if specified
         denoising_applied = False
@@ -283,7 +283,8 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         if sv_dataset_denoised is not None:
             denoising_applied = True
             file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr"
-            save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised)
+            save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
+                            chunks=chunks)
 
         ##################################
         # compute NASC if specified
@@ -484,8 +485,8 @@ if __name__ == "__main__":
                 'end_datetime': None,
                 'plot_echograms': False,
                 'colormap': 'ocean_r',
-                'chunks_ping_time': 500,
-                'chunks_depth': 500,
+                'chunks_ping_time': 1000,
+                'chunks_depth': 1000,
                 'compute_nasc': False,
                 'save_to_netcdf': False,
                 'mask_impulse_noise': None,

@@ -259,7 +259,7 @@ class FileSegmentService:
                 distance = COALESCE(%s, distance),
                 echogram_files = COALESCE(%s, echogram_files),
                 failed = COALESCE(%s, failed),
-                denoised = COALESCE(%s, failed),
+                denoised = COALESCE(%s, denoised),
                 error_details = COALESCE(%s, error_details),
                 location_data = COALESCE(%s, location_data),
                 processing_time_ms = COALESCE(%s, processing_time_ms),
