@@ -1,5 +1,7 @@
 import pathlib
 import warnings
+import re
+
 from pandas import Index
 
 import dask.array as da
@@ -7,7 +9,9 @@ import numpy as np
 import xarray as xr
 
 from dask_image.ndfilters import convolve
-from dask_image.ndmorph import binary_dilation, binary_erosion
+#from dask_image.ndmorph import binary_dilation, binary_erosion
+from scipy.ndimage import binary_erosion as _erode
+from scipy.ndimage import binary_dilation as _dilate
 from scipy.signal import medfilt
 
 MAX_SV_DEFAULT_PARAMS = {"r0": 10, "r1": 1000, "roff": 0, "thr": (-40, -60)}
@@ -75,6 +79,298 @@ ARIZA_EXPERIMENTAL_DEFAULT_PARAMS = {
     "dc": 3,
     "dk": (3, 3),
 }
+
+
+def mask_true_seabed(ds: xr.Dataset, r0_m=5, r1_m=1200, thr_dB=-40.0) -> xr.Dataset:
+    ds_copy = ds.copy(deep=True)
+    ds_38 = find_38khz_channel(ds_copy)
+
+    mask_38_2d = get_true_seabed_mask(ds_38,
+                                      channel=ds_38.channel.values.item(0),
+                                      r0_m=r0_m,
+                                      r1_m=r1_m,
+                                      thr_dB=thr_dB
+                                      )
+
+    mask_all = broadcast_mask_to_all_channels(mask_38_2d, original_ds=ds)
+
+    Sv_clean = ds_copy["Sv"].where(mask_all)
+    ds_copy["Sv"] = Sv_clean
+
+    return ds_copy
+
+
+def get_true_seabed_mask(
+    ds: xr.Dataset,
+    channel: str,
+    *,
+    r0_m: float,
+    r1_m: float,
+    thr_dB: float = -40.0,
+    delta_db: float = 3.0,
+    erosion_kernel: tuple[int, int] = (3, 3),
+    dilation_kernel: tuple[int, int] = (5, 5),
+) -> xr.DataArray:
+    """
+    Detect the true seabed and return a boolean mask that **keeps everything
+    above it** and masks everything below.
+
+    Steps
+    -----
+    1. Threshold Sv within a user gate (r0_m–r1_m).
+    2. Morphological clean-up (erosion ▸ dilation).
+    3. For each ping, locate the shallowest True → seabed depth.
+    4. Broadcast depth line downward to mask the seabed and deeper.
+
+    Returns
+    -------
+    xr.DataArray(bool) with dims ('ping_time','range_sample')
+        True  – water column to keep
+        False – samples at/under detected seabed
+    """
+    if "channel" in ds.dims:
+        sub = ds.sel(channel=channel) if "channel" in ds.coords else ds.isel(channel=0)
+    elif "frequency" in ds.dims:
+        sub = ds.sel(frequency=channel) if "frequency" in ds.coords else ds.isel(frequency=0)
+    else:
+        sub = ds
+
+    Sv = sub["Sv"]  # dims: (ping_time, range_sample | depth)
+    vdim = "range_sample" if "range_sample" in Sv.dims else "depth"
+    er = sub["echo_range"]  # metres
+
+    # ------------------------------------------------------------------ #
+    # 1) gate + rough threshold                                          #
+    # ------------------------------------------------------------------ #
+    gate = (er >= r0_m) & (er <= r1_m)
+    if not bool(gate.any()):
+        warnings.warn("Gate outside data – returning keep-all mask")
+        return xr.ones_like(Sv, dtype=bool, drop=True)
+
+    cand = (Sv > thr_dB) & gate  # candidate bottom pixels
+    if not bool(cand.any()):
+        warnings.warn("Nothing above threshold – returning keep-all mask")
+        return xr.ones_like(Sv, dtype=bool, drop=True)
+
+    # ------------------------------------------------------------------ #
+    # 2) morphology (chunk-safe)                                         #
+    # ------------------------------------------------------------------ #
+    def _morph(xda, func, ker):
+        struct = np.ones(ker, bool)
+        pad = {xda.dims[0]: ker[0]//2, xda.dims[1]: ker[1]//2}
+
+        return xr.apply_ufunc(
+            lambda x, **k: func(x, structure=struct),
+            xda,
+            dask="parallelized",
+            vectorize=False,
+            dask_gufunc_kwargs=dict(depth=pad, boundary="nearest"),
+            output_dtypes=[bool],
+        )
+
+    in_gate = (er >= r0_m) & (er <= r1_m)
+    Sv_gate = Sv.where(in_gate)
+    Sv_gate = Sv_gate.chunk({vdim: -1})
+    med_ping = xr.apply_ufunc(
+        np.nanmedian, Sv_gate, input_core_dims=[[vdim]], vectorize=True,
+        dask="parallelized", output_dtypes=[Sv.dtype]
+    )
+    thr = med_ping - delta_db  # one value per ping
+
+    # broadcast to 2-D
+    thr2 = thr.broadcast_like(Sv)
+
+    cand = (Sv > thr2) & in_gate
+    cand = _morph(cand, _erode, erosion_kernel)
+    cand = _morph(cand, _dilate, dilation_kernel)
+
+    # ------------------------------------------------------------------ #
+    # 3) seabed index per ping  (robust fallback)                        #
+    # ------------------------------------------------------------------ #
+    idx_main = cand.argmax(vdim)
+    idx_fb = (Sv > thr2).argmax(vdim)
+
+    has = cand.any(vdim)
+    idx = xr.where(has, idx_main, idx_fb)
+
+    # fill gaps by forward/back fill; remaining NaN → max index
+    idx = idx.where(idx > 0).ffill("ping_time").bfill("ping_time")
+    idx = idx.fillna(Sv[vdim].max())
+
+    # ――― final keep-mask ―――――――――――――――――――――――――――――――――――――――――――
+    keep = Sv[vdim] < idx.broadcast_like(Sv)
+    keep.name = "seabed_water_mask"
+
+    return keep
+
+
+def _is_38khz(value, tol_hz=500.0) -> bool:
+    """Return True if *value* represents 38 kHz within ±tol_hz."""
+    # 1) numeric (Hz or kHz)
+    if np.issubdtype(type(value), np.number):
+        hz = float(value) * 1e3 if value < 1e3 else float(value)
+        return abs(hz - 38_000.) <= tol_hz
+
+    # 2) string  e.g.  "38", "38kHz", "ES38-18", "EKA … 38 …"
+    if isinstance(value, (bytes, str)):
+        txt = value.decode() if isinstance(value, bytes) else value
+        # pull first number token
+        m = re.search(r"(\d+(?:\.\d+)?)", txt)
+        if m:
+            return _is_38khz(float(m.group(1)), tol_hz=tol_hz)
+
+    return False
+
+
+def find_38khz_channel(ds: xr.Dataset, tol_hz: float = 500.0) -> xr.Dataset:
+    """
+    Return a *view* of *ds* containing **only the 38 kHz channel**.
+
+    Priority order for matching:
+    1. `frequency_nominal` coordinate (Hz)
+    2. Dimension coordinates named 'channel' or 'frequency'
+    3. Already single-channel dataset → returned unchanged.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Multi-channel dataset with variable 'Sv'.
+    tol_hz : float
+        Allowed deviation from 38 000 Hz (default ±500 Hz).
+
+    Raises
+    ------
+    KeyError if no coordinate matches 38 kHz.
+    """
+    # ---------------------------------------------------------------
+    # Case 0: dataset has no multi-channel dimension
+    # ---------------------------------------------------------------
+    if {"channel", "frequency"}.isdisjoint(ds.dims):
+        return ds  # already single-channel
+
+    chan_dim = "channel" if "channel" in ds.dims else "frequency"
+
+    # ---------------------------------------------------------------
+    # Case 1: look for 'frequency_nominal'
+    # ---------------------------------------------------------------
+    if "frequency_nominal" in ds.data_vars:
+        fn_var = ds["frequency_nominal"]
+        if chan_dim in fn_var.dims:
+            fn_vec = _to_numpy(fn_var)
+            for idx, val in enumerate(fn_vec):
+                if _is_38khz(val, tol_hz):
+                    return ds.isel({chan_dim: idx})
+
+    # ---------------------------------------------------------------
+    # Case 2: fall back to textual / numeric channel labels
+    # ---------------------------------------------------------------
+    coord = ds.coords.get(chan_dim, None)
+    if coord is None:  # fabricate numeric index coord
+        coord = xr.DataArray(np.arange(ds.dims[chan_dim]), dims=chan_dim)
+        ds = ds.assign_coords({chan_dim: coord})
+
+    for idx, val in enumerate(coord.values):
+        if _is_38khz(val, tol_hz):
+            return ds.isel({chan_dim: idx})
+
+    # ---------------------------------------------------------------
+    # No match found
+    # ---------------------------------------------------------------
+    def _vals(x):
+        if x is None:
+            return "<<missing>>"
+        if hasattr(x, "values"):
+            return x.values
+        return x
+
+    raise KeyError(
+        "Could not locate a 38 kHz channel.\n"
+        f"  frequency_nominal: {_vals(ds.coords.get('frequency_nominal', None))}\n"
+        f"  channel coord    : {_vals(ds.coords.get('channel', None))}\n"
+        f"  frequency coord  : {_vals(ds.coords.get('frequency', None))}"
+    )
+
+
+def _to_numpy(arr, max_size: int = 1_000_000) -> np.ndarray:
+    """
+    Return *arr* as a NumPy ndarray **only if** it contains ≤ `max_size`
+    elements.  Works for xarray objects, NumPy arrays and Dask arrays.
+
+    Raises
+    ------
+    ValueError  – if the array is larger than `max_size`.
+    """
+    # unwrap DataArray → .data
+    data = arr.data if hasattr(arr, "data") else arr
+
+    if data.size > max_size:
+        raise ValueError(
+            f"Refusing to materialise large array (size={data.size}) "
+            "— adjust `max_size` if you really need this."
+        )
+
+    if isinstance(data, da.Array):
+        return data.compute()  # still small, so safe to compute
+
+    return np.asarray(data)
+
+
+def broadcast_mask_to_all_channels(
+    mask_2d: xr.DataArray,
+    original_ds: xr.Dataset,
+    chan_dim: str | None = None,
+    mask_name: str = "seabed_water_mask",
+) -> xr.DataArray:
+    """
+    Expand a 2-D (ping_time × range_sample) mask to a 3-D
+    (channel × ping_time × range_sample) mask that aligns with *original_ds*.
+
+    Parameters
+    ----------
+    mask_2d : xr.DataArray(bool)
+        Output of `seabed_mask` for the 38 kHz slice; **dims must be exactly
+        ('ping_time', 'range_sample')** (order doesn’t matter).
+    original_ds : xr.Dataset
+        The full multi-channel dataset from which the 38 kHz slice was taken.
+    chan_dim : str, optional
+        Name of the channel dimension ('channel' or 'frequency').
+        If None, it is auto-detected; if the dataset has no such dimension the
+        original 2-D mask is returned unchanged.
+    mask_name : str
+        Name to assign to the returned DataArray.
+
+    Returns
+    -------
+    xr.DataArray(bool)
+        Broadcast mask with dims (channel, ping_time, range_sample) that can be
+        directly applied to `original_ds["Sv"]`.
+    """
+    # 1.  Detect the channel dimension; skip if single-channel
+    if chan_dim is None:
+        for cand in ("channel", "frequency"):
+            if cand in original_ds.dims:
+                chan_dim = cand
+                break
+    if chan_dim is None:
+        return mask_2d  # nothing to broadcast
+
+    # 2.  Ensure mask dims/coords match target dims
+    #     (transpose/reindex keeps it lazy)
+    mask_aligned = mask_2d.transpose(...).reindex_like(
+        original_ds.drop_vars(set(original_ds.data_vars)),
+        # drop data_vars → dataset with only coords/dims for alignment
+        method=None,
+        copy=False,
+    )
+
+    # 3.  Expand along the channel axis – broadcast, no compute
+    mask_3d = mask_aligned.expand_dims(
+        {chan_dim: original_ds[chan_dim]},
+        axis=0 if mask_aligned.dims[0] != chan_dim else None,
+    )
+
+    # 4.  Give it a nice name and return
+    return mask_3d.rename(mask_name)
 
 
 def get_seabed_mask_multichannel(ds: xr.Dataset, parameters: dict = None) -> xr.DataArray:
@@ -172,7 +468,7 @@ def get_seabed_mask(source_Sv: xr.Dataset,
 
 def _get_seabed_range(mask: xr.DataArray):
     """
-    Given a seabed mask, returns the depth depth of the seabed
+    Given a seabed mask, returns the depth of the seabed
 
     Args:
         mask (xr.DataArray): seabed mask

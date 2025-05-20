@@ -110,7 +110,8 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
         raise
 
 
-def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None):
+def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None,
+                    chunks=None):
     if survey_id is not None:
         zarr_path = f"{survey_id}/{zarr_path}"
 
@@ -125,8 +126,18 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     logger.info(f"Saving converted data to Zarr format at: {zarr_path_full}")
 
     if isinstance(echodata_or_sv_ds, xr.Dataset):
-        # echodata_or_sv_ds.to_zarr(store=zarr_store, mode='w')
-        rechunked_ds = echodata_or_sv_ds.chunk({dim: -1 for dim in echodata_or_sv_ds.dims})
+        ds = echodata_or_sv_ds
+
+        if "range_sample" in ds.coords:
+            rs_numpy = ds.range_sample.compute().data
+            ds = ds.assign_coords(range_sample=("range_sample", rs_numpy))
+            ds["range_sample"].encoding.clear()
+
+        rechunked_ds = fix_chunking(ds)
+
+        if chunks is not None:
+            rechunked_ds = rechunked_ds.chunk(chunks)
+
         if mode == "w":
             rechunked_ds.to_zarr(store=zarr_store, mode='w')
         elif mode == "a" and append_dim is not None:
@@ -224,6 +235,35 @@ def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=
             gdf = pd.read_parquet(f)
 
     return gdf
+
+
+def fix_chunking(ds: xr.Dataset, *, tiny_limit: int = 10_000) -> xr.Dataset:
+    """
+    Harmonise Zarr‐chunk hints with current Dask chunking.
+
+    • For variables with < `tiny_limit` elements:
+        → compute to NumPy  (one scalar / small vector, no memory penalty)
+    • For the rest: drop an incompatible `encoding["chunks"]`.
+    """
+    for name, var in list(ds.variables.items()):
+
+        # Skip large data vars that we WANT to stay Dask-chunked
+        if name in {"Sv", "angle_alongship", "angle_athwartship", "depth"}:
+            continue
+
+        # tiny calibration / coord → materialise
+        if var.size <= tiny_limit:
+            ds[name] = xr.DataArray(var.compute().data, dims=var.dims)
+            continue
+
+        # bigger var: keep Dask but strip stale hint if necessary
+        enc = var.encoding
+        if "chunks" in enc:
+            dask_chunks = getattr(var.data, "chunks", None)
+            if dask_chunks and enc["chunks"] != tuple(map(len, dask_chunks)):
+                enc.pop("chunks", None)
+
+    return ds
 
 
 def get_variable_encoding(ds: xr.Dataset, compression_level):

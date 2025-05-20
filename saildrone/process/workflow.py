@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Optional, Tuple
 from echopype.mask import apply_mask
 from echopype.clean import mask_transient_noise as mask_transient_noise_func
-from echopype.calibrate import compute_Sv as sv_computation
 from echopype.commongrid import compute_NASC, compute_MVBS
 
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
@@ -23,8 +22,10 @@ from saildrone.denoise import (get_impulse_noise_mask,
                                get_attenuation_mask,
                                remove_background_noise as remove_background_noise_func)
 
-#from .seabed import get_seabed_mask_multichannel
-from .plot import plot_and_upload_echograms
+from .seabed import mask_true_seabed
+from .echodata import open_echodata
+from .sv_dataset import compute_sv
+from .plot import plot_and_upload_echograms, ensure_channel_labels
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
 from ..store.nascpoint_service import NASCPointService
@@ -167,6 +168,33 @@ def _process_file_workflow(
             zarr_path=zarr_path,
             depth_offset=depth_offset
         )
+
+        sv_dataset = ensure_channel_labels(sv_dataset, add_freq=True)
+        sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
+
+        if apply_seabed_mask:
+            ds_Sv = sv_dataset_denoised if sv_dataset_denoised is not None else sv_dataset
+            sv_dataset_denoised = mask_true_seabed(ds_Sv)
+
+        depth_1d = (
+            sv_dataset["depth"]  # 3-D variable
+            .isel(channel=0, ping_time=0)  # → 1-D DataArray
+            .data  # → bare NumPy vector
+        )
+
+        # attach it as a coordinate on range_sample
+        sv_dataset = (
+            sv_dataset
+            .assign_coords(depth=("range_sample", depth_1d))
+            .swap_dims({"range_sample": "depth"})
+        )
+
+        if sv_dataset_denoised is not None:
+            sv_dataset_denoised = (
+                sv_dataset_denoised
+                .assign_coords(depth=("range_sample", depth_1d))
+                .swap_dims({"range_sample": "depth"})
+            )
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
         logging.error(error_message)
@@ -189,8 +217,6 @@ def _process_file_workflow(
                                                    depth_var="depth",
                                                    cmap=colormap,
                                                    container_name=echograms_container)
-
-    sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
 
     # if sv_dataset_denoised is not None and apply_seabed_mask:
     #     seabed_mask = get_seabed_mask_multichannel(sv_dataset_denoised)
@@ -262,7 +288,8 @@ def _process_file_workflow(
         interp_lat, interp_lon, location_data, gps_data = _load_location_data(sv_dataset, gps_container_name, cruise_id)
 
         if not has_location_data_ds:
-            sv_dataset = sv_dataset.assign_coords(latitude=("ping_time", interp_lat), longitude=("ping_time", interp_lon))
+            sv_dataset = sv_dataset.assign_coords(latitude=("ping_time", interp_lat),
+                                                  longitude=("ping_time", interp_lon))
 
         if not has_location_in_db:
             location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
@@ -368,8 +395,6 @@ def _save_processed_data(
     save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
-    sv_dataset = sv_dataset.chunk({"channel": 1, "ping_time": 512, "depth": 1024})
-
     if processed_container_name and save_to_blobstorage:
         sv_zarr_path = base_file_name and f"{cruise_id}/{base_file_name}/{file_name}.zarr" or f"{cruise_id}/{file_name}.zarr"
         zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
@@ -462,28 +487,28 @@ def _prepare_payload(
         "echogram_files": echogram_files
     }
 
-        # with PostgresDB() as db_connection:
-        #     file_service = FileSegmentService(db_connection)
-        #     has_location_data = file_service.file_has_location_data(file_id)
-        #
-        # if not has_location_data:
-        #     gps_data = query_location_points_between_timestamps(
-        #         ping_times_index[0].isoformat(), ping_times_index[-1].isoformat(),
-        #         container_name=gps_container_name,
-        #         survey_id=cruise_id
-        #     )
-        #
-        #     gps_result = extract_start_end_coordinates(gps_data)
-        #     location_data = extract_location_data(gps_data)
-        #     location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
-        #
-        #     payload.update({
-        #         "file_start_lat": gps_result["file_start_lat"],
-        #         "file_start_lon": gps_result["file_start_lon"],
-        #         "file_end_lat": gps_result["file_end_lat"],
-        #         "file_end_lon": gps_result["file_end_lon"],
-        #         "location_data": location_data_str
-        #     })
+    # with PostgresDB() as db_connection:
+    #     file_service = FileSegmentService(db_connection)
+    #     has_location_data = file_service.file_has_location_data(file_id)
+    #
+    # if not has_location_data:
+    #     gps_data = query_location_points_between_timestamps(
+    #         ping_times_index[0].isoformat(), ping_times_index[-1].isoformat(),
+    #         container_name=gps_container_name,
+    #         survey_id=cruise_id
+    #     )
+    #
+    #     gps_result = extract_start_end_coordinates(gps_data)
+    #     location_data = extract_location_data(gps_data)
+    #     location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
+    #
+    #     payload.update({
+    #         "file_start_lat": gps_result["file_start_lat"],
+    #         "file_start_lon": gps_result["file_start_lon"],
+    #         "file_end_lat": gps_result["file_end_lat"],
+    #         "file_end_lon": gps_result["file_end_lon"],
+    #         "location_data": location_data_str
+    #     })
 
     return payload
 
@@ -493,156 +518,6 @@ def _update_file_failure(file_segment_service, file_id: int, error_message: str)
     file_segment_service.update_file_record(
         file_id=file_id, failed=True, error_details=error_message
     )
-
-
-def open_echodata(source_path=None, container_name=None, zarr_path=None, chunks=None):
-    if source_path is not None:
-        from echopype.echodata.api import open_converted
-
-        return open_converted(source_path, chunks=chunks)
-
-    return open_from_blobstorage(zarr_path, container_name=container_name, chunks=chunks)
-
-
-def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, chunks=None, waveform_mode='CW',
-               encode_mode='complex', depth_offset=0):
-    if chunks is not None:
-        echodata = open_echodata(zarr_path=zarr_path, source_path=source_path, container_name=container_name,
-                                 chunks=chunks)
-
-    sv_dataset = sv_computation(echodata, waveform_mode=waveform_mode, encode_mode=encode_mode)
-    sv_dataset = enrich_sv_dataset(sv_dataset, echodata, depth_offset=depth_offset, waveform_mode=waveform_mode,
-                                   encode_mode=encode_mode)
-    sv_dataset = sv_dataset.chunk({
-        'channel': 2,
-        'ping_time': 1000,
-        'depth': 1000
-    })
-
-    return sv_dataset
-
-
-def enrich_sv_dataset(sv: xr.Dataset, echodata, **kwargs) -> xr.Dataset:
-    """
-    Enhances the input `sv` dataset by adding depth, location, and split-beam angle information.
-
-    Parameters:
-    - sv (xr.Dataset): Volume backscattering strength (Sv) from the given echodata.
-    - echodata (EchoData): An EchoData object holding the raw data.
-    - **kwargs: Keyword arguments specific to `add_depth()`, `add_location()`, and `add_splitbeam_angle()`.
-
-    Returns:
-    - xr.Dataset: An enhanced dataset with depth, location, and split-beam angle.
-    """
-    from echopype.consolidate import add_location, add_splitbeam_angle, add_depth
-
-    depth_keys = ["depth_offset", "tilt", "downward"]
-    depth_args = {k: kwargs.get(k) for k in depth_keys}
-
-    location_keys = ["nmea_sentence"]
-    location_args = {k: kwargs.get(k) for k in location_keys}
-
-    splitbeam_keys = [
-        "waveform_mode",
-        "encode_mode"
-    ]
-    splitbeam_args = {k: kwargs.get(k) for k in splitbeam_keys}
-
-    try:
-        sv = add_location(sv, echodata, **location_args)
-    except (KeyError, ValueError) as e:
-        logging.warning(f"Failed to add location due to error: {str(e)}", exc_info=True)
-
-    try:
-        sv = add_splitbeam_angle(sv, echodata, to_disk=False, pulse_compression=False, **splitbeam_args)
-    except (KeyError, ValueError) as e:
-        logging.warning(f"Failed to add split-beam angle due to error: {str(e)}", exc_info=True)
-
-    sv = apply_corrections_ds(sv, depth_offset=kwargs.get("depth_offset"))
-
-    # try:
-    #     sv = add_depth(sv, echodata, **depth_args)
-    # except (KeyError, ValueError) as e:
-    #     logging.warning(f"Failed to add depth due to error: {str(e)}", exc_info=True)
-
-    return sv
-
-
-def apply_corrections_ds(dataset, depth_offset=None):
-    # Remove empty pings
-    dataset = dataset.dropna(dim='ping_time', how='all', subset=['Sv'])
-
-    # Correct echo range if 'echo_range' is present
-    if 'echo_range' in dataset and depth_offset is not None:
-        try:
-            dataset = correct_echo_range(dataset, depth_offset=depth_offset)
-        except Exception as e:
-            print(f"Error correcting echo range: {e}")
-
-    return dataset
-
-
-def correct_echo_range(ds: xr.Dataset, depth_offset: float = 0.0) -> xr.Dataset:
-    """
-    Correct the echo range values in a dataset by applying a depth offset and filtering invalid values.
-
-    Parameters
-    ----------
-    ds : xr.Dataset
-        Input dataset containing echo_range and range_sample dimensions
-    depth_offset : float, optional
-        Offset to add to the echo range values, by default 0.0
-
-    Returns
-    -------
-    xr.Dataset
-        Dataset with corrected depth values and filtered invalid entries
-
-    Notes
-    -----
-    The function performs the following operations:
-    1. Preserves the original range_sample values
-    2. Applies depth offset to echo_range values
-    3. Filters out invalid depth values
-    4. Renames range_sample to depth
-    """
-    if "range_sample" not in ds.dims:
-        return ds
-
-    if "echo_range" not in ds:
-        logging.warning("echo_range not found in dataset")
-        return ds
-
-    # Store original range_sample values
-    ds = ds.assign(original_range_sample=("range_sample", ds["range_sample"].values))
-
-    # Get first channel and ping_time - assuming these are constant for the range
-    first_channel = ds["channel"].values[0]
-    first_ping_time = ds["ping_time"].values[0]
-
-    # Extract and correct echo range values using numpy operations
-    selected_echo_range = ds["echo_range"].sel(channel=first_channel, ping_time=first_ping_time)
-    corrected_depth = selected_echo_range.values + depth_offset
-
-    # Find valid range using numpy operations
-    min_val = np.nanmin(corrected_depth)
-    max_val = np.nanmax(corrected_depth)
-
-    # Update coordinates and rename
-    ds = ds.assign_coords(range_sample=corrected_depth)
-    ds = ds.rename({'range_sample': 'depth'})
-
-    # Filter to valid depth range
-    ds = ds.sel(depth=slice(min_val, max_val))
-
-    # Remove any remaining NaN depths
-    valid_depth_indices = ~np.isnan(ds["depth"].values)
-    ds = ds.isel(depth=valid_depth_indices)
-
-    # Restore original range_sample
-    ds = ds.rename({"original_range_sample": "range_sample"})
-
-    return ds
 
 
 def apply_denoising(sv_dataset, **kwargs):
@@ -664,7 +539,8 @@ def apply_denoising(sv_dataset, **kwargs):
             "depth_bin": mask_impulse_noise.get('depth_bin'),
             "num_side_pings": mask_impulse_noise.get('num_side_pings'),
             "impulse_noise_threshold": mask_impulse_noise.get('threshold'),
-            "range_var": mask_impulse_noise.get('range_var')
+            "range_var": mask_impulse_noise.get('range_var'),
+            "use_index_binning": False
         }
 
         for channel in sv_dataset.coords["channel"].values:
@@ -724,7 +600,7 @@ def apply_denoising(sv_dataset, **kwargs):
             fill_value,
             sv_dataset_denoised["Sv"]
         )
-        # sv_dataset_denoised = apply_mask(sv_dataset, transient_mask, var_name="Sv")
+        sv_dataset_denoised = apply_mask(sv_dataset, transient_mask, var_name="Sv")
 
     #####################################################################
     # Step 4: Remove background noise
@@ -736,8 +612,10 @@ def apply_denoising(sv_dataset, **kwargs):
         sv_dataset_denoised = remove_background_noise_func(sv_dataset_denoised,
                                                            ping_num=remove_background_noise.get('ping_num'),
                                                            SNR_threshold=remove_background_noise.get('SNR_threshold'),
-                                                           range_sample_num=remove_background_noise.get('range_sample_num'),
-                                                           background_noise_max=remove_background_noise.get('background_noise_max')
+                                                           range_sample_num=remove_background_noise.get(
+                                                               'range_sample_num'),
+                                                           background_noise_max=remove_background_noise.get(
+                                                               'background_noise_max')
                                                            )
 
     return sv_dataset_denoised

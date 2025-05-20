@@ -21,90 +21,94 @@ def get_impulse_noise_mask(
     desired_frequency=None,
     method="ryan",
 ) -> xr.DataArray:
-    mask_map = {
-        "ryan": _ryan
-        # "wang": impulse_noise._wang,
-    }
-
-    if method not in mask_map.keys():
-        raise ValueError(f"Unsupported method: {method}")
-
     if desired_channel is None:
         if desired_frequency is None:
             raise ValueError("Must specify either desired channel or desired frequency")
         else:
             desired_channel = frequency_nominal_to_channel(source_Sv, desired_frequency)
 
-    impulse_mask = mask_map[method](source_Sv, desired_channel, parameters)
+    impulse_mask = impulse_noise_mask(source_Sv, desired_channel, parameters=parameters)
     noise_free_mask = ~impulse_mask
 
     return noise_free_mask
 
 
-def _ryan(
+def impulse_noise_mask(
     Sv_ds: xr.Dataset,
     desired_channel: str,
-    parameters: dict,
+    depth_dim="range_sample",
+    parameters: dict = None
 ) -> xr.DataArray:
     """
-    Mask impulse noise following the two-sided comparison method described in:
-    Ryan et al. (2015) ‘Reducing bias due to noise and attenuation in
-    open-ocean echo integration data’, ICES Journal of Marine Science, 72: 2482–2493.
+    Ryan et al. (2015) Impulse-Noise filter implemented for lazy Dask arrays.
 
     Parameters
     ----------
-        Sv_ds (xarray.Dataset): xr.DataArray with Sv data for multiple channels (dB).
-        desired_channel (str): Name of the desired frequency channel.
-        parameters (dict): Dictionary of parameters. Must contain the following:
-            depth_bin (int/float): Vertical binning length (n samples or range).
-            num_side_pings (int): Number of pings either side for comparisons.
-            impulse_noise_threshold (int/float): User-defined threshold value (dB).
+    Sv_ds : xr.Dataset
+        Multi-frequency dataset containing `Sv` in dB (dims: ping_time, depth, channel).
+    desired_channel : str
+        Channel (frequency) to process.
+    depth_dim : str
+        Depth dimension name (default: "range_sample").
+    parameters : dict
+        Dictionary of parameters:
+            - depth_bin (int): Depth bin size for smoothing.
+            - num_side_pings (int): Number of side pings for comparison.
+            - impulse_noise_threshold (float): Threshold for impulse noise detection.
 
     Returns
     -------
-        xarray.DataArray: xr.DataArray with IN mask.
-
-    Notes
-    -----
-    In the original 'ryan' function (echopy), two masks are returned:
-        - 'mask', where True values represent likely impulse noise, and
-        - 'mask_', where True values represent valid samples for side comparison.
-
-    When adapting for echopype, we must ensure the mask aligns with our data orientation.
-    Hence, we transpose 'mask' and 'mask_' to match the shape of the data in 'Sv_ds'.
-
-    Then, we create a combined mask using a bitwise AND operation between 'mask' and '~mask_'.
-
+    xr.DataArray (bool)
+        True where data should be masked (original NaNs **or** detected IN).
     """
     parameter_names = ("depth_bin", "num_side_pings", "impulse_noise_threshold")
     if not all(name in parameters.keys() for name in parameter_names):
         raise ValueError("Missing parameters - should be depth_bin, num_side_pings, impulse_noise_threshold, are" + str(parameters.keys()))
 
-    m = parameters["depth_bin"]
-    n = parameters["num_side_pings"]
-    thr = parameters["impulse_noise_threshold"]
+    depth_bin, n, thr = (
+        parameters["depth_bin"],
+        parameters["num_side_pings"],
+        parameters["impulse_noise_threshold"],
+    )
 
-    # Select the desired frequency channel directly using 'sel'
-    selected_channel_ds = Sv_ds.sel(channel=desired_channel)
+    if depth_bin < 1 or n < 1 or thr <= 0:
+        raise ValueError("depth_bin and num_side_pings must be ≥1; threshold > 0")
 
-    Sv = selected_channel_ds.Sv
-    Sv_ = downsample(Sv, coordinates={"depth": m}, is_log=True)
-    Sv_ = upsample(Sv_, Sv)
+    # 1. Select channel and extract Sv (dB); drop singleton dim to keep array 2-D
+    Sv = Sv_ds.sel(channel=desired_channel).Sv
 
-    # get valid sample mask
-    mask = Sv_.isnull()
+    # Original invalid values
+    invalid = Sv.isnull()
 
-    # get IN mask
-    forward = Sv_ - Sv_.shift(shifts={"ping_time": n}, fill_value=np.nan)
-    backward = Sv_ - Sv_.shift(shifts={"ping_time": -n}, fill_value=np.nan)
-    forward = forward.fillna(np.inf)
-    backward = backward.fillna(np.inf)
-    mask_in = (forward > thr) & (backward > thr)
-    # add to the mask areas that have had data shifted out of range
-    mask_in[0:n, :] = True
-    mask_in[-n:, :] = True
+    # Ensure depth coordinate is ascending for interp
+    if np.all(np.diff(Sv[depth_dim]) < 0):
+        Sv = Sv.sortby(depth_dim)
 
-    mask = mask | mask_in
-    mask = mask.drop("channel")
-    return mask
+    # 2. vertical block smoothing in the *linear* domain
+    Sv_lin = 10 ** (Sv / 10)  # dB ➜ linear
+    Sv_lin_blk = (
+        Sv_lin.coarsen({depth_dim: depth_bin}, boundary="pad")
+        .mean(skipna=True)
+        .interp({depth_dim: Sv[depth_dim]}, method="nearest")  # restore grid
+    )
+    Sv_sm = 10 * np.log10(Sv_lin_blk)  # back to dB
+
+    # 3.two-sided comparison along ping_time
+    fwd = Sv_sm - Sv_sm.shift(ping_time=+n, fill_value=-np.inf)
+    bwd = Sv_sm - Sv_sm.shift(ping_time=-n, fill_value=-np.inf)
+    mask_in = (fwd > thr) & (bwd > thr)
+
+    # 4. edge pings cannot be evaluated
+    N = Sv.coords["ping_time"].size
+    edge_vec = np.zeros(N, dtype=bool)
+    edge_vec[:n] = True
+    edge_vec[-n:] = True
+    edge_mask = xr.DataArray(
+        edge_vec,
+        coords={"ping_time": Sv.ping_time},
+        dims="ping_time",
+    ).broadcast_like(mask_in)
+
+    # 5. Combine and return
+    return invalid | mask_in | edge_mask
 

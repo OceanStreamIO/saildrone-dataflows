@@ -1,12 +1,12 @@
 import os
 import shutil
 import traceback
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import xarray as xr
 import numpy as np
-import dask.array as da
 
 from saildrone.store import upload_folder_to_blob_storage
 
@@ -65,10 +65,10 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     Returns:
     - str: The path to the saved echogram file.
     """
-    full_channel_name = ds_Sv.channel.values[channel]
-    channel_name = "_".join(full_channel_name.split()[:3])
 
-    # Extract relevant data and configure axis
+    full_channel_name = str(ds_Sv.channel.values[channel])
+    label = str(ds_Sv.channel_label.values[channel])
+    channel_name = label.replace(" ", "-")
     filtered_ds = ds_Sv['Sv']
 
     if 'beam' in filtered_ds.dims:
@@ -90,32 +90,29 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
         except Exception as e:
             print(f"Error swapping dims while plotting echogram: {e}")
 
-    # Get the data array for the selected frequency channel
-    data_array = filtered_ds.isel(frequency=channel)
-
-    # Find the indices where data is finite (not NaN)
-    finite_mask = np.isfinite(data_array.values)
-
-    # Determine depths where data exists
-    data_exists_along_depth = np.any(finite_mask, axis=0)
-
-    if np.any(data_exists_along_depth):
-        max_depth_index = np.max(np.where(data_exists_along_depth))
-        max_depth = data_array[depth_var].values[max_depth_index]
-    else:
-        max_depth = 0
-
     plt.figure(figsize=(20, 12))
+
     try:
-        filtered_ds.isel(frequency=channel).T.plot(
+        da = filtered_ds.isel(frequency=channel)
+        coord_vals = da[depth_var].data
+        valid_coord = np.isfinite(coord_vals)
+
+        da = da.isel({depth_var: valid_coord})
+        da = da.dropna(dim=depth_var, how="all")
+        da = da.sortby(depth_var)
+
+        top_depth = float(da[depth_var].isel({depth_var: 0}).compute().item())
+        bottom = float(da[depth_var].isel({depth_var: -1}).compute().item())
+
+        da.T.plot(
             x='ping_time',
             y=depth_var,
             yincrease=False,
             vmin=-80,
             vmax=-50,
             cmap=cmap,
-            cbar_kwargs={'label': 'Volume backscattering strength (Sv re 1 m-1)'},
-            ylim=(max_depth, 0)
+            cbar_kwargs={'label': 'Volume backscattering strength (Sv re 1 m⁻¹)'},
+            ylim=(bottom, top_depth),
         )
     except Exception as e:
         print(f"Error plotting echogram: {e}")
@@ -123,7 +120,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
     plt.grid(True, linestyle='--', alpha=0.5)
     plt.xlabel('Ping time', fontsize=14)
-    plt.ylabel('Depth', fontsize=14)
+    plt.ylabel('Depth [m]' if depth_var != "range_sample" else "Sample #", fontsize=14)
     plt.title(f'{channel_name}', fontsize=16, fontweight='bold')
 
     echogram_file_name = f"{file_base_name}_{channel_name}.png"
@@ -198,3 +195,44 @@ def plot_noise_mask(mask, file_base_name, echogram_path, depth_var='depth'):
     return mask_output_path
 
 
+def ensure_channel_labels(
+    ds: xr.Dataset,
+    *,
+    chan_dim: str = "channel",
+    label_coord: str = "channel_label",
+    add_freq: bool = False,                  # ← new switch
+) -> xr.Dataset:
+    """
+    Guarantee that *ds* has a textual coordinate ``label_coord`` aligned with
+    *chan_dim*.
+
+    Each label starts with the **original channel name** and, if ``add_freq=True`` and a numeric frequency can be
+    found, appends ``"(38 kHz)"`` style text.
+
+    """
+    # Nothing to do if the label coord already exists
+    if label_coord in ds.coords:
+        return ds
+
+    # Single-channel dataset → make a trivial label and return
+    if chan_dim not in ds.dims:
+        return ds.assign_coords({label_coord: ("channel", ["single"])})
+
+    orig_names = [str(v) for v in ds.coords[chan_dim].values]
+
+    if "frequency_nominal" in ds:
+        fn_hz = ds["frequency_nominal"].compute().values
+    else:                                          # try to parse from orig name
+        fn_hz = []
+        for name in orig_names:
+            m = re.search(r"(\d+(?:\.\d+)?)", name)
+            fn_hz.append(float(m.group(1)) * 1e3 if (m and float(m.group(1)) < 1e3) else
+                         float(m.group(1)) if m else np.nan)
+    labels = []
+    for oname, hz in zip(orig_names, fn_hz):
+        if add_freq and not np.isnan(hz):
+            labels.append(f"{oname} ({hz/1e3:.0f} kHz)")
+        else:
+            labels.append(oname)
+
+    return ds.assign_coords({label_coord: (chan_dim, labels)})

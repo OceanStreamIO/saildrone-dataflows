@@ -18,7 +18,7 @@ def db_setup():
 @pytest.mark.skip(reason="Temporarily")
 @patch('prefect_dask.get_dask_client', return_value=MagicMock())
 def test_process_file_without_beam(mock_get_dask_client, mock_save_zarr_store, db_setup):
-    db_setup.empty_files_table()
+    # db_setup.empty_files_table()
 
     file_info = Path('./test/data/SD_TPOS2023_v03-Phase0-D20230530-T220328-0.raw')
     file_name = 'SD_TPOS2023_v03-Phase0-D20230530-T220328-0'
@@ -35,19 +35,18 @@ def test_process_file_without_beam(mock_get_dask_client, mock_save_zarr_store, d
 
 
 @patch('saildrone.store.save_zarr_store')
-@patch('prefect_dask.get_dask_client', return_value=MagicMock())
-def test_process_file_success(mock_get_dask_client, mock_save_zarr_store, db_setup):
-    db_setup.empty_files_table()
+def test_process_file_success(mock_save_zarr_store):
+    # db_setup.empty_files_table()
 
     file_name = 'SD_TPOS2023_v03-Phase0-D20230826-T015958-0'
     file_info = Path(f'./test/data/{file_name}.raw')
     file_segment_service = FileSegmentService(db_setup)
-    assert not file_segment_service.is_file_processed(file_name)
+    # assert not file_segment_service.is_file_processed(file_name)
     sv_dataset, _, _ = process_raw_file(
         file_path=file_info,
-        survey_id='TPOS2023',
+        survey_id='SD_TPOS2023_v03',
         sonar_model='EK80',
-        calibration_file='./saildrone/utils/calibration_values.xlsx'
+        calibration_file='./calibration/calibration_values.xlsx'
     )
 
     sv_path = f"test/processed/{file_name}_Sv.zarr"

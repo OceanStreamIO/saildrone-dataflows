@@ -20,8 +20,12 @@ def test_file_workflow_saildrone():
     cluster = LocalCluster(n_workers=4, threads_per_worker=1, memory_limit='12GB')
     client = Client(cluster)
 
-    source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20230825-T085959-0.zarr')
+    #source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20230825-T085959-0.zarr')
+    source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231010-T095958-0.zarr')
+    #source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231008-T005959-0.zarr')
+    #source_path = Path('test/reka-shipboard/converted/SE2204_-D20220704-T171306.zarr')
     cruise_id = 'SD_TPOS2023_v03'
+    #cruise_id = 'SE2204'
     output_path = 'test/processed'
     save_to_blobstorage = False
     load_from_blobstorage = True
@@ -30,23 +34,25 @@ def test_file_workflow_saildrone():
     processed_container_name = 'processedlocal'
     reprocess = True
     plot_echograms = True
-    depth_offset = 0
+    depth_offset = 1.9
     echograms_container = 'echograms'
     gps_container_name = 'gpsdata'
     encode_mode = 'complex'
+    #encode_mode = 'power'
     waveform_mode = 'CW'
     impulse_noise_opts = dict(
-        depth_bin=10,
+        depth_bin=5,
         num_side_pings=2,
         threshold=10,
-        range_var="depth"
+        range_var="echo_range",
+        use_index_binning=True
     )
     attenuated_signal_opts = dict(
         upper_limit_sl=180,
         lower_limit_sl=300,
         num_side_pings=15,
         threshold=10,
-        range_var="depth"
+        range_var="range_sample"
     )
 
     transient_noise_opts = dict(
@@ -83,9 +89,9 @@ def test_file_workflow_saildrone():
         compute_nasc=False,
         compute_mvbs=False,
         colormap='ocean_r',
-        # mask_transient_noise=transient_noise_opts,
+        mask_transient_noise=None,
         mask_impulse_noise=impulse_noise_opts,
-        mask_attenuated_signal=attenuated_signal_opts,
+        mask_attenuated_signal=None,
         remove_background_noise=background_noise_opts,
         chunks_denoising=chunks_denoising,
         apply_seabed_mask=False,
