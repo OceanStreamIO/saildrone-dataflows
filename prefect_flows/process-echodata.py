@@ -100,6 +100,9 @@ def task_plot_echograms_normal(payload, container_name, echograms_container, chu
     if payload is None:
         return None
 
+    if not isinstance(payload, dict) or 'file_name' not in payload:
+        raise ValueError("Invalid payload passed to task_plot_echograms_normal")
+
     file_name = payload['file_name']
 
     try:
