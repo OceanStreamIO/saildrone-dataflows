@@ -143,7 +143,7 @@ def task_plot_echograms_normal(payload, container_name, echograms_container, chu
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="plot_echograms_denoised--{file_name}"
 )
-def task_plot_echograms_denoised(payload, container_name, chunks=None, cmap='ocean_r'):
+def task_plot_echograms_denoised(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
         return None
 
@@ -167,7 +167,7 @@ def task_plot_echograms_denoised(payload, container_name, chunks=None, cmap='oce
                                       depth_var="depth",
                                       upload_path=upload_path,
                                       cmap=cmap,
-                                      container_name=container_name)
+                                      container_name=echograms_container)
 
         return Completed(message="plot_echograms_denoised completed successfully")
     except Exception as e:
@@ -194,7 +194,7 @@ def task_plot_echograms_denoised(payload, container_name, chunks=None, cmap='oce
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="plot_echograms_seabed--{file_name}"
 )
-def task_plot_echograms_seabed(payload, container_name, chunks=None, cmap='ocean_r'):
+def task_plot_echograms_seabed(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
         return None
 
@@ -206,24 +206,24 @@ def task_plot_echograms_seabed(payload, container_name, chunks=None, cmap='ocean
 
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         upload_path = f"{cruise_id}/{file_name}"
-        zarr_path_seabed = f"{file_path}--denoised.zarr" if seabed_mask else None
+        zarr_path_seabed = f"{file_path}--seabed.zarr" if seabed_mask else None
 
         if zarr_path_seabed:
             ds = open_zarr_store(zarr_path_seabed, container_name=container_name, chunks=chunks, rechunk_after=True)
 
             plot_and_upload_echograms(ds,
-                                      file_base_name=f"{file_name}--denoised",
+                                      file_base_name=f"{file_name}--seabed",
                                       save_to_blobstorage=True,
                                       depth_var="depth",
                                       upload_path=upload_path,
                                       cmap=cmap,
-                                      container_name=container_name)
+                                      container_name=echograms_container)
 
         return Completed(message="plot_echograms_denoised completed successfully")
     except Exception as e:
         traceback.print_exc()
 
-        markdown_report = f"""# Error during plot_echograms_denoised
+        markdown_report = f"""# Error during plot_echograms_seabed
         Error occurred while plotting echograms: {file_name}
 
         {str(e)}
@@ -235,7 +235,7 @@ def task_plot_echograms_seabed(payload, container_name, chunks=None, cmap='ocean
 
         create_markdown_artifact(markdown_report)
 
-        return Completed(message="plot_echograms_denoised completed with errors")
+        return Completed(message="plot_echograms_seabed completed with errors")
 
 
 @task(
