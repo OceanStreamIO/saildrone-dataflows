@@ -458,7 +458,7 @@ def load_and_process_files_to_zarr(source_directory: str,
             in_flight.remove(finished)
 
     # Wait for remaining tasks
-    for future_task in in_flight:
+    for future_task in in_flight + side_running_tasks:
         future_task.result()
 
     logging.info("All batches have been processed.")
