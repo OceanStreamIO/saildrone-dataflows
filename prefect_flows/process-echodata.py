@@ -94,7 +94,7 @@ class RemoveBackgroundNoise(DenoiseOptions):
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms--{file_name}"
+    task_run_name="plot_echograms"
 )
 def task_plot_echograms_normal(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
@@ -144,7 +144,7 @@ def task_plot_echograms_normal(payload, container_name, echograms_container, chu
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms_denoised--{file_name}"
+    task_run_name="plot_echograms_denoised"
 )
 def task_plot_echograms_denoised(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
@@ -198,7 +198,7 @@ def task_plot_echograms_denoised(payload, container_name, echograms_container, c
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms_seabed--{file_name}"
+    task_run_name="plot_echograms_seabed"
 )
 def task_plot_echograms_seabed(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
