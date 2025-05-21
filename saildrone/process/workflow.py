@@ -171,15 +171,16 @@ def _process_file_workflow(
 
         sv_dataset = ensure_channel_labels(sv_dataset, add_freq=True)
         sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
+        sv_dataset_seabed = None
 
         if apply_seabed_mask:
             ds_Sv = sv_dataset_denoised if sv_dataset_denoised is not None else sv_dataset
-            sv_dataset_denoised = mask_true_seabed(ds_Sv)
+            sv_dataset_seabed = mask_true_seabed(ds_Sv)
 
         depth_1d = (
-            sv_dataset["depth"]  # 3-D variable
-            .isel(channel=0, ping_time=0)  # → 1-D DataArray
-            .data  # → bare NumPy vector
+            sv_dataset["depth"]
+            .isel(channel=0, ping_time=0)
+            .data
         )
 
         # attach it as a coordinate on range_sample
@@ -195,6 +196,13 @@ def _process_file_workflow(
                 .assign_coords(depth=("range_sample", depth_1d))
                 .swap_dims({"range_sample": "depth"})
             )
+        if sv_dataset_seabed is not None:
+            sv_dataset_seabed = (
+                sv_dataset_seabed
+                .assign_coords(depth=("range_sample", depth_1d))
+                .swap_dims({"range_sample": "depth"})
+            )
+
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
         logging.error(error_message)
@@ -218,10 +226,6 @@ def _process_file_workflow(
                                                    cmap=colormap,
                                                    container_name=echograms_container)
 
-    # if sv_dataset_denoised is not None and apply_seabed_mask:
-    #     seabed_mask = get_seabed_mask_multichannel(sv_dataset_denoised)
-    #     sv_dataset_denoised = apply_mask(sv_dataset_denoised, seabed_mask, var_name="Sv")
-
     if sv_dataset_denoised is not None and plot_echograms:
         echogram_files_denoised = plot_and_upload_echograms(sv_dataset_denoised,
                                                             cruise_id=cruise_id,
@@ -233,6 +237,18 @@ def _process_file_workflow(
                                                             cmap=colormap,
                                                             container_name=echograms_container)
         echogram_files.extend(echogram_files_denoised)
+
+    if sv_dataset_seabed is not None and plot_echograms:
+        echogram_files_seabed = plot_and_upload_echograms(sv_dataset_seabed,
+                                                          cruise_id=cruise_id,
+                                                          file_base_name=file_name,
+                                                          file_name=f"{file_name}_seabed",
+                                                          output_path=output_path,
+                                                          save_to_blobstorage=save_to_blobstorage,
+                                                          depth_var="depth",
+                                                          cmap=colormap,
+                                                          container_name=echograms_container)
+        echogram_files.extend(echogram_files_seabed)
     #####################################################################
     # 4. Compute MVBS
     #####################################################################
@@ -275,7 +291,8 @@ def _process_file_workflow(
         file_name=file_name,
         start_time=start_time,
         survey_db_id=survey_db_id,
-        echogram_files=echogram_files
+        echogram_files=echogram_files,
+        cruise_id=cruise_id
     )
 
     #####################################################################
@@ -361,6 +378,17 @@ def _process_file_workflow(
             save_to_blobstorage=save_to_blobstorage,
         )
 
+    if sv_dataset_seabed is not None:
+        _save_processed_data(
+            sv_dataset_seabed,
+            cruise_id=cruise_id,
+            base_file_name=file_name,
+            file_name=f"{file_name}_seabed",
+            processed_container_name=processed_container_name,
+            output_path=output_path,
+            save_to_directory=save_to_directory,
+            save_to_blobstorage=save_to_blobstorage,
+        )
     #####################################################################
     # 9. Update DB with processing results
     #####################################################################
@@ -368,6 +396,7 @@ def _process_file_workflow(
         "distance": dist_max,
         "location": sv_zarr_path,
         "denoised": sv_dataset_denoised is not None,
+        "seabed_mask": sv_dataset_seabed is not None
     })
 
     with PostgresDB() as db_connection:
@@ -464,7 +493,8 @@ def _prepare_payload(
     file_name: str = None,
     start_time: float = None,
     echogram_files: Optional[list] = None,
-    survey_db_id: int = None
+    survey_db_id: int = None,
+    cruise_id: str = None
 ) -> dict:
     processing_time_ms = int((time.time() - start_time) * 1000)
     ping_times = sv_dataset.coords["ping_time"].values
@@ -474,6 +504,7 @@ def _prepare_payload(
         "size": None,
         "last_modified": None,
         "survey_db_id": survey_db_id,
+        "cruise_id": cruise_id,
         "failed": False,
         "error_details": "",
         "processing_time_ms": processing_time_ms,

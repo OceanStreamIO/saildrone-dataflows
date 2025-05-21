@@ -12,7 +12,7 @@ from dask_image.ndfilters import convolve
 #from dask_image.ndmorph import binary_dilation, binary_erosion
 from scipy.ndimage import binary_erosion as _erode
 from scipy.ndimage import binary_dilation as _dilate
-from scipy.signal import medfilt
+from scipy.signal import savgol_filter
 
 MAX_SV_DEFAULT_PARAMS = {"r0": 10, "r1": 1000, "roff": 0, "thr": (-40, -60)}
 DELTA_SV_DEFAULT_PARAMS = {"r0": 10, "r1": 1000, "roff": 0, "thr": 20}
@@ -81,23 +81,175 @@ ARIZA_EXPERIMENTAL_DEFAULT_PARAMS = {
 }
 
 
-def mask_true_seabed(ds: xr.Dataset, r0_m=5, r1_m=1200, thr_dB=-40.0) -> xr.Dataset:
+def mask_true_seabed(ds: xr.Dataset, r0_m=5, r1_m=1200, thr_dB=-40.0, delta_db: float = 3.0) -> xr.Dataset:
     ds_copy = ds.copy(deep=True)
     ds_38 = find_38khz_channel(ds_copy)
 
-    mask_38_2d = get_true_seabed_mask(ds_38,
-                                      channel=ds_38.channel.values.item(0),
-                                      r0_m=r0_m,
-                                      r1_m=r1_m,
-                                      thr_dB=thr_dB
-                                      )
+    ch_label = ds_38.channel.values.item(0)
 
-    mask_all = broadcast_mask_to_all_channels(mask_38_2d, original_ds=ds)
+    seabed_idx, seabed_depth = compute_seabed_line(
+        ds_38,
+        channel=ch_label,
+        r0_m=r0_m,
+        r1_m=r1_m,
+        thr_dB=thr_dB,
+        delta_db=delta_db
+    )
 
-    Sv_clean = ds_copy["Sv"].where(mask_all)
-    ds_copy["Sv"] = Sv_clean
+    ds_copy = ds_copy.assign_coords(
+        seabed_idx=("ping_time", seabed_idx.data),
+        seabed_depth=("ping_time", seabed_depth.data)
+    )
+
+    range_m = ds_38["echo_range"]
+    # build a True-above-bottom mask on that grid:
+    mask2d = range_m < seabed_depth
+
+    mask3d = broadcast_mask_to_all_channels(
+        mask2d.rename("seabed_water_mask"),
+        original_ds=ds_copy
+    )
+    ds_copy["Sv"] = ds_copy["Sv"].where(mask3d)
 
     return ds_copy
+
+
+    # mask_38_2d = get_true_seabed_mask(ds_38,
+    #                                   channel=ds_38.channel.values.item(0),
+    #                                   r0_m=r0_m,
+    #                                   r1_m=r1_m,
+    #                                   thr_dB=thr_dB
+    #                                   )
+    #
+    # mask_all = broadcast_mask_to_all_channels(mask_38_2d, original_ds=ds)
+    #
+    # Sv_clean = ds_copy["Sv"].where(mask_all)
+    # ds_copy["Sv"] = Sv_clean
+
+    return ds_copy
+
+
+def compute_seabed_line(
+    ds: xr.Dataset,
+    channel: str,
+    *,
+    r0_m: float,
+    r1_m: float,
+    thr_dB: float = -40.0,
+    delta_db: float = 3.0,
+    erosion_kernel: tuple[int,int] = (3,3),
+    dilation_kernel: tuple[int,int] = (5,5),
+) -> xr.DataArray:
+    """
+    Compute a single‐ping seabed depth line (no masking) for plotting.
+
+    Returns
+    -------
+    seabed_depth : xr.DataArray
+        dims: (ping_time,)
+        coords: ping_time, depth
+        values: seabed depth [m] per ping
+    """
+    # pick channel/frequency
+    if "channel" in ds.dims:
+        sub = ds.sel(channel=channel, drop=True) if channel in ds.coords.get("channel",[]) else ds.isel(channel=0)
+    elif "frequency" in ds.dims:
+        sub = ds.sel(frequency=channel, drop=True) if channel in ds.coords.get("frequency",[]) else ds.isel(frequency=0)
+    else:
+        sub = ds
+
+    Sv = sub["Sv"]
+    er = sub["echo_range"]
+    vdim = "range_sample" if "range_sample" in Sv.dims else "depth"
+
+    # 1) gate + fixed threshold
+    gate = (er >= r0_m) & (er <= r1_m)
+    cand0 = (Sv > thr_dB) & gate
+    if not bool(cand0.any()):
+        warnings.warn("No candidate echoes; returning NaNs")
+        return xr.DataArray(
+            np.nan,
+            dims=("ping_time",),
+            coords={"ping_time": Sv.ping_time},
+            name="seabed_depth"
+        )
+
+    # 2) dynamic threshold per ping
+    Sv_gate = Sv.where(gate).chunk({vdim:-1})
+    med = xr.apply_ufunc(
+        np.nanmedian, Sv_gate, input_core_dims=[[vdim]],
+        vectorize=True, dask="parallelized", output_dtypes=[Sv.dtype]
+    )
+    thr2 = (med - delta_db).broadcast_like(Sv)
+
+    cand = (Sv > thr2) & gate
+    def _m(xda, fn, k):
+        struct = np.ones(k,bool)
+        pad = {vdim:k[0]//2, Sv.dims[0]:k[1]//2}
+        return xr.apply_ufunc(
+            lambda blk, **_: fn(blk, structure=struct),
+            xda,
+            dask="parallelized", vectorize=False,
+            output_dtypes=[bool],
+            dask_gufunc_kwargs=dict(depth=pad, boundary="nearest")
+        )
+    cand = _m(cand, _erode, erosion_kernel)
+    cand = _m(cand, _dilate, dilation_kernel)
+
+    # 3) pick raw index + fill
+    idx_main = cand.argmax(dim=vdim)
+    idx_fb = (Sv > thr2).argmax(dim=vdim)
+    has_bot = cand.any(dim=vdim)
+    idx = xr.where(has_bot, idx_main, idx_fb)
+    idx = idx.where(idx > 0).ffill("ping_time").bfill("ping_time").fillna(Sv[vdim].max())
+
+    # 4) materialize & de-spike
+    ping_np = idx.ping_time.values
+    idx_np = idx.compute().values.astype(int)
+    N = len(idx_np)
+    win = min(31, N if N%2 else N-1)
+    sm = savgol_filter(idx_np, win, polyorder=1, mode="interp")
+    max_jump = 5
+
+    for i in range(1,N):
+        if abs(sm[i]-sm[i-1])>max_jump:
+            sm[i]=sm[i-1]
+
+    idx_clean = xr.DataArray(
+        sm.astype(int),
+        dims=("ping_time",),
+        coords={"ping_time": ping_np}
+    )
+
+    first_good = idx_clean.dropna("ping_time").isel(ping_time=0)
+    idx_clean[:5] = first_good
+
+    # 5) convert to depth [m]
+    seabed_depth = er.isel(range_sample=idx_clean)
+    seabed_depth.name = "seabed_depth"
+
+    return idx_clean, seabed_depth
+
+
+def _default_mask(Sv: xr.DataArray) -> xr.DataArray:
+    """Return an “all-water” mask and a zero seabed‐index."""
+    mask = xr.ones_like(Sv, bool, drop=True)
+    zeros = np.zeros(len(mask.ping_time), int)
+    return mask.assign_coords(seabed_idx=("ping_time", zeros))
+
+
+def _safe_apply_ufunc(xda, func, kernel):
+    """Chunk‐safe morphology with halo‐padding on a 2D DataArray."""
+    struct = np.ones(kernel, bool)
+    pad = {xda.dims[0]: kernel[0]//2, xda.dims[1]: kernel[1]//2}
+    return xr.apply_ufunc(
+        lambda blk, **_: func(blk, structure=struct),
+        xda,
+        dask="parallelized",
+        vectorize=False,
+        output_dtypes=[bool],
+        dask_gufunc_kwargs=dict(depth=pad, boundary="nearest")
+    )
 
 
 def get_true_seabed_mask(
@@ -144,64 +296,76 @@ def get_true_seabed_mask(
     # ------------------------------------------------------------------ #
     gate = (er >= r0_m) & (er <= r1_m)
     if not bool(gate.any()):
-        warnings.warn("Gate outside data – returning keep-all mask")
-        return xr.ones_like(Sv, dtype=bool, drop=True)
+        warnings.warn("Gate outside data – using default mask")
+        return _default_mask(Sv)
 
-    cand = (Sv > thr_dB) & gate  # candidate bottom pixels
-    if not bool(cand.any()):
-        warnings.warn("Nothing above threshold – returning keep-all mask")
-        return xr.ones_like(Sv, dtype=bool, drop=True)
+    cand0 = (Sv > thr_dB) & gate
+    if not bool(cand0.any()):
+        warnings.warn("No echoes above thr_dB – using default mask")
+        return _default_mask(Sv)
 
     # ------------------------------------------------------------------ #
     # 2) morphology (chunk-safe)                                         #
     # ------------------------------------------------------------------ #
-    def _morph(xda, func, ker):
-        struct = np.ones(ker, bool)
-        pad = {xda.dims[0]: ker[0]//2, xda.dims[1]: ker[1]//2}
-
-        return xr.apply_ufunc(
-            lambda x, **k: func(x, structure=struct),
-            xda,
-            dask="parallelized",
-            vectorize=False,
-            dask_gufunc_kwargs=dict(depth=pad, boundary="nearest"),
-            output_dtypes=[bool],
-        )
-
-    in_gate = (er >= r0_m) & (er <= r1_m)
-    Sv_gate = Sv.where(in_gate)
-    Sv_gate = Sv_gate.chunk({vdim: -1})
+    Sv_gate = Sv.where(gate).chunk({vdim: -1})
     med_ping = xr.apply_ufunc(
-        np.nanmedian, Sv_gate, input_core_dims=[[vdim]], vectorize=True,
-        dask="parallelized", output_dtypes=[Sv.dtype]
+        np.nanmedian,
+        Sv_gate,
+        input_core_dims=[[vdim]],
+        vectorize=True,
+        dask="parallelized",
+        output_dtypes=[Sv.dtype]
     )
-    thr = med_ping - delta_db  # one value per ping
+    thr2 = (med_ping - delta_db).broadcast_like(Sv)
 
-    # broadcast to 2-D
-    thr2 = thr.broadcast_like(Sv)
-
-    cand = (Sv > thr2) & in_gate
-    cand = _morph(cand, _erode, erosion_kernel)
-    cand = _morph(cand, _dilate, dilation_kernel)
+    cand = (Sv > thr2) & gate
+    cand = _safe_apply_ufunc(cand, _erode, erosion_kernel)
+    cand = _safe_apply_ufunc(cand, _dilate, dilation_kernel)
 
     # ------------------------------------------------------------------ #
     # 3) seabed index per ping  (robust fallback)                        #
     # ------------------------------------------------------------------ #
-    idx_main = cand.argmax(vdim)
-    idx_fb = (Sv > thr2).argmax(vdim)
+    main_idx = cand.argmax(dim=vdim)
+    fb_idx = (Sv > thr2).argmax(dim=vdim)
+    has_bot = cand.any(dim=vdim)
 
-    has = cand.any(vdim)
-    idx = xr.where(has, idx_main, idx_fb)
+    idx = xr.where(has_bot, main_idx, fb_idx)
+    idx = (
+        idx.where(idx > 0)
+        .ffill("ping_time")
+        .bfill("ping_time")
+        .fillna(Sv[vdim].max())
+    )
 
-    # fill gaps by forward/back fill; remaining NaN → max index
-    idx = idx.where(idx > 0).ffill("ping_time").bfill("ping_time")
-    idx = idx.fillna(Sv[vdim].max())
+    # 4) two‐stage moving‐window smooth to kill narrow spikes
+    #    ensure full‐axis chunk so rolling works in one pass
+    ping_np  = idx["ping_time"].values
+    idx_np = idx.compute().values.astype(int)
 
-    # ――― final keep-mask ―――――――――――――――――――――――――――――――――――――――――――
-    keep = Sv[vdim] < idx.broadcast_like(Sv)
-    keep.name = "seabed_water_mask"
+    # 4.1) Savitzky–Golay smoothing (window ≤ 31 pings)
+    N = len(idx_np)
+    win = min(31, N if N % 2 == 1 else N - 1)
+    sm = savgol_filter(idx_np, win, polyorder=1, mode="interp")
 
-    return keep
+    # 4.2) clamp any single-ping jump > 5 bins
+    max_jump = 5
+    for i in range(1, N):
+        if abs(sm[i] - sm[i - 1]) > max_jump:
+            sm[i] = sm[i - 1]
+
+    # rebuild a clean DataArray
+    idx_clean = xr.DataArray(
+        sm.astype(int),
+        dims=("ping_time",),
+        coords={"ping_time": ping_np},
+        name="seabed_idx"
+    )
+
+    # 5) final mask
+    mask = (Sv[vdim] < idx_clean.broadcast_like(Sv))
+    mask.name = "seabed_water_mask"
+
+    return mask.assign_coords(seabed_idx=idx_clean)
 
 
 def _is_38khz(value, tol_hz=500.0) -> bool:

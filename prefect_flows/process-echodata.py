@@ -17,10 +17,11 @@ from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
 
-from saildrone.process import process_converted_file
-from saildrone.store import ensure_container_exists, FileSegmentService
+from saildrone.process import process_converted_file, plot_and_upload_echograms
 from saildrone.utils import load_local_files
-from saildrone.store import PostgresDB, SurveyService, list_zarr_files
+from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
+                             ensure_container_exists, save_zarr_store, list_zarr_files)
+
 
 input_cache_policy = Inputs()
 
@@ -90,6 +91,154 @@ class RemoveBackgroundNoise(DenoiseOptions):
 
 
 @task(
+    log_prints=True,
+    retries=1,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="plot_echograms--{file_name}"
+)
+def task_plot_echograms_normal(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
+    if payload is None:
+        return None
+
+    file_name = payload['file_name']
+
+    try:
+        cruise_id = payload['cruise_id']
+
+        file_path = f"{cruise_id}/{file_name}/{file_name}"
+        upload_path = f"{cruise_id}/{file_name}"
+        zarr_path = f"{file_path}.zarr"
+        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+
+        plot_and_upload_echograms(ds,
+                                  file_base_name=file_name,
+                                  save_to_blobstorage=True,
+                                  depth_var="depth",
+                                  upload_path=upload_path,
+                                  cmap=cmap,
+                                  container_name=echograms_container)
+
+        return Completed(message="plot_echograms completed successfully")
+    except Exception as e:
+        traceback.print_exc()
+
+        markdown_report = f"""# Error during plot_echograms
+        Error occurred while plotting echograms: {file_name}
+
+        {str(e)}
+
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return Completed(message="plot_echograms completed with errors")
+
+
+@task(
+    log_prints=True,
+    retries=1,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="plot_echograms_denoised--{file_name}"
+)
+def task_plot_echograms_denoised(payload, container_name, chunks=None, cmap='ocean_r'):
+    if payload is None:
+        return None
+
+    file_name = payload['file_name']
+
+    try:
+        denoising_applied = payload['denoised']
+        cruise_id = payload['cruise_id']
+
+        file_path = f"{cruise_id}/{file_name}/{file_name}"
+        upload_path = f"{cruise_id}/{file_name}"
+        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
+
+        if zarr_path_denoised:
+            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
+                                          rechunk_after=True)
+
+            plot_and_upload_echograms(ds_denoised,
+                                      file_base_name=f"{file_name}--denoised",
+                                      save_to_blobstorage=True,
+                                      depth_var="depth",
+                                      upload_path=upload_path,
+                                      cmap=cmap,
+                                      container_name=container_name)
+
+        return Completed(message="plot_echograms_denoised completed successfully")
+    except Exception as e:
+        traceback.print_exc()
+
+        markdown_report = f"""# Error during plot_echograms_denoised
+        Error occurred while plotting echograms: {file_name}
+
+        {str(e)}
+
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return Completed(message="plot_echograms_denoised completed with errors")
+
+
+@task(
+    log_prints=True,
+    retries=1,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="plot_echograms_seabed--{file_name}"
+)
+def task_plot_echograms_seabed(payload, container_name, chunks=None, cmap='ocean_r'):
+    if payload is None:
+        return None
+
+    file_name = payload['file_name']
+
+    try:
+        seabed_mask = payload['seabed_mask']
+        cruise_id = payload['cruise_id']
+
+        file_path = f"{cruise_id}/{file_name}/{file_name}"
+        upload_path = f"{cruise_id}/{file_name}"
+        zarr_path_seabed = f"{file_path}--denoised.zarr" if seabed_mask else None
+
+        if zarr_path_seabed:
+            ds = open_zarr_store(zarr_path_seabed, container_name=container_name, chunks=chunks, rechunk_after=True)
+
+            plot_and_upload_echograms(ds,
+                                      file_base_name=f"{file_name}--denoised",
+                                      save_to_blobstorage=True,
+                                      depth_var="depth",
+                                      upload_path=upload_path,
+                                      cmap=cmap,
+                                      container_name=container_name)
+
+        return Completed(message="plot_echograms_denoised completed successfully")
+    except Exception as e:
+        traceback.print_exc()
+
+        markdown_report = f"""# Error during plot_echograms_denoised
+        Error occurred while plotting echograms: {file_name}
+
+        {str(e)}
+
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return Completed(message="plot_echograms_denoised completed with errors")
+
+
+@task(
     retries=3,
     retry_delay_seconds=60,
     cache_policy=input_cache_policy,
@@ -100,7 +249,7 @@ class RemoveBackgroundNoise(DenoiseOptions):
     log_prints=True,
     task_run_name="process-{source_path.stem}",
 )
-def process_single_file(source_path: Path, **kwargs):
+def process_single_file(source_path: Path, chunks, **kwargs):
     try:
         worker = get_worker()
         print(f"Running on Dask worker: {worker.address}")
@@ -113,25 +262,16 @@ def process_single_file(source_path: Path, **kwargs):
         save_to_directory = kwargs.get('save_to_directory')
         output_directory = kwargs.get('output_directory')
         reprocess = kwargs.get('reprocess')
-        plot_echograms = kwargs.get('plot_echograms')
         compute_nasc = kwargs.get('compute_nasc')
         compute_mvbs = kwargs.get('compute_mvbs')
-        echograms_container = kwargs.get('echograms_container')
         encode_mode = kwargs.get('encode_mode')
         colormap = kwargs.get('colormap')
         waveform_mode = kwargs.get('waveform_mode')
         depth_offset = kwargs.get('depth_offset')
-        chunks_ping_time = kwargs.get('chunks_ping_time')
-        chunks_range_sample = kwargs.get('chunks_range_sample')
         mask_transient_noise = kwargs.get('mask_transient_noise')
         mask_impulse_noise = kwargs.get('mask_impulse_noise')
         mask_attenuated_signal = kwargs.get('mask_attenuated_signal')
         remove_background_noise = kwargs.get('remove_background_noise')
-
-        chunks = {
-            'ping_time': chunks_ping_time,
-            'range_sample': chunks_range_sample
-        }
 
         output_path = output_directory
         converted_container_name = None
@@ -146,32 +286,27 @@ def process_single_file(source_path: Path, **kwargs):
         if save_to_blobstorage is True:
             processed_container_name = output_container
 
-        process_converted_file(source_path,
-                               cruise_id=cruise_id,
-                               output_path=output_path,
-                               chunks=chunks,
-                               load_from_blobstorage=load_from_blobstorage,
-                               converted_container_name=converted_container_name,
-                               save_to_blobstorage=save_to_blobstorage,
-                               save_to_directory=save_to_directory,
-                               processed_container_name=processed_container_name,
-                               reprocess=reprocess,
-                               depth_offset=depth_offset,
-                               plot_echograms=plot_echograms,
-                               compute_nasc=compute_nasc,
-                               compute_mvbs=compute_mvbs,
-                               echograms_container=echograms_container,
-                               gps_container_name=GPSDATA_CONTAINER_NAME,
-                               encode_mode=encode_mode,
-                               colormap=colormap,
-                               waveform_mode=waveform_mode,
-                               mask_transient_noise=mask_transient_noise,
-                               mask_impulse_noise=mask_impulse_noise,
-                               mask_attenuated_signal=mask_attenuated_signal,
-                               remove_background_noise=remove_background_noise,
-                               chunks_denoising=CHUNKS_DENOISING
-                               )
-        print(f"Processed Sv for {source_path.name}")
+        return process_converted_file(source_path,
+                                      cruise_id=cruise_id,
+                                      output_path=output_path,
+                                      chunks=chunks,
+                                      load_from_blobstorage=load_from_blobstorage,
+                                      converted_container_name=converted_container_name,
+                                      save_to_blobstorage=save_to_blobstorage,
+                                      save_to_directory=save_to_directory,
+                                      processed_container_name=processed_container_name,
+                                      reprocess=reprocess,
+                                      depth_offset=depth_offset,
+                                      compute_nasc=compute_nasc,
+                                      compute_mvbs=compute_mvbs,
+                                      gps_container_name=GPSDATA_CONTAINER_NAME,
+                                      encode_mode=encode_mode,
+                                      waveform_mode=waveform_mode,
+                                      mask_transient_noise=mask_transient_noise,
+                                      mask_impulse_noise=mask_impulse_noise,
+                                      mask_attenuated_signal=mask_attenuated_signal,
+                                      remove_background_noise=remove_background_noise
+                                      )
     except Exception as e:
         print(f"Error processing file: {source_path.name}: ${str(e)}")
 
@@ -262,6 +397,12 @@ def load_and_process_files_to_zarr(source_directory: str,
     print(f"Total files to process: {total_files}")
 
     in_flight = []
+    side_running_tasks = []
+
+    chunks = {
+        'ping_time': chunks_ping_time,
+        'range_sample': chunks_range_sample
+    }
 
     for src in files_list:
         future = process_single_file.submit(src,
@@ -270,10 +411,9 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             source_container=source_container,
                                             output_container=output_container,
                                             reprocess=reprocess,
-                                            plot_echograms=plot_echograms,
+                                            chunks=chunks,
                                             compute_nasc=compute_nasc,
                                             compute_mvbs=compute_mvbs,
-                                            echograms_container=echograms_container,
                                             save_to_blobstorage=save_to_blobstorage,
                                             save_to_directory=save_to_directory,
                                             output_directory=output_directory,
@@ -289,6 +429,21 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             remove_background_noise=remove_background_noise,
                                             apply_seabed_mask=apply_seabed_mask
                                             )
+
+        if plot_echograms:
+            future_plot_task = task_plot_echograms_normal.submit(future, output_container, echograms_container, chunks,
+                                                                 colormap)
+            side_running_tasks.append(future_plot_task)
+
+            future_plot_task_denoised = task_plot_echograms_denoised.submit(future, output_container,
+                                                                            echograms_container, chunks, colormap)
+            side_running_tasks.append(future_plot_task_denoised)
+
+            if apply_seabed_mask:
+                future_plot_task = task_plot_echograms_normal.submit(future, output_container, echograms_container,
+                                                                     chunks, colormap)
+                side_running_tasks.append(future_plot_task)
+
         in_flight.append(future)
 
         # Throttle when max concurrent tasks reached
@@ -299,38 +454,6 @@ def load_and_process_files_to_zarr(source_directory: str,
     # Wait for remaining tasks
     for future_task in in_flight:
         future_task.result()
-
-    # wait(in_flight)
-
-    # Process files in batches
-    # for i in range(0, total_files, batch_size):
-    #     batch_files = files_list[i:i + batch_size]
-    #     print(f"Processing batch {i // batch_size + 1}")
-    #     process_raw_data(batch_files,
-    #                      cruise_id=cruise_id,
-    #                      load_from_blobstorage=load_from_blobstorage,
-    #                      source_container=source_container,
-    #                      output_container=output_container,
-    #                      reprocess=reprocess,
-    #                      plot_echograms=plot_echograms,
-    #                      compute_nasc=compute_nasc,
-    #                      compute_mvbs=compute_mvbs,
-    #                      echograms_container=echograms_container,
-    #                      save_to_blobstorage=save_to_blobstorage,
-    #                      save_to_directory=save_to_directory,
-    #                      output_directory=output_directory,
-    #                      encode_mode=encode_mode,
-    #                      colormap=colormap,
-    #                      waveform_mode=waveform_mode,
-    #                      depth_offset=depth_offset,
-    #                      chunks_ping_time=chunks_ping_time,
-    #                      chunks_range_sample=chunks_range_sample,
-    #                      mask_impulse_noise=mask_impulse_noise,
-    #                      mask_attenuated_signal=mask_attenuated_signal,
-    #                      mask_transient_noise=mask_transient_noise,
-    #                      remove_background_noise=remove_background_noise,
-    #                      apply_seabed_mask=apply_seabed_mask
-    #                      )
 
     logging.info("All batches have been processed.")
 

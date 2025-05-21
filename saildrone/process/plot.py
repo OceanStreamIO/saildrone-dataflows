@@ -1,18 +1,21 @@
 import os
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.ticker import AutoMinorLocator
+import matplotlib.dates as mdates
+import xarray as xr
 import shutil
 import traceback
 import re
 from pathlib import Path
+import cmocean
 
-import matplotlib.pyplot as plt
-import xarray as xr
-import numpy as np
 
 from saildrone.store import upload_folder_to_blob_storage
 
 
 def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
-                 depth_var: str = 'range_sample') -> list:
+                 depth_var: str = 'range_sample', colorbar_orientation: str = 'vertical') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -37,14 +40,15 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
     echogram_files = []
     for channel in range(ds_Sv.dims['channel']):
         echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
-                                                                depth_var)
+                                                                depth_var, colorbar_orientation)
         echogram_files.append(echogram_file_path)
 
     return echogram_files
 
 
 def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_base_name: str,
-                                       echogram_path: str, cmap: str, depth_var='range_sample') -> str:
+                                       echogram_path: str, cmap: str, depth_var='range_sample',
+                                       colorbar_orientation='horizontal') -> str:
     """
     Plot and save echogram for a single channel with optional regions and enhancements.
 
@@ -66,73 +70,132 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     - str: The path to the saved echogram file.
     """
 
-    full_channel_name = str(ds_Sv.channel.values[channel])
-    label = str(ds_Sv.channel_label.values[channel])
-    channel_name = label.replace(" ", "-")
-    filtered_ds = ds_Sv['Sv']
+    # 0) labels & select the DataArray
+    ch_lab = ds_Sv.channel_label.values[channel]
+    safe_lab = ch_lab.replace(" ", "-")
+    da_Sv = ds_Sv['Sv'].isel(channel=channel)
 
-    if 'beam' in filtered_ds.dims:
-        filtered_ds = filtered_ds.isel(beam=0).drop('beam')
+    if 'beam' in da_Sv.dims:
+        da_Sv = da_Sv.isel(beam=0).drop_vars('beam')
 
-    if 'channel' in filtered_ds.coords:
-        # Ensure frequency is fully computed for swap_dims
-        if 'frequency' in ds_Sv.coords:
-            freq = ds_Sv['frequency']
-            if isinstance(freq.data, da.Array):
-                freq = freq.compute()
+    # 1) choose & clean the vertical axis
+    if 'depth' in da_Sv.coords:
+        ydim = 'depth'
+    elif 'echo_range' in da_Sv.coords:
+        ydim = 'echo_range'
+    else:
+        ydim = depth_var
 
-            filtered_ds = filtered_ds.assign_coords(frequency=("channel", np.asarray(freq)))
+    # drop bins whose coordinate is NaN, then drop all-NaN rows and sort
+    valid = np.isfinite(da_Sv[ydim].data)
+    da_Sv = da_Sv.isel({ydim: valid}) \
+        .dropna(dim=ydim, how='all') \
+        .sortby(ydim)
 
-        try:
-            filtered_ds = filtered_ds.swap_dims({'channel': 'frequency'})
-            # if filtered_ds.frequency.size == 1:
-            #     filtered_ds = filtered_ds.isel(frequency=0)
-        except Exception as e:
-            print(f"Error swapping dims while plotting echogram: {e}")
+    # compute top/bottom limits
+    # top = float(ds_Sv[ydim].min().compute().item())
+    # bot = float(ds_Sv[ydim].max().compute().item())
 
-    plt.figure(figsize=(20, 12))
+    top = float(da_Sv[ydim].isel({ydim: 0}).compute().item())
+    bot = float(da_Sv[ydim].isel({ydim: -1}).compute().item())
 
-    try:
-        da = filtered_ds.isel(frequency=channel)
-        coord_vals = da[depth_var].data
-        valid_coord = np.isfinite(coord_vals)
+    # 2) plot with xarray’s .plot
+    # plt.figure(figsize=(20, 12))
+    fig, ax = plt.subplots(figsize=(20, 12))
 
-        da = da.isel({depth_var: valid_coord})
-        da = da.dropna(dim=depth_var, how="all")
-        da = da.sortby(depth_var)
+    da_plot = da_Sv.T
+    mesh = da_plot.plot(
+        x='ping_time',
+        y=ydim,
+        yincrease=False,
+        vmin=-80, vmax=-50,
+        cmap=cmap,
+        add_colorbar=False,
+        ylim=(bot, top)
+    )
+    ax = plt.gca()
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(True)
+    ax.spines['right'].set_linewidth(1.0)
 
-        top_depth = float(da[depth_var].isel({depth_var: 0}).compute().item())
-        bottom = float(da[depth_var].isel({depth_var: -1}).compute().item())
+    # 3) subtle background & grid
+    ax.set_facecolor('#f9f9f9')
 
-        da.T.plot(
-            x='ping_time',
-            y=depth_var,
-            yincrease=False,
-            vmin=-80,
-            vmax=-50,
-            cmap=cmap,
-            cbar_kwargs={'label': 'Volume backscattering strength (Sv re 1 m⁻¹)'},
-            ylim=(bottom, top_depth),
+    locator = mdates.AutoDateLocator(maxticks=12)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+
+    # 4) overlay seabed if available
+    if 'seabed_idx' in ds_Sv.coords:
+        idx = ds_Sv.coords["seabed_idx"]
+        if "channel" in idx.dims:
+            # use .sel on the label to be safer than integer isel
+            ch = ds_Sv.channel.values[channel]
+            idx = idx.sel(channel=ch)
+
+        idx_int = idx.astype('int64')
+        max_idx = da_Sv[ydim].shape[0] - 1
+        idx_int = idx_int.clip(min=0, max=max_idx)
+
+        seabed_depth = da_Sv[ydim].isel({ydim: idx_int})
+
+        ax.plot(
+            ds_Sv.ping_time,
+            seabed_depth,
+            'k--',
+            lw=1.5,
+            label='Seabed'
         )
-    except Exception as e:
-        print(f"Error plotting echogram: {e}")
-        traceback.print_exc()
+        ax.fill_between(
+            ds_Sv.ping_time,
+            seabed_depth,
+            y2=bot,
+            step='post',
+            color='lightgray',
+            alpha=0.5
+        )
+        ax.legend(loc='lower left', frameon=True)
 
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.xlabel('Ping time', fontsize=14)
-    plt.ylabel('Depth [m]' if depth_var != "range_sample" else "Sample #", fontsize=14)
-    plt.title(f'{channel_name}', fontsize=16, fontweight='bold')
+    # mesh.cmap = cmocean.cm.dense
 
-    echogram_file_name = f"{file_base_name}_{channel_name}.png"
-    echogram_output_path = os.path.join(echogram_path, echogram_file_name)
-    plt.savefig(echogram_output_path, dpi=150, bbox_inches='tight')
+    # 5) add a neat horizontal colorbar
+    if colorbar_orientation == 'horizontal':
+        cbar = plt.colorbar(mesh, pad=0.08, orientation='horizontal', aspect=40, shrink=0.8)
+    else:
+        cbar = fig.colorbar(mesh,
+                            ax=ax,
+                            fraction=0.04,
+                            pad=0.02,
+                            shrink=0.8)
+    fig.subplots_adjust(left=0.06, right=0.82, top=0.93, bottom=0.10)
+    ax.tick_params(which='major', length=6, width=1, labelsize=11)
+    ax.tick_params(which='minor', length=3, width=0.5)
+
+    cbar.set_label('Volume backscattering strength (Sv re 1 m⁻¹)', fontsize=12)
+    cbar.ax.tick_params(labelsize=10)
+
+    # 6) labels, title, layout
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+    ax.set_xlabel('Ping time [UTC]', fontsize=16, labelpad=14)
+    ax.set_ylabel('Depth [m]' if ydim != 'range_sample' else 'Sample #', fontsize=16, labelpad=14)
+    ax.set_title(ch_lab, fontsize=18, fontweight='bold', pad=16)
+
+    plt.tight_layout(pad=2)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha='right')
+
+    # 7) save & close
+    out_name = f"{file_base_name}_{safe_lab}.png"
+    out_path = os.path.join(echogram_path, out_name)
+
+    plt.savefig(out_path, dpi=150)
     plt.close()
 
-    return echogram_output_path
+    return out_path
 
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
-                              file_name=None, output_path=None, upload_path=None, container_name=None, cmap='ocean_r', depth_var='depth'):
+                              file_name=None, output_path=None, upload_path=None, container_name=None,
+                              cmap='ocean_r', depth_var='depth'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
     else:

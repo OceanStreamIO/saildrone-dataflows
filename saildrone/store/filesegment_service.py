@@ -210,6 +210,7 @@ class FileSegmentService:
     def update_file_record(
         self,
         file_id: int,
+        cruise_id: Optional[int] = None,
         file_name: Optional[str] = None,
         size: Optional[int] = None,
         processed: Optional[bool] = None,
@@ -231,6 +232,7 @@ class FileSegmentService:
         echogram_files: Optional[List[str]] = None,
         failed: Optional[bool] = None,
         denoised: Optional[bool] = None,
+        seabed_mask: Optional[bool] = None,
         error_details: Optional[str] = None,
         location_data: Optional[str] = None,
         processing_time_ms: Optional[int] = None,
@@ -260,6 +262,7 @@ class FileSegmentService:
                 echogram_files = COALESCE(%s, echogram_files),
                 failed = COALESCE(%s, failed),
                 denoised = COALESCE(%s, denoised),
+                seabed_mask = COALESCE(%s, seabed_mask),
                 error_details = COALESCE(%s, error_details),
                 location_data = COALESCE(%s, location_data),
                 processing_time_ms = COALESCE(%s, processing_time_ms),
@@ -267,8 +270,8 @@ class FileSegmentService:
             WHERE id = %s
         ''', (file_name, size, processed, converted, location, last_modified, file_npings, file_nsamples, file_start_time,
               file_end_time, file_freqs, file_start_depth, file_end_depth, file_start_lat, file_start_lon, file_end_lat,
-              file_end_lon, distance, echogram_files, failed, denoised, error_details, location_data, processing_time_ms, survey_db_id,
-              file_id))
+              file_end_lon, distance, echogram_files, failed, denoised, seabed_mask, error_details, location_data,
+              processing_time_ms, survey_db_id, file_id))
         self.db.conn.commit()
 
     def update_geospatial_data(

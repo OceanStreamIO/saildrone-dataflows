@@ -127,11 +127,10 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
 
     if isinstance(echodata_or_sv_ds, xr.Dataset):
         ds = echodata_or_sv_ds
-
         rechunked_ds = fix_chunking(ds)
 
-        if chunks is not None:
-            rechunked_ds = rechunked_ds.chunk(chunks)
+        write_chunks = chunks if chunks is not None else {'ping_time': 2000, 'depth': -1, 'channel': 1}
+        rechunked_ds = rechunked_ds.chunk(write_chunks)
 
         if mode == "w":
             rechunked_ds.to_zarr(store=zarr_store, mode='w')
@@ -241,7 +240,7 @@ def fix_chunking(ds: xr.Dataset, *, tiny_limit: int = 10_000) -> xr.Dataset:
     • For the rest: drop an incompatible `encoding["chunks"]`.
     """
     for name, var in list(ds.variables.items()):
-        if name in {"Sv", "angle_alongship", "angle_athwartship", "depth"}:
+        if name in {"Sv", "depth"}:
             continue
 
         # case A: tiny array → compute to NumPy

@@ -27,14 +27,14 @@ def test_file_workflow_saildrone():
     cruise_id = 'SD_TPOS2023_v03'
     #cruise_id = 'SE2204'
     output_path = 'test/processed'
-    save_to_blobstorage = True
+    save_to_blobstorage = False
     load_from_blobstorage = True
     converted_container_name = 'converted'
     save_to_directory = True
     processed_container_name = 'localnetcdftest'
     #processed_container_name = 'processedlocal'
     reprocess = True
-    plot_echograms = False
+    plot_echograms = True
     depth_offset = 1.9
     echograms_container = 'echograms'
     gps_container_name = 'gpsdata'
@@ -67,7 +67,7 @@ def test_file_workflow_saildrone():
         SNR_threshold=3.0
     )
 
-    chunks = {'ping_time': 1000, 'range_sample': 1000}
+    chunks = {'ping_time': 2000, 'range_sample': 1000}
     chunks_denoising = {'ping_time': 1000, 'depth': 1000}
 
     payload = process_converted_file(
