@@ -8,9 +8,6 @@ import shutil
 import traceback
 import re
 from pathlib import Path
-import cmocean
-
-
 from saildrone.store import upload_folder_to_blob_storage
 
 
@@ -155,8 +152,6 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
             alpha=0.5
         )
         ax.legend(loc='lower left', frameon=True)
-
-    # mesh.cmap = cmocean.cm.dense
 
     # 5) add a neat horizontal colorbar
     if colorbar_orientation == 'horizontal':
