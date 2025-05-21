@@ -150,6 +150,9 @@ def task_plot_echograms_denoised(payload, container_name, echograms_container, c
     if payload is None:
         return None
 
+    if not isinstance(payload, dict) or 'file_name' not in payload:
+        raise ValueError("Invalid payload passed to task_plot_echograms_normal")
+
     file_name = payload['file_name']
 
     try:
@@ -436,10 +439,10 @@ def load_and_process_files_to_zarr(source_directory: str,
         if plot_echograms:
             future_plot_task = task_plot_echograms_normal.submit(future, output_container, echograms_container, chunks,
                                                                  colormap)
-            side_running_tasks.append(future_plot_task)
-
             future_plot_task_denoised = task_plot_echograms_denoised.submit(future, output_container,
                                                                             echograms_container, chunks, colormap)
+
+            side_running_tasks.append(future_plot_task)
             side_running_tasks.append(future_plot_task_denoised)
 
             if apply_seabed_mask:
