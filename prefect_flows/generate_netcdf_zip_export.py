@@ -31,15 +31,18 @@ MAX_RUNTIME_SECONDS = 3_300
 def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
     print('Flat paths:', nc_file_paths)
 
-    zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name, tmp_dir=NETCDF_ROOT_DIR + '/tmp')
+    tmp_dir = NETCDF_ROOT_DIR + '/tmp'
+    zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name, tmp_dir=tmp_dir)
+
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
     logging.info(f"Uploaded archive {zip_name} to container {container_name}")
 
 
 @flow(log_prints=True)
 def generate_netcdf_zip_export(output_container: str,
-                               file_list: List[str]
-                               ):
+                               file_list: List[str]):
     total_files = len(file_list)
     logging.info(f"Total files to process: {total_files}")
     print(f"Total files to process: {total_files}")
