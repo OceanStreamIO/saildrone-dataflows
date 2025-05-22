@@ -54,10 +54,20 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
     sys.exit(1)
 
+#
 
 class DenoiseOptions(BaseModel):
     def get(self, key, default_value=None):
         return getattr(self, key, default_value)
+
+
+class ReprocessingOptions(DenoiseOptions):
+    reprocess: bool = Field(default=False,
+                            description='Load and reprocess the raw data for files that '
+                                        'have been already marked as processed.')
+    skip_processed: bool = Field(default=False,
+                                 description='Skip processing and only generate outputs'
+                                             ' (e.g., echograms, NetCDF files); requires previously processed files.')
 
 
 class MaskImpulseNoise(DenoiseOptions):
@@ -348,7 +358,22 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
         mask_impulse_noise = kwargs.get('mask_impulse_noise')
         mask_attenuated_signal = kwargs.get('mask_attenuated_signal')
         remove_background_noise = kwargs.get('remove_background_noise')
-        apply_seabed_mask = kwargs.get('apply_seabed_mask')
+        apply_seabed_mask = kwargs.get('apply_seabed_mask', False)
+        skip_processed = kwargs.get('skip_processed', False)
+
+        if skip_processed:
+            denoised = (mask_impulse_noise is not None or
+                        mask_transient_noise is not None or
+                        mask_attenuated_signal is not None or
+                        remove_background_noise is not None)
+            payload = {
+                'file_name': source_path.stem,
+                'cruise_id': cruise_id,
+                'denoised': denoised,
+                'seabed_mask': apply_seabed_mask
+            }
+
+            return payload
 
         output_path = output_directory
         converted_container_name = None
@@ -409,7 +434,7 @@ def load_and_process_files_to_zarr(source_directory: str,
                                    output_container: str,
                                    save_to_directory: bool,
                                    output_directory: str,
-                                   reprocess: bool,
+                                   reprocess_options: Optional[ReprocessingOptions],
                                    plot_echograms: bool,
                                    compute_nasc: bool,
                                    compute_mvbs: bool,
@@ -428,6 +453,9 @@ def load_and_process_files_to_zarr(source_directory: str,
                                    save_to_netcdf: bool = False,
                                    batch_size: int = BATCH_SIZE):
     file_names = None
+    reprocess = reprocess_options.get('reprocess', False) if reprocess_options else False
+    skip_processed = reprocess_options.get('skip_processed', False) if reprocess_options else False
+
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -493,6 +521,7 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             output_directory=output_directory,
                                             encode_mode=encode_mode,
                                             colormap=colormap,
+                                            skip_processed=skip_processed,
                                             waveform_mode=waveform_mode,
                                             depth_offset=depth_offset,
                                             chunks_ping_time=chunks_ping_time,
@@ -583,7 +612,7 @@ if __name__ == "__main__":
                 'output_container': PROCESSED_CONTAINER_NAME,
                 'save_to_directory': False,
                 'output_directory': '',
-                'reprocess': False,
+                'reprocess_options': None,
                 'plot_echograms': False,
                 'compute_nasc': True,
                 'compute_mvbs': True,
