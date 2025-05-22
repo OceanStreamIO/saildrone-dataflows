@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME', 'converted')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME', 'processed')
+AZ_SOURCE_CONNECTION_STRING = os.getenv('AZ_SOURCE_CONNECTION_STRING')
+AZ_EXPORT_CONNECTION_STRING = os.getenv('AZ_EXPORT_CONNECTION_STRING', AZ_SOURCE_CONNECTION_STRING)
+
+STORAGE_ACCOUNT_SOURCE = 'source'
+STORAGE_ACCOUNT_EXPORT = 'export'
 
 
 def zip_and_save_netcdf_files(file_paths, zip_name, container_name, tmp_dir=None):
@@ -45,7 +50,7 @@ def zip_and_save_netcdf_files(file_paths, zip_name, container_name, tmp_dir=None
     upload_file_to_blob(str(zip_path), zip_name, container_name)
 
 
-def create_blob_service_client(connect_str=None) -> BlobServiceClient:
+def create_blob_service_client(connect_str=None, storage_account_type=STORAGE_ACCOUNT_SOURCE) -> BlobServiceClient:
     """
     Create an Azure Blob Storage client.
 
@@ -53,7 +58,13 @@ def create_blob_service_client(connect_str=None) -> BlobServiceClient:
     - BlobServiceClient: The Azure Blob Storage client.
     """
     if connect_str is None:
-        connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+        match storage_account_type:
+            case 'source':
+                connect_str = os.getenv('AZ_SOURCE_CONNECTION_STRING')
+            case 'export':
+                connect_str = os.getenv('AZ_EXPORT_CONNECTION_STRING')
+            case _:
+                connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 
     if not connect_str:
         raise EnvironmentError("AZURE_STORAGE_CONNECTION_STRING environment variable not set.")
@@ -61,7 +72,7 @@ def create_blob_service_client(connect_str=None) -> BlobServiceClient:
     return BlobServiceClient.from_connection_string(connect_str)
 
 
-def get_azure_blob_filesystem(storage_config=None) -> AzureBlobFileSystem:
+def get_azure_blob_filesystem(storage_config=None, storage_account_type=STORAGE_ACCOUNT_SOURCE) -> AzureBlobFileSystem:
     """
     Get Azure Blob FileSystem Mapper for Dask.
 
@@ -73,7 +84,13 @@ def get_azure_blob_filesystem(storage_config=None) -> AzureBlobFileSystem:
         azfs = AzureBlobFileSystem(**storage_config['storage_options'])
         return azfs
 
-    connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
+    match storage_account_type:
+        case 'source':
+            connect_str = os.getenv('AZ_SOURCE_CONNECTION_STRING')
+        case 'export':
+            connect_str = os.getenv('AZ_EXPORT_CONNECTION_STRING')
+        case _:
+            connect_str = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
 
     if not connect_str:
         raise EnvironmentError("AZURE_STORAGE_CONNECTION_STRING environment variable not set.")
@@ -81,7 +98,8 @@ def get_azure_blob_filesystem(storage_config=None) -> AzureBlobFileSystem:
     return AzureBlobFileSystem(connection_string=connect_str)
 
 
-def ensure_container_exists(container_name: str, blob_service_client: BlobServiceClient = None, public_access=None):
+def ensure_container_exists(container_name: str, blob_service_client: BlobServiceClient = None, public_access=None,
+                            storage_account_type=STORAGE_ACCOUNT_SOURCE):
     """
     Ensure that the specified container exists in Azure Blob Storage.
 
@@ -93,7 +111,7 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
     """
     try:
         if blob_service_client is None:
-            blob_service_client = create_blob_service_client()
+            blob_service_client = create_blob_service_client(storage_account_type=storage_account_type)
 
         container_client = blob_service_client.get_container_client(container_name)
 
@@ -111,7 +129,7 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
 
 
 def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None,
-                    chunks=None):
+                    storage_account_type=STORAGE_ACCOUNT_EXPORT, chunks=None):
     if survey_id is not None:
         zarr_path = f"{survey_id}/{zarr_path}"
 
@@ -120,7 +138,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     else:
         zarr_path_full = zarr_path
 
-    azfs = get_azure_blob_filesystem()
+    azfs = get_azure_blob_filesystem(storage_account_type=storage_account_type)
     zarr_store = azfs.get_mapper(zarr_path_full)
 
     logger.info(f"Saving converted data to Zarr format at: {zarr_path_full}")
@@ -142,9 +160,10 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     return zarr_path
 
 
-def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None, rechunk_after=False):
+def open_zarr_store(zarr_path, cruise_id=None, container_name=PROCESSED_CONTAINER_NAME, chunks=None,
+                    rechunk_after=False, storage_account_type=STORAGE_ACCOUNT_SOURCE):
     """Open a Zarr store from Azure Blob Storage."""
-    azfs = get_azure_blob_filesystem()
+    azfs = get_azure_blob_filesystem(storage_account_type=storage_account_type)
 
     if cruise_id is not None:
         zarr_path_full = f"{container_name}/{cruise_id}/{zarr_path}"
@@ -371,7 +390,7 @@ def upload_file_to_blob(local_path, blob_path, container_name=None):
         local_path: Local path to the file.
         blob_path: Blob path in the container.
     """
-    blob_service_client = create_blob_service_client()
+    blob_service_client = create_blob_service_client(storage_account_type=STORAGE_ACCOUNT_EXPORT)
     container_client = blob_service_client.get_container_client(container_name)
 
     with open(local_path, "rb") as data:
@@ -380,6 +399,7 @@ def upload_file_to_blob(local_path, blob_path, container_name=None):
 
 def generate_container_access_url(container_name, duration_days=90):
     """
+    FIXME: adapt this function to use the AZ_EXPORT_CONNECTION_STRING
     Generate a SAS token for container access and return the URL.
     """
     AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
@@ -409,7 +429,7 @@ def generate_container_name(cruise_id: str):
 
 
 def upload_folder_to_blob_storage(folder_path, container_name, target_path):
-    blob_service_client = create_blob_service_client()
+    blob_service_client = create_blob_service_client(storage_account_type=STORAGE_ACCOUNT_EXPORT)
     container_client = blob_service_client.get_container_client(container_name)
 
     for root, dirs, files in os.walk(folder_path):

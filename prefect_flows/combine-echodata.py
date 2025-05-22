@@ -1,7 +1,8 @@
 import logging
 import os
 import sys
-import time
+import traceback
+from datetime import datetime
 
 from pathlib import Path
 from typing import List, Optional
@@ -11,10 +12,14 @@ from prefect import flow, task
 from dask.distributed import Client
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
-from prefect.states import Completed
+from prefect.artifacts import create_markdown_artifact
+
 from echopype import open_converted, combine_echodata as ep_combine_echodata
 
-from saildrone.store import save_zarr_store, ensure_container_exists
+from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
+                             save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files,
+                             generate_container_name)
+
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, FileSegmentService
 
@@ -85,48 +90,108 @@ def process_converted_file(converted_file: str, chunks=None):
 #             compute=True,
 #         )
 
+def concatenate_zarr_files(files, source_container_name, output_container, cruise_id=None, chunks=None,
+                           temp_container_name=None,
+                           write_mode_dict=None,
+                           batch_index=None):
+
+    ds_list = process_batch(files, source_container_name, cruise_id, chunks, temp_container_name, batch_index)
+
+    for category, delayed_datasets in ds_list.items():
+        valid_datasets = [d for d in delayed_datasets if d is not None]
+        if not valid_datasets:
+            continue
+
+        combined_ds = concatenate_and_rechunk(valid_datasets, container_name=temp_container_name, chunks=chunks)
+        zarr_path = f"{cruise_id}/{category}.zarr" if category != "exported_ds" else f"{cruise_id}/{cruise_id}.zarr"
+        mode = get_write_mode(category, write_mode_dict)
+        print(f"Saving {category} dataset with mode: {mode}")
+        print(f"  - dims: {combined_ds.dims}")
+        print(f"  - variables: {list(combined_ds.data_vars)}")
+        print(f"  - chunks: {combined_ds.chunks}")
+
+        save_zarr_store(combined_ds,
+                        container_name=output_container,
+                        zarr_path=zarr_path,
+                        mode=mode,
+                        append_dim="ping_time")
+
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_combine_zarr_stores(source_directory: str,
-                                 map_to_directory: str,
-                                 output_zarr_path: str,
-                                 container_name: str,
-                                 survey_id: str,
+def load_and_combine_zarr_stores(cruise_id: str,
+                                 source_container: str,
+                                 start_datetime: Optional[datetime],
+                                 end_datetime: Optional[datetime],
+                                 output_container: str,
                                  combined_zarr_name: str,
-                                 description: Optional[str],
+                                 chunks_ping_time: int,
+                                 chunks_range_sample: Optional[int],
                                  batch_size: int) -> None:
-    """
-    Load raw files from the source directory, insert/update survey record, and convert them to Zarr format.
-    """
+    file_names = None
+    with PostgresDB() as db_connection:
+        survey_service = SurveyService(db_connection)
 
-    echodata_files = load_local_files(source_directory, map_to_directory, '*.zarr')
-    # combine_echodata(echodata_files, Path(output_zarr_path), combined_zarr_name)
-    combined_zarr_path = Path(output_zarr_path)
+        # Check if a survey with the given cruise_id exists
+        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
 
-    with get_dask_client() as client:
-        ed_future_list = []
-        for converted_file in echodata_files:
-            ed_future = client.submit(
-                process_converted_file,
-                converted_raw_path=converted_file,
-                chunks={}
+        if not survey_id:
+            survey_id = survey_service.insert_survey(cruise_id)
+            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
+
+        file_service = FileSegmentService(db_connection)
+        condition = ""
+
+        if start_datetime and end_datetime:
+            condition += f" AND file_start_time > '{start_datetime}' AND file_end_time < '{end_datetime}'"
+            file_names = file_service.get_files_list_with_condition(survey_id, condition)
+
+    echodata_files = list_zarr_files(source_container, cruise_id=cruise_id, file_names=file_names)
+    total_files = len(echodata_files)
+    temp_container_name = generate_container_name(cruise_id)
+    ensure_container_exists(temp_container_name)
+    batch_index = 0
+    write_mode_dict = {}
+
+    for i in range(0, total_files, batch_size):
+        batch_files = echodata_files[i:i + batch_size]
+        print(f"Processing batch {i // batch_size + 1}")
+
+        try:
+            for converted_file in sorted(echodata_zarr_path.glob("*.zarr")):
+                ed_future = client.submit(
+                    ep.open_converted,
+                    converted_raw_path=converted_file,
+                    chunks={}
+                )
+                ed_future_list.append(ed_future)
+            ed_list = client.gather(ed_future_list)
+            ed_combined = ep.combine_echodata(ed_list)
+
+            concatenate_zarr_files(
+                batch_files,
+                source_container,
+                output_container,
+                cruise_id=cruise_id,
+                temp_container_name=temp_container_name,
+                chunks=chunks,
+                write_mode_dict=write_mode_dict,
+                batch_index=batch_index
             )
-            ed_future_list.append(ed_future)
+            batch_index += 1
+        except Exception as e:
+            logging.error(f"Error saving Zarr store: {e}")
+            markdown_report = f"""# Error saving Zarr store: {e}
+            {str(e)}
+            ## Error details
+            - **Error Message**: {str(e)}
+            - **Traceback**: {traceback.format_exc()}
+            """
 
-        ed_list = client.gather(ed_future_list)
-        ed_combined = ep_combine_echodata(ed_list)
+            create_markdown_artifact(markdown_report)
 
-        # Save the combined EchoData object to a new Zarr store
-        # The appending operation only happens when relevant data needs to be save to disk
-        if container_name != '':
-            save_zarr_store(ed_combined, combined_zarr_name, survey_id=survey_id,
-                                         container_name=container_name)
-        else:
-            ed_combined.to_zarr(
-                combined_zarr_path / combined_zarr_name,
-                overwrite=True,
-                compute=True,
-            )
+            raise e
+
+    logging.info("All batches have been processed.")
 
 
 if __name__ == "__main__":
@@ -141,12 +206,10 @@ if __name__ == "__main__":
                 'source_container': 'converted',
                 'start_datetime': None,
                 'end_datetime': None,
-                'survey_id': '',
                 'output_container': '',
                 'combined_zarr_name': 'saildrone2023.zarr',
                 'chunks_ping_time': 1000,
                 'chunks_range_sample': 1000,
-                'description': '',
                 'batch_size': BATCH_SIZE
             }
         )

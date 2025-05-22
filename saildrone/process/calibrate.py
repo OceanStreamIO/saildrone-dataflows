@@ -17,6 +17,8 @@ def apply_calibration(echodata, file_path='./calibration/calibration_values.xlsx
     cal = load_values_from_xlsx(file_path)
     repeat_times = echodata["Vendor_specific"].pulse_length_bin.shape[0]
 
+    channels_len = len(echodata["Platform"].channel)
+
     # Gain correction
     value1_array = np.tile(clean_float(cal.iloc[1, 2]), repeat_times)
     value2_array = np.tile(clean_float(cal.iloc[1, 3]), repeat_times)

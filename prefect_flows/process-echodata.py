@@ -49,12 +49,6 @@ NETCDF_ROOT_DIR = '/mnt/saildronedata'
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
-AZURE_STORAGE_CONNECTION_STRING = os.getenv('AZURE_STORAGE_CONNECTION_STRING')
-if not AZURE_STORAGE_CONNECTION_STRING:
-    logging.error('AZURE_STORAGE_CONNECTION_STRING environment variable not set.')
-    sys.exit(1)
-
-#
 
 class DenoiseOptions(BaseModel):
     def get(self, key, default_value=None):
