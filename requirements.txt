@@ -8,6 +8,7 @@ dask==2024.9.0
 distributed==2024.9.0
 numcodecs==0.14.1
 pydantic==2.10.1
+bottleneck==1.5.0
 pydantic_core==2.27.1
 cloudpickle==3.0.0
 #xarray==2024.11.0
@@ -28,3 +29,4 @@ google-api-python-client
 requests
 psycopg2-binary
 netCDF4
+

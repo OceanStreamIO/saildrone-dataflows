@@ -132,19 +132,20 @@ def load_and_combine_zarr_stores(source_directory: str,
 if __name__ == "__main__":
     client = Client(address=DASK_CLUSTER_ADDRESS)
 
-    ensure_container_exists(COMBINED_CONTAINER_NAME)
-
     try:
         # Start the flow
         load_and_combine_zarr_stores.serve(
             name='combine-zarr-stores',
             parameters={
-                'source_directory': RAW_DATA_LOCAL,
-                'map_to_directory': RAW_DATA_LOCAL,
-                'output_zarr_path': '',
-                'container_name': COMBINED_CONTAINER_NAME,
+                'cruise_id': '',
+                'source_container': 'converted',
+                'start_datetime': None,
+                'end_datetime': None,
                 'survey_id': '',
+                'output_container': '',
                 'combined_zarr_name': 'saildrone2023.zarr',
+                'chunks_ping_time': 1000,
+                'chunks_range_sample': 1000,
                 'description': '',
                 'batch_size': BATCH_SIZE
             }
