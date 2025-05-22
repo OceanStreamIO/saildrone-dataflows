@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import sys
 import traceback
 from datetime import datetime
@@ -347,6 +348,7 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
         mask_impulse_noise = kwargs.get('mask_impulse_noise')
         mask_attenuated_signal = kwargs.get('mask_attenuated_signal')
         remove_background_noise = kwargs.get('remove_background_noise')
+        apply_seabed_mask = kwargs.get('apply_seabed_mask')
 
         output_path = output_directory
         converted_container_name = None
@@ -380,7 +382,8 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
                                       mask_transient_noise=mask_transient_noise,
                                       mask_impulse_noise=mask_impulse_noise,
                                       mask_attenuated_signal=mask_attenuated_signal,
-                                      remove_background_noise=remove_background_noise
+                                      remove_background_noise=remove_background_noise,
+                                      apply_seabed_mask=apply_seabed_mask
                                       )
     except Exception as e:
         print(f"Error processing file: {source_path.name}: ${str(e)}")
@@ -505,7 +508,6 @@ def load_and_process_files_to_zarr(source_directory: str,
             future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
             side_running_tasks.append(future_nc_task)
             netcdf_outputs.append(future_nc_task)
-
 
         if plot_echograms:
             future_plot_task = task_plot_echograms_normal.submit(future,
