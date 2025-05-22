@@ -16,11 +16,12 @@ from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
+from prefect.deployments import run_deployment
 
 from saildrone.process import process_converted_file, plot_and_upload_echograms
 from saildrone.utils import load_local_files
 from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
-                             ensure_container_exists, save_zarr_store, list_zarr_files)
+                             save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
 
 
 input_cache_policy = Inputs()
@@ -43,8 +44,7 @@ WEBAPP_CONTAINER_NAME = os.getenv('WEBAPP_CONTAINER_NAME')
 GPSDATA_CONTAINER_NAME = os.getenv('GPSDATA_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 
-CHUNKS = {"ping_time": 500, "range_sample": -1}
-CHUNKS_DENOISING = {"ping_time": 500, "depth": 500}
+NETCDF_ROOT_DIR = '/mnt/saildronedata'
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
@@ -88,6 +88,77 @@ class RemoveBackgroundNoise(DenoiseOptions):
     range_sample_num: int = Field(default=30, description="Number of range samples to consider.")
     background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
     SNR_threshold: float = Field(default=3.0, description="Signal-to-noise ratio threshold for background noise removal.")
+
+
+@task
+def trigger_netcdf_flow(container, file_list):
+    flat_paths = [p for group in file_list for p in group if p]  # flatten and skip empty
+
+    print('Triggering NetCDF flow with container:', flat_paths)
+
+    state = run_deployment(
+        name="generate-netcdf-zip-export/generate-netcdf-zip",
+        parameters={
+            "output_container": container,
+            "file_list": flat_paths
+        },
+        timeout=0
+    )
+
+    return state
+
+
+@task(
+    log_prints=True,
+    timeout_seconds=DEFAULT_TASK_TIMEOUT,
+    task_run_name="save_to_netcdf--{file_name}"
+)
+def task_save_to_netcdf(payload, file_name, container_name, chunks=None):
+    if payload is None:
+        return []
+
+    try:
+        cruise_id = payload['cruise_id']
+        denoising_applied = payload.get('denoised', False)
+        file_path = f"{cruise_id}/{file_name}/{file_name}"
+        nc_file_path = f"{file_path}.nc"
+        zarr_path = f"{file_path}.zarr"
+        saved_paths = []
+
+        zarr_path_denoised = f"{file_path}_denoised.zarr" if denoising_applied else None
+        nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
+
+        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+        nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
+                                                     base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
+        saved_paths.append(nc_file_output_path)
+
+        if zarr_path_denoised:
+            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
+                                          rechunk_after=True)
+            nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
+                                                                  ds_path=nc_file_path_denoised,
+                                                                  base_local_temp_path=NETCDF_ROOT_DIR,
+                                                                  is_temp_dir=False)
+            saved_paths.append(nc_file_denoised_output_path)
+
+        return saved_paths
+    except Exception as e:
+        traceback.print_exc()
+
+        markdown_report = f"""# Error during save_to_netcdf
+        Error occurred while saving to NetCDF: {file_name}
+
+        {str(e)}
+
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
+        """
+
+        create_markdown_artifact(markdown_report)
+
+        return []
 
 
 @task(
@@ -155,7 +226,7 @@ def task_plot_echograms_denoised(payload, file_name, container_name, echograms_c
     file_name = payload['file_name']
 
     try:
-        denoising_applied = payload['denoised']
+        denoising_applied = payload.get('denoised', False)
         cruise_id = payload['cruise_id']
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         upload_path = f"{cruise_id}/{file_name}"
@@ -351,6 +422,7 @@ def load_and_process_files_to_zarr(source_directory: str,
                                    mask_transient_noise: Optional[TransientNoiseMask] = None,
                                    remove_background_noise: Optional[RemoveBackgroundNoise] = None,
                                    apply_seabed_mask: bool = False,
+                                   save_to_netcdf: bool = False,
                                    batch_size: int = BATCH_SIZE):
     file_names = None
     with PostgresDB() as db_connection:
@@ -400,6 +472,7 @@ def load_and_process_files_to_zarr(source_directory: str,
         'ping_time': chunks_ping_time,
         'depth': 1000
     }
+    netcdf_outputs = []
 
     for src in files_list:
         file_name = src.stem if isinstance(src, Path) else src
@@ -427,6 +500,12 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             remove_background_noise=remove_background_noise,
                                             apply_seabed_mask=apply_seabed_mask
                                             )
+
+        if save_to_netcdf:
+            future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
+            side_running_tasks.append(future_nc_task)
+            netcdf_outputs.append(future_nc_task)
+
 
         if plot_echograms:
             future_plot_task = task_plot_echograms_normal.submit(future,
@@ -464,6 +543,16 @@ def load_and_process_files_to_zarr(source_directory: str,
     # Wait for remaining tasks
     for future_task in in_flight + side_running_tasks:
         future_task.result()
+
+    if save_to_netcdf:
+        future_zip = trigger_netcdf_flow.submit(
+            file_list=netcdf_outputs,
+            container=output_container
+        )
+        future_zip.wait()
+
+    if os.path.exists('/tmp/oceanstream/netcdfdata'):
+        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
 
     logging.info("All batches have been processed.")
 
@@ -508,6 +597,7 @@ if __name__ == "__main__":
                 'mask_attenuated_signal': None,
                 'remove_background_noise': None,
                 'apply_seabed_mask': False,
+                'save_to_netcdf': False,
                 'batch_size': BATCH_SIZE
             }
         )

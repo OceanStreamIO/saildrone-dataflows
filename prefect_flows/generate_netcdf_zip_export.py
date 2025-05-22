@@ -30,7 +30,9 @@ MAX_RUNTIME_SECONDS = 3_300
 @task(log_prints=True)
 def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
     print('Flat paths:', nc_file_paths)
-    #zip_and_save_netcdf_files(flat_paths, zip_name, container_name, tmp_dir=NETCDF_ROOT_DIR + '/tmp')
+
+    zip_and_save_netcdf_files(nc_file_paths, zip_name, container_name, tmp_dir=NETCDF_ROOT_DIR + '/tmp')
+
     logging.info(f"Uploaded archive {zip_name} to container {container_name}")
 
 
