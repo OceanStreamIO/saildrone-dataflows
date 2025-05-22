@@ -94,9 +94,9 @@ class RemoveBackgroundNoise(DenoiseOptions):
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms"
+    task_run_name="plot_echograms--{file_name}"
 )
-def task_plot_echograms_normal(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
+def task_plot_echograms_normal(payload, file_name, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
         return None
 
@@ -107,7 +107,6 @@ def task_plot_echograms_normal(payload, container_name, echograms_container, chu
 
     try:
         cruise_id = payload['cruise_id']
-
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         upload_path = f"{cruise_id}/{file_name}"
         zarr_path = f"{file_path}.zarr"
@@ -144,9 +143,9 @@ def task_plot_echograms_normal(payload, container_name, echograms_container, chu
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms_denoised"
+    task_run_name="plot_echograms_denoised--{file_name}"
 )
-def task_plot_echograms_denoised(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
+def task_plot_echograms_denoised(payload, file_name, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
         return None
 
@@ -158,10 +157,9 @@ def task_plot_echograms_denoised(payload, container_name, echograms_container, c
     try:
         denoising_applied = payload['denoised']
         cruise_id = payload['cruise_id']
-
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         upload_path = f"{cruise_id}/{file_name}"
-        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
+        zarr_path_denoised = f"{file_path}_denoised.zarr" if denoising_applied else None
 
         if zarr_path_denoised:
             ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
@@ -198,9 +196,9 @@ def task_plot_echograms_denoised(payload, container_name, echograms_container, c
     log_prints=True,
     retries=1,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms_seabed"
+    task_run_name="plot_echograms_seabed--{file_name}"
 )
-def task_plot_echograms_seabed(payload, container_name, echograms_container, chunks=None, cmap='ocean_r'):
+def task_plot_echograms_seabed(payload, file_name, container_name, echograms_container, chunks=None, cmap='ocean_r'):
     if payload is None:
         return None
 
@@ -212,7 +210,7 @@ def task_plot_echograms_seabed(payload, container_name, echograms_container, chu
 
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         upload_path = f"{cruise_id}/{file_name}"
-        zarr_path_seabed = f"{file_path}--seabed.zarr" if seabed_mask else None
+        zarr_path_seabed = f"{file_path}_seabed.zarr" if seabed_mask else None
 
         if zarr_path_seabed:
             ds = open_zarr_store(zarr_path_seabed, container_name=container_name, chunks=chunks, rechunk_after=True)
@@ -404,6 +402,7 @@ def load_and_process_files_to_zarr(source_directory: str,
     }
 
     for src in files_list:
+        file_name = src.stem if isinstance(src, Path) else src
         future = process_single_file.submit(src,
                                             cruise_id=cruise_id,
                                             load_from_blobstorage=load_from_blobstorage,
@@ -431,11 +430,13 @@ def load_and_process_files_to_zarr(source_directory: str,
 
         if plot_echograms:
             future_plot_task = task_plot_echograms_normal.submit(future,
+                                                                 file_name,
                                                                  output_container,
                                                                  echograms_container,
                                                                  chunks_sv_data,
                                                                  colormap)
             future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
+                                                                            file_name,
                                                                             output_container,
                                                                             echograms_container,
                                                                             chunks_sv_data,
@@ -446,6 +447,7 @@ def load_and_process_files_to_zarr(source_directory: str,
 
             if apply_seabed_mask:
                 future_plot_task = task_plot_echograms_seabed.submit(future,
+                                                                     file_name,
                                                                      output_container,
                                                                      echograms_container,
                                                                      chunks_sv_data,
