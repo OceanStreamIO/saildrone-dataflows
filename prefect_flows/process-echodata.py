@@ -255,7 +255,7 @@ def task_plot_echograms_seabed(payload, container_name, echograms_container, chu
     log_prints=True,
     task_run_name="process-{source_path.stem}",
 )
-def process_single_file(source_path: Path, chunks, **kwargs):
+def process_single_file(source_path: Path, chunks_echodata, **kwargs):
     try:
         worker = get_worker()
         print(f"Running on Dask worker: {worker.address}")
@@ -295,7 +295,7 @@ def process_single_file(source_path: Path, chunks, **kwargs):
         return process_converted_file(source_path,
                                       cruise_id=cruise_id,
                                       output_path=output_path,
-                                      chunks=chunks,
+                                      chunks=chunks_echodata,
                                       load_from_blobstorage=load_from_blobstorage,
                                       converted_container_name=converted_container_name,
                                       save_to_blobstorage=save_to_blobstorage,
@@ -323,18 +323,6 @@ def process_single_file(source_path: Path, chunks, **kwargs):
         create_markdown_artifact(markdown_report)
 
         return Completed(message="Task completed with errors")
-
-
-def process_raw_data(files: List[Path], **kwargs) -> None:
-    task_futures = []
-
-    for source_path in files:
-        future = process_single_file.submit(source_path, **kwargs)
-        task_futures.append(future)
-
-    # Wait for all tasks in the batch to complete
-    for future in task_futures:
-        future.result()
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
@@ -405,9 +393,14 @@ def load_and_process_files_to_zarr(source_directory: str,
     in_flight = []
     side_running_tasks = []
 
-    chunks = {
+    chunks_echodata = {
         'ping_time': chunks_ping_time,
         'range_sample': chunks_range_sample
+    }
+
+    chunks_sv_data = {
+        'ping_time': chunks_ping_time,
+        'depth': 1000
     }
 
     for src in files_list:
@@ -417,7 +410,7 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             source_container=source_container,
                                             output_container=output_container,
                                             reprocess=reprocess,
-                                            chunks=chunks,
+                                            chunks_echodata=chunks_echodata,
                                             compute_nasc=compute_nasc,
                                             compute_mvbs=compute_mvbs,
                                             save_to_blobstorage=save_to_blobstorage,
@@ -437,17 +430,26 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             )
 
         if plot_echograms:
-            future_plot_task = task_plot_echograms_normal.submit(future, output_container, echograms_container, chunks,
+            future_plot_task = task_plot_echograms_normal.submit(future,
+                                                                 output_container,
+                                                                 echograms_container,
+                                                                 chunks_sv_data,
                                                                  colormap)
-            future_plot_task_denoised = task_plot_echograms_denoised.submit(future, output_container,
-                                                                            echograms_container, chunks, colormap)
+            future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
+                                                                            output_container,
+                                                                            echograms_container,
+                                                                            chunks_sv_data,
+                                                                            colormap)
 
             side_running_tasks.append(future_plot_task)
             side_running_tasks.append(future_plot_task_denoised)
 
             if apply_seabed_mask:
-                future_plot_task = task_plot_echograms_normal.submit(future, output_container, echograms_container,
-                                                                     chunks, colormap)
+                future_plot_task = task_plot_echograms_seabed.submit(future,
+                                                                     output_container,
+                                                                     echograms_container,
+                                                                     chunks_sv_data,
+                                                                     colormap)
                 side_running_tasks.append(future_plot_task)
 
         in_flight.append(future)
