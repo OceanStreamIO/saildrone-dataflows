@@ -42,14 +42,17 @@ def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
 
 @flow(log_prints=True)
 def generate_netcdf_zip_export(output_container: str,
-                               file_list: List[str]):
+                               file_list: List[str],
+                               zip_name: str | None = None):
     total_files = len(file_list)
     logging.info(f"Total files to process: {total_files}")
     print(f"Total files to process: {total_files}")
 
+    archive_name = zip_name or f"{output_container}.zip"
+
     future_zip = zip_netcdf_outputs.submit(
         nc_file_paths=file_list,
-        zip_name=f"{output_container}.zip",
+        zip_name=archive_name,
         container_name=output_container
     )
     future_zip.wait()
@@ -66,7 +69,8 @@ if __name__ == "__main__":
             name='generate-netcdf-zip',
             parameters={
                 'output_container': '',
-                'file_list': []
+                'file_list': [],
+                'zip_name': None,
             }
         )
     except Exception as e:
