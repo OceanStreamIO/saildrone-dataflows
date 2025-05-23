@@ -21,8 +21,19 @@ from prefect.deployments import run_deployment
 
 from saildrone.process import process_converted_file, plot_and_upload_echograms
 from saildrone.utils import load_local_files
-from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
-                             save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
+from saildrone.store import (
+    FileSegmentService,
+    PostgresDB,
+    SurveyService,
+    open_zarr_store,
+    save_dataset_to_netcdf,
+    ensure_container_exists,
+    save_zarr_store,
+    list_zarr_files,
+    ExportService,
+    get_container_base_url,
+    get_blob_size,
+)
 
 
 input_cache_policy = Inputs()
@@ -128,26 +139,34 @@ def task_save_to_netcdf(payload, file_name, container_name, chunks=None):
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         nc_file_path = f"{file_path}.nc"
         zarr_path = f"{file_path}.zarr"
-        saved_paths = []
+        saved = []
 
         zarr_path_denoised = f"{file_path}_denoised.zarr" if denoising_applied else None
         nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-        nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
-                                                     base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
-        saved_paths.append(nc_file_output_path)
+        nc_file_output_path = save_dataset_to_netcdf(
+            ds,
+            container_name=container_name,
+            ds_path=nc_file_path,
+            base_local_temp_path=NETCDF_ROOT_DIR,
+            is_temp_dir=False,
+        )
+        saved.append({"path": nc_file_path, "size": os.path.getsize(nc_file_output_path)})
 
         if zarr_path_denoised:
             ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
                                           rechunk_after=True)
-            nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
-                                                                  ds_path=nc_file_path_denoised,
-                                                                  base_local_temp_path=NETCDF_ROOT_DIR,
-                                                                  is_temp_dir=False)
-            saved_paths.append(nc_file_denoised_output_path)
+            nc_file_denoised_output_path = save_dataset_to_netcdf(
+                ds_denoised,
+                container_name=container_name,
+                ds_path=nc_file_path_denoised,
+                base_local_temp_path=NETCDF_ROOT_DIR,
+                is_temp_dir=False,
+            )
+            saved.append({"path": nc_file_path_denoised, "size": os.path.getsize(nc_file_denoised_output_path)})
 
-        return saved_paths
+        return saved
     except Exception as e:
         traceback.print_exc()
 
@@ -450,6 +469,8 @@ def load_and_process_files_to_zarr(source_directory: str,
     reprocess = reprocess_options.get('reprocess', False) if reprocess_options else False
     skip_processed = reprocess_options.get('skip_processed', False) if reprocess_options else False
 
+    start_run = datetime.utcnow()
+
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
 
@@ -487,6 +508,8 @@ def load_and_process_files_to_zarr(source_directory: str,
 
     in_flight = []
     side_running_tasks = []
+    file_results = []
+    nc_result_map = {}
 
     chunks_echodata = {
         'ping_time': chunks_ping_time,
@@ -528,9 +551,14 @@ def load_and_process_files_to_zarr(source_directory: str,
                                             )
 
         if save_to_netcdf:
-            future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
+            future_nc_task = task_save_to_netcdf.submit(
+                future,
+                file_name,
+                output_container,
+                chunks_sv_data,
+            )
             side_running_tasks.append(future_nc_task)
-            netcdf_outputs.append(future_nc_task)
+            netcdf_outputs.append((file_name, future_nc_task))
 
         if plot_echograms:
             future_plot_task = task_plot_echograms_normal.submit(future,
@@ -563,23 +591,78 @@ def load_and_process_files_to_zarr(source_directory: str,
         # Throttle when max concurrent tasks reached
         if len(in_flight) >= batch_size:
             finished = next(as_completed(in_flight))
+            res = finished.result()
+            if isinstance(res, dict):
+                file_results.append(res)
             in_flight.remove(finished)
 
     # Wait for remaining tasks
     for future_task in in_flight + side_running_tasks:
-        future_task.result()
+        res = future_task.result()
+        if future_task in [ft for _, ft in netcdf_outputs]:
+            nc_result_map[[name for name, ft in netcdf_outputs if ft == future_task][0]] = res
+        elif isinstance(res, dict):
+            file_results.append(res)
 
-    if save_to_netcdf:
-        future_zip = trigger_netcdf_flow.submit(
-            file_list=netcdf_outputs,
-            container=output_container
-        )
-        future_zip.wait()
+    combined_zip_path = None
+    combined_zip_size = None
+    if save_to_netcdf and file_results:
+        first_start = min(datetime.fromisoformat(r["file_start_time"]) for r in file_results)
+        last_end = max(datetime.fromisoformat(r["file_end_time"]) for r in file_results)
+        duration_hours = (last_end - first_start).total_seconds() / 3600
+        if duration_hours <= 24:
+            future_zip = trigger_netcdf_flow.submit(
+                file_list=[ft for _, ft in netcdf_outputs],
+                container=output_container,
+            )
+            future_zip.wait()
+            combined_zip_path = f"{output_container}.zip"
+            combined_zip_size = get_blob_size(output_container, combined_zip_path)
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
 
-    logging.info("All batches have been processed.")
+    end_run = datetime.utcnow()
+
+    denoise_params = {
+        'mask_impulse_noise': mask_impulse_noise.dict() if mask_impulse_noise else None,
+        'mask_attenuated_signal': mask_attenuated_signal.dict() if mask_attenuated_signal else None,
+        'mask_transient_noise': mask_transient_noise.dict() if mask_transient_noise else None,
+        'remove_background_noise': remove_background_noise.dict() if remove_background_noise else None,
+        'apply_seabed_mask': apply_seabed_mask
+    }
+
+    base_url = get_container_base_url(output_container)
+
+    with PostgresDB() as db_connection:
+        export_service = ExportService(db_connection)
+        export_id, export_key = export_service.insert_export(
+            container_name=output_container,
+            base_url=base_url,
+            start_date=start_run,
+            end_date=end_run,
+            num_files=len(file_results),
+            denoise_params=denoise_params,
+            combined_netcdf_path=combined_zip_path,
+            combined_netcdf_size=combined_zip_size,
+        )
+
+        for res in file_results:
+            fid = res.get("file_id")
+            if fid is not None:
+                nc_info = nc_result_map.get(res["file_name"], [])
+                nc_entry = nc_info[0] if nc_info else None
+                export_service.add_file(
+                    export_id,
+                    fid,
+                    res.get("echogram_files"),
+                    sv_zarr_path=res.get("location"),
+                    denoised_zarr_path=f"{res['cruise_id']}/{res['file_name']}/{res['file_name']}_denoised.zarr" if res.get("denoised") else None,
+                    netcdf_path=nc_entry["path"] if nc_entry else None,
+                    netcdf_size=nc_entry["size"] if nc_entry else None,
+                )
+
+    logging.info(f"All batches have been processed. Export key: {export_key}")
 
 
 if __name__ == "__main__":
