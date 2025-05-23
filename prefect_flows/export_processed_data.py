@@ -59,7 +59,7 @@ class DenoiseOptions(BaseModel):
 
 class MaskImpulseNoise(DenoiseOptions):
     depth_bin: int = Field(default=10,
-                           description="Donwsampling bin size along vertical range variable (`range_var`) in meters.")
+                           description="Downsampling bin size along vertical range variable (`range_var`) in meters.")
     num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
     threshold: float = Field(default=10,
                              description="Impulse noise threshold value (in dB) for the two-side comparison.")
