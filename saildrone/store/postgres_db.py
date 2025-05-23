@@ -182,6 +182,35 @@ class PostgresDB:
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_survey_id ON nasc_points_2d (survey_id);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_geom ON nasc_points_2d USING GIST (geom);")
 
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS exports (
+                id SERIAL PRIMARY KEY,
+                container_name TEXT NOT NULL,
+                export_key TEXT NOT NULL UNIQUE,
+                base_url TEXT NOT NULL,
+                start_date TIMESTAMP,
+                end_date TIMESTAMP,
+                num_files INTEGER,
+                denoise_params JSONB,
+                combined_netcdf_path TEXT,
+                combined_netcdf_size BIGINT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        ''')
+
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS exports_files (
+                id SERIAL PRIMARY KEY,
+                export_id INTEGER REFERENCES exports(id) ON DELETE CASCADE,
+                file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
+                echogram_files TEXT[],
+                sv_zarr_path TEXT,
+                denoised_zarr_path TEXT,
+                netcdf_path TEXT,
+                netcdf_size BIGINT
+            );
+        ''')
+
         self.conn.commit()
 
     def is_file_processed(self, file_name: str) -> bool:
