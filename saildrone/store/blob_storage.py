@@ -419,6 +419,8 @@ def _parse_account_info(connect_str: str) -> tuple[str, str]:
 
 def get_container_base_url(container_name: str) -> str:
     connect_str = os.getenv("AZ_EXPORT_CONNECTION_STRING", os.getenv("AZ_SOURCE_CONNECTION_STRING"))
+    if not connect_str:
+        raise ValueError("Connection string is missing. Ensure that 'AZ_EXPORT_CONNECTION_STRING' or 'AZ_SOURCE_CONNECTION_STRING' is set.")
     account_name, _ = _parse_account_info(connect_str)
     return f"https://{account_name}.blob.core.windows.net/{container_name}"
 
