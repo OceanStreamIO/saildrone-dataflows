@@ -23,23 +23,23 @@ def test_file_workflow_saildrone():
     #source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20230825-T085959-0.zarr')
     source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231010-T095958-0.zarr')
     #source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231008-T005959-0.zarr')
-    #source_path = Path('test/reka-shipboard/converted/SE2204_-D20220704-T171306.zarr')
-    cruise_id = 'SD_TPOS2023_v03'
-    #cruise_id = 'SE2204'
+    source_path = Path('test/reka-shipboard/converted/SE2204_-D20220706-T171126.zarr')
+    # cruise_id = 'SD_TPOS2023_v03'
+    cruise_id = 'SE2204'
     output_path = 'test/processed'
     save_to_blobstorage = False
-    load_from_blobstorage = True
+    load_from_blobstorage = False
     converted_container_name = 'converted'
     save_to_directory = True
     processed_container_name = 'localnetcdftest'
     #processed_container_name = 'processedlocal'
     reprocess = True
     plot_echograms = True
-    depth_offset = 1.9
+    depth_offset = 6.5
     echograms_container = 'echograms'
     gps_container_name = 'gpsdata'
-    encode_mode = 'complex'
-    #encode_mode = 'power'
+    # encode_mode = 'complex'
+    encode_mode = 'power'
     waveform_mode = 'CW'
     impulse_noise_opts = dict(
         depth_bin=5,
@@ -93,9 +93,9 @@ def test_file_workflow_saildrone():
         mask_transient_noise=None,
         mask_impulse_noise=None,
         mask_attenuated_signal=None,
-        remove_background_noise=None,
+        remove_background_noise=background_noise_opts,
         chunks_denoising=chunks_denoising,
-        apply_seabed_mask=False,
+        apply_seabed_mask=True,
     )
 
     print(payload)

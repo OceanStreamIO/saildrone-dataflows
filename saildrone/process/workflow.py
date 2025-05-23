@@ -196,6 +196,7 @@ def _process_file_workflow(
                 .assign_coords(depth=("range_sample", depth_1d))
                 .swap_dims({"range_sample": "depth"})
             )
+
         if sv_dataset_seabed is not None:
             sv_dataset_seabed = (
                 sv_dataset_seabed
