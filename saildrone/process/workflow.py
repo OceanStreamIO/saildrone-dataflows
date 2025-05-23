@@ -410,6 +410,7 @@ def _process_file_workflow(
             file_id=file_id, **payload, processed=True
         )
 
+    payload["file_id"] = file_id
     return payload
 
 

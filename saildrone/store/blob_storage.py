@@ -397,24 +397,48 @@ def upload_file_to_blob(local_path, blob_path, container_name=None):
         container_client.upload_blob(name=blob_path, data=data, overwrite=True)
 
 
+def get_blob_size(container_name: str, blob_path: str, storage_account_type=STORAGE_ACCOUNT_EXPORT) -> int:
+    """Return blob size in bytes."""
+    blob_service_client = create_blob_service_client(storage_account_type=storage_account_type)
+    container_client = blob_service_client.get_container_client(container_name)
+    blob_client = container_client.get_blob_client(blob_path)
+    props = blob_client.get_blob_properties()
+    return props.size
+
+
+def _parse_account_info(connect_str: str) -> tuple[str, str]:
+    account_name = ""
+    account_key = ""
+    for part in connect_str.split(";"):
+        if part.lower().startswith("accountname="):
+            account_name = part.split("=", 1)[1]
+        elif part.lower().startswith("accountkey="):
+            account_key = part.split("=", 1)[1]
+    return account_name, account_key
+
+
+def get_container_base_url(container_name: str) -> str:
+    connect_str = os.getenv("AZ_EXPORT_CONNECTION_STRING", os.getenv("AZ_SOURCE_CONNECTION_STRING"))
+    if not connect_str:
+        raise ValueError("Connection string is missing. Ensure that 'AZ_EXPORT_CONNECTION_STRING' or 'AZ_SOURCE_CONNECTION_STRING' is set.")
+    account_name, _ = _parse_account_info(connect_str)
+    return f"https://{account_name}.blob.core.windows.net/{container_name}"
+
+
 def generate_container_access_url(container_name, duration_days=90):
-    """
-    FIXME: adapt this function to use the AZ_EXPORT_CONNECTION_STRING
-    Generate a SAS token for container access and return the URL.
-    """
-    AZURE_STORAGE_ACCOUNT_NAME = os.getenv('AZURE_STORAGE_ACCOUNT_NAME')
-    AZURE_STORAGE_ACCOUNT_KEY = os.getenv('AZURE_STORAGE_ACCOUNT_KEY')
+    """Generate a SAS token for container access using the export connection string."""
+    connect_str = os.getenv("AZ_EXPORT_CONNECTION_STRING", os.getenv("AZ_SOURCE_CONNECTION_STRING"))
+    account_name, account_key = _parse_account_info(connect_str)
 
     sas_token = generate_container_sas(
-        account_name=AZURE_STORAGE_ACCOUNT_NAME,
+        account_name=account_name,
         container_name=container_name,
-        account_key=AZURE_STORAGE_ACCOUNT_KEY,
+        account_key=account_key,
         permission=ContainerSasPermissions(read=True, list=True),
-        expiry=datetime.utcnow() + timedelta(days=duration_days)
+        expiry=datetime.utcnow() + timedelta(days=duration_days),
     )
 
-    url = f"https://{AZURE_STORAGE_ACCOUNT_NAME}.blob.core.windows.net/{container_name}?{sas_token}"
-    return url
+    return f"https://{account_name}.blob.core.windows.net/{container_name}?{sas_token}"
 
 
 def generate_container_name(cruise_id: str):
