@@ -72,11 +72,11 @@ def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, stor
         if apply_calibration is not True:
             calibration_file = None
 
-        convert_file_and_save(file_path, cruise_id, survey_db_id, sonar_model,
-                              calibration_file=calibration_file,
-                              reprocess=reprocess,
-                              converted_container_name=converted_container_name,
-                              output_path=output_path, chunks=chunks)
+        return convert_file_and_save(file_path, cruise_id, survey_db_id, sonar_model,
+                                     calibration_file=calibration_file,
+                                     reprocess=reprocess,
+                                     converted_container_name=converted_container_name,
+                                     output_path=output_path, chunks=chunks)
     except Exception as e:
         print(f"Error processing file: {file_path.name}" + str(e))
 
