@@ -1,4 +1,3 @@
-from .calibrate import apply_calibration
 from .plot import plot_sv_data, plot_and_upload_echograms
 from .process_raw_file import process_raw_file
 from .convert import convert_file_and_save
@@ -11,7 +10,6 @@ from .seabed import get_seabed_mask_multichannel
 
 
 __all__ = [
-    'apply_calibration',
     'plot_sv_data',
     'plot_and_upload_echograms',
     'consolidate_csv_to_geoparquet_partitioned',
