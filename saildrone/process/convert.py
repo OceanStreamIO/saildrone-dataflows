@@ -15,7 +15,7 @@ CHUNKS = {"ping_time": 2000, "range_sample": -1}
 
 def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, sonar_model='EK80',
                           calibration_file=None, output_path=None,
-                          reprocess=None, converted_container_name=None, chunks=chunks) -> (int, str, str):
+                          reprocess=None, converted_container_name=None, chunks=None) -> (int, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
     zarr_store = None
