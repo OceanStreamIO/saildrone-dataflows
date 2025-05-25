@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 
 from pathlib import Path
 from typing import List, Optional
@@ -51,6 +52,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
     retry_jitter_factor=0.1,
     refresh_cache=True,
     result_storage=None,
+    log_prints=True,
     task_run_name="convertraw-{file_path.stem}",
 )
 def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, store_to_directory=None,
@@ -72,38 +74,19 @@ def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, stor
         if apply_calibration is not True:
             calibration_file = None
 
-        return convert_file_and_save(file_path, cruise_id, survey_db_id, sonar_model,
-                                     calibration_file=calibration_file,
-                                     reprocess=reprocess,
-                                     converted_container_name=converted_container_name,
-                                     output_path=output_path, chunks=chunks)
+        file_id, zarr_store, sv_zarr_path = convert_file_and_save(file_path, cruise_id, survey_db_id, sonar_model,
+                                                                  calibration_file=calibration_file,
+                                                                  reprocess=reprocess,
+                                                                  converted_container_name=converted_container_name,
+                                                                  output_path=output_path, chunks=chunks)
+
+        return file_id, zarr_store, sv_zarr_path
+
     except Exception as e:
         print(f"Error processing file: {file_path.name}" + str(e))
+        traceback.print_exc()
 
         return Completed(message="Task completed with errors")
-
-
-def convert_raw_data(files: List[Path], cruise_id=None, survey_db_id=None, store_to_directory=None,
-                     output_directory=None, reprocess=None,
-                     apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None, chunks=None):
-    task_futures = []
-
-    for file_path in files:
-        future = convert_single_file.submit(file_path,
-                                            cruise_id=cruise_id,
-                                            survey_db_id=survey_db_id,
-                                            reprocess=reprocess,
-                                            store_to_directory=store_to_directory,
-                                            output_directory=output_directory,
-                                            apply_calibration=apply_calibration,
-                                            store_to_blobstorage=store_to_blobstorage,
-                                            blobstorage_container=blobstorage_container,
-                                            chunks=chunks)
-        task_futures.append(future)
-
-    # Wait for all tasks in the batch to complete
-    for future in task_futures:
-        future.result()
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
@@ -180,7 +163,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
     for future_task in in_flight:
         future_task.result()
 
-    logging.info("All batches have been processed.")
+    print("All files have been processed.")
 
 
 if __name__ == "__main__":
