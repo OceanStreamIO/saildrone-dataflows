@@ -17,7 +17,7 @@ def compute_sv(echodata, container_name=None, source_path=None, zarr_path=None, 
                                    encode_mode=encode_mode)
     sv_dataset = sv_dataset.chunk({
         'channel': 2,
-        'ping_time': 1000
+        'ping_time': 2000
     })
 
     return sv_dataset
