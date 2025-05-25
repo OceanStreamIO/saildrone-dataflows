@@ -34,7 +34,10 @@ from saildrone.store import (
     ExportService,
     get_container_base_url,
     get_blob_size,
+    generate_container_name,
 )
+from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
+from dask import delayed
 
 
 input_cache_policy = Inputs()
@@ -148,6 +151,22 @@ def task_save_to_netcdf(payload, file_name, container_name, chunks=None):
         nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+
+        # Attach location data from the database if available
+        location_data = None
+        file_id = payload.get('file_id')
+        survey_db_id = payload.get('survey_db_id')
+        if file_id is not None and survey_db_id is not None:
+            with PostgresDB() as db_connection:
+                file_service = FileSegmentService(db_connection)
+                files = file_service.get_files_by_survey_id(
+                    survey_db_id, condition=f" AND id = {file_id}"
+                )
+                if files:
+                    location_data = files[0]['location_data']
+
+        if location_data:
+            ds = merge_location_data(ds, location_data)
         nc_file_output_path = save_dataset_to_netcdf(
             ds,
             container_name=container_name,
@@ -158,8 +177,14 @@ def task_save_to_netcdf(payload, file_name, container_name, chunks=None):
         saved.append({"path": nc_file_path, "size": os.path.getsize(nc_file_output_path)})
 
         if zarr_path_denoised:
-            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
-                                          rechunk_after=True)
+            ds_denoised = open_zarr_store(
+                zarr_path_denoised,
+                container_name=container_name,
+                chunks=chunks,
+                rechunk_after=True,
+            )
+            if location_data:
+                ds_denoised = merge_location_data(ds_denoised, location_data)
             nc_file_denoised_output_path = save_dataset_to_netcdf(
                 ds_denoised,
                 container_name=container_name,
@@ -562,6 +587,92 @@ def _process_files(
     return file_results, nc_result_map, netcdf_outputs
 
 
+def _get_write_mode(key: str, write_mode_dict: dict) -> str:
+    mode = write_mode_dict.setdefault(key, "w")
+    write_mode_dict[key] = "a"
+    return mode
+
+
+@delayed
+def _concat_single_file(file, source_container_name, cruise_id, chunks, temp_container_name, batch_index, file_index, export_name):
+    zarr_path = f"{file['file_name']}/{file['file_name']}.zarr"
+    ds = open_zarr_store(zarr_path, cruise_id=cruise_id, container_name=source_container_name, chunks=chunks)
+    ds = merge_location_data(ds, file['location_data'])
+    temp_path = f"{export_name}_{batch_index}_{file_index}.zarr"
+    return save_zarr_store(ds, container_name=temp_container_name, zarr_path=temp_path)
+
+
+def _concat_batch(batch_files, source_container_name, cruise_id, chunks, temp_container_name, batch_index, export_name):
+    delayed_results = [
+        _concat_single_file(file, source_container_name, cruise_id, chunks, temp_container_name, batch_index, idx, export_name)
+        for idx, file in enumerate(batch_files)
+    ]
+    with get_dask_client() as dask_client:
+        futures = dask_client.compute(delayed_results)
+        return dask_client.gather(futures)
+
+
+def _concatenate_zarr_files(files, source_container_name, output_container, cruise_id, export_name, chunks, batch_size):
+    temp_container_name = generate_container_name(export_name)
+    ensure_container_exists(temp_container_name)
+    write_mode = {}
+    batch_index = 0
+
+    for i in range(0, len(files), batch_size):
+        batch = files[i:i + batch_size]
+        paths = _concat_batch(batch, source_container_name, cruise_id, chunks, temp_container_name, batch_index, export_name)
+        valid_paths = [p for p in paths if p]
+        if not valid_paths:
+            batch_index += 1
+            continue
+
+        combined_ds = concatenate_and_rechunk(valid_paths, container_name=temp_container_name, chunks=chunks)
+        zarr_path = f"{cruise_id}/{export_name}.zarr"
+        mode = _get_write_mode("combined", write_mode)
+        save_zarr_store(combined_ds, container_name=output_container, zarr_path=zarr_path, mode=mode, append_dim="ping_time")
+        batch_index += 1
+
+    return f"{cruise_id}/{export_name}.zarr"
+
+
+@task(log_prints=True)
+def task_concatenate_processed_zarr(cruise_id: str, container_name: str, export_name: str,
+                                    start_datetime: Optional[datetime], end_datetime: Optional[datetime],
+                                    chunks: dict, batch_size: int):
+    with PostgresDB() as db_connection:
+        survey_service = SurveyService(db_connection)
+        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
+        if not survey_id:
+            return None
+        file_service = FileSegmentService(db_connection)
+        condition = ""
+        if start_datetime and end_datetime:
+            condition += f" AND file_start_time > '{start_datetime}' AND file_end_time < '{end_datetime}'"
+        files = file_service.get_files_by_survey_id(survey_id, condition=condition)
+
+    if not files:
+        return None
+
+    return _concatenate_zarr_files(files, container_name, container_name, cruise_id, export_name, chunks, batch_size)
+
+
+@task(log_prints=True, timeout_seconds=DEFAULT_TASK_TIMEOUT)
+def task_plot_combined_echograms(zarr_path, cruise_id, export_name, container_name, echograms_container, chunks=None, cmap="ocean_r"):
+    if zarr_path is None:
+        return Completed(message="no combined zarr")
+
+    ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
+    upload_path = f"{cruise_id}/{export_name}"
+    plot_and_upload_echograms(ds,
+                              file_base_name=export_name,
+                              save_to_blobstorage=True,
+                              depth_var="depth",
+                              upload_path=upload_path,
+                              cmap=cmap,
+                              container_name=echograms_container)
+    return Completed(message="plot_combined_echograms completed")
+
+
 def _register_export(
     export_key: str,
     output_container: str,
@@ -724,6 +835,28 @@ def load_and_process_files_to_zarr(source_directory: str,
             future_zip.wait()
             combined_zip_path = f"{export_key}.zip"
             combined_zip_size = get_blob_size(output_container, combined_zip_path)
+
+            combined_zarr_future = task_concatenate_processed_zarr.submit(
+                cruise_id=cruise_id,
+                container_name=output_container,
+                export_name=export_key,
+                start_datetime=start_datetime,
+                end_datetime=end_datetime,
+                chunks=chunks_sv_data,
+                batch_size=batch_size,
+            )
+            combined_zarr_path = combined_zarr_future.result()
+
+            if plot_echograms:
+                task_plot_combined_echograms.submit(
+                    combined_zarr_path,
+                    cruise_id,
+                    export_key,
+                    output_container,
+                    echograms_container,
+                    chunks_sv_data,
+                    colormap,
+                )
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
