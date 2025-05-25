@@ -12,6 +12,7 @@ from dask.distributed import Client
 from prefect_dask import DaskTaskRunner
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
+from prefect.futures import as_completed
 
 from saildrone.process import convert_file_and_save
 from saildrone.store import ensure_container_exists
@@ -55,7 +56,7 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, store_to_directory=None,
                         output_directory=None, reprocess=None,
                         apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None,
-                        sonar_model='EK80'):
+                        sonar_model='EK80', chunks=None):
     load_dotenv()
 
     calibration_file = os.getenv('CALIBRATION_FILE')
@@ -76,7 +77,7 @@ def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, stor
                               calibration_file=calibration_file,
                               reprocess=reprocess,
                               converted_container_name=converted_container_name,
-                              output_path=output_path)
+                              output_path=output_path, chunks=chunks)
     except Exception as e:
         print(f"Error processing file: {file_path.name}" + str(e))
 
@@ -85,7 +86,7 @@ def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, stor
 
 def convert_raw_data(files: List[Path], cruise_id=None, survey_db_id=None, store_to_directory=None,
                      output_directory=None, reprocess=None,
-                     apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None):
+                     apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None, chunks=None):
     task_futures = []
 
     for file_path in files:
@@ -97,7 +98,8 @@ def convert_raw_data(files: List[Path], cruise_id=None, survey_db_id=None, store
                                             output_directory=output_directory,
                                             apply_calibration=apply_calibration,
                                             store_to_blobstorage=store_to_blobstorage,
-                                            blobstorage_container=blobstorage_container)
+                                            blobstorage_container=blobstorage_container,
+                                            chunks=chunks)
         task_futures.append(future)
 
     # Wait for all tasks in the batch to complete
@@ -115,7 +117,10 @@ def load_and_convert_files_to_zarr(source_directory: str,
                                    output_directory: Optional[str],
                                    store_to_blobstorage: Optional[bool],
                                    blobstorage_container: Optional[str],
-                                   batch_size: int) -> None:
+                                   chunks_ping_time: int = 2000,
+                                   chunks_range_sample: int = -1,
+                                   batch_size: int = BATCH_SIZE
+                                   ) -> None:
     raw_files = []
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
@@ -135,28 +140,44 @@ def load_and_convert_files_to_zarr(source_directory: str,
                 condition = ''
 
             print(f'Survey ID: {survey_db_id}')
-            file_names = file_service.get_files_with_condition(survey_db_id, condition)
+            file_names = file_service.get_files_list_with_condition(survey_db_id, condition)
             raw_files = [Path(source_directory) / f"{file_name}.raw" for file_name in file_names]
 
     if not get_list_from_db:
         raw_files = load_local_files(source_directory, source_directory)
 
+    chunks = {
+        "ping_time": chunks_ping_time,
+        "range_sample": chunks_range_sample
+    }
+
     total_files = len(raw_files)
+    in_flight = []
     print(f"Total files to process: {total_files}")
 
     # Process files in batches
-    for i in range(0, total_files, batch_size):
-        batch_files = raw_files[i:i + batch_size]
-        print(f"Processing batch {i // batch_size + 1}")
-        convert_raw_data(batch_files,
-                         cruise_id=cruise_id,
-                         survey_db_id=survey_db_id,
-                         reprocess=reprocess,
-                         store_to_directory=store_to_directory,
-                         output_directory=output_directory,
-                         store_to_blobstorage=store_to_blobstorage,
-                         apply_calibration=apply_calibration,
-                         blobstorage_container=blobstorage_container)
+    for file_path in raw_files:
+        future = convert_single_file.submit(file_path,
+                                            cruise_id=cruise_id,
+                                            survey_db_id=survey_db_id,
+                                            reprocess=reprocess,
+                                            store_to_directory=store_to_directory,
+                                            output_directory=output_directory,
+                                            apply_calibration=apply_calibration,
+                                            store_to_blobstorage=store_to_blobstorage,
+                                            blobstorage_container=blobstorage_container,
+                                            chunks=chunks)
+
+        in_flight.append(future)
+
+        # Throttle when max concurrent tasks reached
+        if len(in_flight) >= batch_size:
+            finished = next(as_completed(in_flight))
+            in_flight.remove(finished)
+
+        # Wait for remaining tasks
+    for future_task in in_flight:
+        future_task.result()
 
     logging.info("All batches have been processed.")
 
@@ -184,6 +205,8 @@ if __name__ == "__main__":
                 'output_directory': ECHODATA_OUTPUT_PATH,
                 'store_to_blobstorage': False,
                 'blobstorage_container': os.getenv('CONVERTED_CONTAINER_NAME'),
+                'chunks_ping_time': 2000,
+                'chunks_range_sample': -1,
                 'batch_size': BATCH_SIZE
             }
         )

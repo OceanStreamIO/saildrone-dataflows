@@ -1,3 +1,4 @@
+import os
 import pathlib
 import warnings
 import re
@@ -14,6 +15,7 @@ from scipy.ndimage import binary_dilation as _dilate
 from scipy.signal import savgol_filter
 from scipy.ndimage import median_filter
 
+DEBUG = os.getenv("DEBUG", "1") == "1"
 MAX_SV_DEFAULT_PARAMS = {"r0": 10, "r1": 1000, "roff": 0, "thr": (-40, -60)}
 DELTA_SV_DEFAULT_PARAMS = {"r0": 10, "r1": 1000, "roff": 0, "thr": 20}
 BLACKWELL_DEFAULT_PARAMS = {
@@ -81,13 +83,13 @@ ARIZA_EXPERIMENTAL_DEFAULT_PARAMS = {
 }
 
 
-def mask_true_seabed(ds: xr.Dataset, r0_m=15, r1_m=1200, thr_dB=-38.0, delta_db: float = 3.0) -> xr.Dataset:
+def mask_true_seabed(ds: xr.Dataset, r0_m=10, r1_m=1000, thr_dB=-45.0, delta_db: float = 3.0) -> xr.Dataset:
     ds_copy = ds.copy(deep=True)
     ds_38 = find_38khz_channel(ds_copy)
 
     ch_label = ds_38.channel.values.item(0)
 
-    seabed_idx, seabed_depth = compute_seabed_line(
+    seabed_idx, seabed_depth, ydim = compute_seabed_line(
         ds_38,
         channel=ch_label,
         r0_m=r0_m,
@@ -103,7 +105,9 @@ def mask_true_seabed(ds: xr.Dataset, r0_m=15, r1_m=1200, thr_dB=-38.0, delta_db:
 
     range_m = ds_38["echo_range"]
     # build a True-above-bottom mask on that grid:
-    mask2d = range_m < seabed_depth
+    bottom_of_ping = range_m.isel({ydim: -1})
+    seabed_safe = seabed_depth.fillna(bottom_of_ping)
+    mask2d = range_m < seabed_safe
 
     mask3d = broadcast_mask_to_all_channels(
         mask2d.rename("seabed_water_mask"),
@@ -128,7 +132,12 @@ def mask_true_seabed(ds: xr.Dataset, r0_m=15, r1_m=1200, thr_dB=-38.0, delta_db:
     return ds_copy
 
 
-def __compute_seabed_line(
+def _dbg(msg: str):
+    if DEBUG:
+        print(msg)
+
+
+def compute_seabed_line(
     ds: xr.Dataset,
     channel: str,
     r0_m: float,
@@ -136,8 +145,8 @@ def __compute_seabed_line(
     thr_dB: float = -40.0,
     fixed_percentile: float = 75.0,
     delta_db: float = 3.0,
-    erosion_kernel: tuple[int, int] = (3, 3),
-    dilation_kernel: tuple[int, int] = (5, 5),
+    erosion_kernel: tuple[int, int] = (1, 3),
+    dilation_kernel: tuple[int, int] = (3, 5),
     use_adaptive_thresholding: bool = False,
     adaptive_window_pings: int = 10,
     adaptive_std_multiplier: float = 1.0
@@ -161,9 +170,11 @@ def __compute_seabed_line(
     else:
         sub = ds
 
+    _dbg(f"[1] Selected channel {channel!r}: shape {sub['Sv'].shape}")
     Sv = sub["Sv"]
     er = sub["echo_range"]
     vdim = "range_sample" if "range_sample" in Sv.dims else "depth"
+    ping_dim = 'ping_time'
 
     # 2) Median‐filter full Sv to kill isolated spikes
     Sv_filtered = xr.apply_ufunc(
@@ -173,9 +184,14 @@ def __compute_seabed_line(
         dask="parallelized",
         output_dtypes=[Sv.dtype],
     )
+    _dbg("[2] Median filter applied")
 
     # 3) Gate for threshold computation only
     gate = (er >= r0_m) & (er <= r1_m)
+    n_gate = int(gate.sum().compute())
+
+    _dbg(f"[3] Depth gate: {r0_m}–{r1_m} m  →  {n_gate:,} voxels inside")
+
     Sv_gate = Sv_filtered.where(gate).chunk({vdim: -1})
 
     # 4) Choose thresholding method
@@ -205,10 +221,14 @@ def __compute_seabed_line(
 
     # 5) Enforce static floor thr_dB
     thr2 = thr2.clip(min=thr_dB)
+    _dbg(f"[5] Static floor enforced at {thr_dB} dB")
     # thr2 = xr.where(thr2 > thr_dB, thr2, thr_dB)
 
     # 6) Build candidate mask on filtered Sv
     cand = (Sv_filtered > thr2) & gate
+    pings_with_cand = int(cand.any(dim=vdim).sum().compute())
+    pings_total = Sv.sizes[ping_dim]
+    _dbg(f"[6] Raw candidates detected in {pings_with_cand} / {pings_total} pings")
 
     # 7) Morphology (erosion then dilation)
     def _morph(xda, fn, kernel):
@@ -222,56 +242,74 @@ def __compute_seabed_line(
             dask_gufunc_kwargs=dict(depth=pad, boundary="nearest"),
         )
 
-    cand = _morph(cand, _erode, erosion_kernel)
-    cand = _morph(cand, _dilate, dilation_kernel)
+    cand_eroded = _morph(cand, _erode, erosion_kernel)
+    cand_dilated = _morph(cand_eroded, _dilate, dilation_kernel)
+    empty_ping = ~cand_dilated.any(dim=vdim)
+    cand = xr.where(empty_ping, cand, cand_dilated)
+    cand = cand & gate
+    n_empty = int(empty_ping.sum().compute())
+    _dbg(f"[7] Morphology: {n_empty} pings wiped out and reverted to pre-morph mask")
 
     # 8) Require continuity across pings
     continuity_window = 5
     rolling_pres = cand.rolling(ping_time=continuity_window,
                                 center=True, min_periods=1).sum()
     cand = rolling_pres >= 2
+    pings_after_cont = int(cand.any(dim=vdim).sum().compute())
+    _dbg(f"[8] Continuity ≥2 of 5 pings: {pings_after_cont} pings keep candidates")
 
     # 9) Pick the deepest True per ping
-    idx = (cand * xr.DataArray(
-        np.arange(cand.sizes[vdim]),
-        dims=(vdim,),
-        coords={vdim: cand[vdim]}
-    )).max(dim=vdim)
+    vdim_indices = xr.DataArray(
+        np.arange(cand.sizes[vdim]), dims=vdim, coords={vdim: cand[vdim]}
+    )
+    idx_primary = (cand * vdim_indices).max(dim=vdim)
+    _dbg("[9] Deepest indices extracted")
 
     # 10) Safe fallback (if no cand True, pick first Sv > thr2 or bottom)
-    idx_fb = (Sv_filtered > thr2).argmax(dim=vdim)
+    fallback_mask = ((Sv_filtered > thr2) & gate)  # ❶
+    idx_fb = (fallback_mask * vdim_indices).max(dim=vdim).fillna(cand.sizes[vdim] - 1)
     has_bot = cand.any(dim=vdim)
-    idx = xr.where(has_bot, idx, idx_fb)
+    idx = xr.where(has_bot, idx_primary, idx_fb)
 
-    # clamp and fill
-    idx = idx.where(idx >= 0, 0).ffill("ping_time").bfill("ping_time")
-    idx = idx.fillna(cand.sizes[vdim] - 1)
+    bad_pings = int((~has_bot).sum().compute())
+    if bad_pings:
+        _dbg(f"[10] Fallback used on {bad_pings} pings (no candidate survived)")
 
     # 11) De-spike with Savitzky–Golay
     ping_vals = idx.ping_time.values
     idx_arr = idx.compute().values.astype(int)
     N = len(idx_arr)
-    win = min(31, N if N % 2 else N - 1)
-    win = max(3, win)
-    sm = savgol_filter(idx_arr, win, polyorder=1, mode="interp") if N >= 3 else idx_arr
+    win = max(3, min(31, N if N % 2 else N - 1))
+    if N >= 3:
+        idx_sm = savgol_filter(idx_arr, win, polyorder=1, mode="interp")
+        jumps = np.abs(np.diff(idx_sm, prepend=idx_sm[0])) > 5
+        idx_sm[jumps] = np.nan
+        nan_mask = np.isnan(idx_sm)
+        valid_mask = ~nan_mask
 
-    for i in range(1, len(sm)):
-        if abs(sm[i] - sm[i - 1]) > 5:
-            sm[i] = sm[i - 1]
+        if nan_mask.any() and valid_mask.any():
+            interp_vals = np.interp(
+                np.flatnonzero(nan_mask),  # x positions to fill
+                np.flatnonzero(valid_mask),  # x of known points
+                idx_sm[valid_mask]  # y of known points
+            )
+            idx_sm[nan_mask] = interp_vals
+    else:
+        idx_sm = idx_arr
+    _dbg(f"[11] Savitzky–Golay smoothing applied (window={win})")
 
-    idx_clean = xr.DataArray(sm.astype(int),
-                             dims=("ping_time",),
-                             coords={"ping_time": ping_vals},
-                             name="seabed_idx")
+    idx_clean = xr.DataArray(idx_sm.astype(int), dims=("ping_time",),
+                             coords={"ping_time": ping_vals}, name="seabed_idx")
 
     # 12) Map index to seabed depth
-    seabed_depth = er.isel({vdim: idx_clean})
+    seabed_depth = er.isel({vdim: idx_clean}).fillna(er.isel({vdim: -1}))
     seabed_depth.name = "seabed_depth"
+    _dbg("[12] Seabed depth mapped; function finished\n")
 
-    return idx_clean, seabed_depth
+    return idx_clean, seabed_depth, vdim
 
 
-def compute_seabed_line(
+def __compute_seabed_line(
     ds: xr.Dataset,
     channel: str,
     r0_m: float,

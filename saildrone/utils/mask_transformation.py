@@ -3,6 +3,7 @@ import xarray as xr
 import dask.array as da
 from typing import Union
 
+
 def downsample(dataset, coordinates: {str: int}, operation: str = "mean", is_log: bool = False):
     """
     Given a dataset, downsamples it on the specified coordinates

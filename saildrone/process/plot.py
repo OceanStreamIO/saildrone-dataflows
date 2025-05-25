@@ -36,9 +36,13 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
 
     echogram_files = []
     for channel in range(ds_Sv.dims['channel']):
-        echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
-                                                                depth_var, colorbar_orientation)
-        echogram_files.append(echogram_file_path)
+        try:
+            echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
+                                                                    depth_var, colorbar_orientation)
+            echogram_files.append(echogram_file_path)
+        except Exception as e:
+            print(f"Error plotting echogram for {file_base_name}: {e}")
+            traceback.print_exc()
 
     return echogram_files
 
@@ -90,9 +94,6 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
         .sortby(ydim)
 
     # compute top/bottom limits
-    # top = float(ds_Sv[ydim].min().compute().item())
-    # bot = float(ds_Sv[ydim].max().compute().item())
-
     top = float(da_Sv[ydim].isel({ydim: 0}).compute().item())
     bot = float(da_Sv[ydim].isel({ydim: -1}).compute().item())
 

@@ -470,12 +470,14 @@ def _prepare_file_list(
 
     if file_names and not load_from_blobstorage:
         return [Path(source_directory) / f"{fname}.raw" for fname in file_names]
+
     if file_names and load_from_blobstorage:
         return list_zarr_files(source_container, cruise_id=cruise_id, file_names=file_names)
+
     if load_from_blobstorage:
         return list_zarr_files(source_container, cruise_id=cruise_id)
-    return load_local_files(source_directory, source_directory, '*.zarr')
 
+    return load_local_files(source_directory, source_directory, '*.zarr')
 
 
 def _process_files(

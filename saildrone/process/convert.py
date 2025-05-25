@@ -6,16 +6,16 @@ from pathlib import Path
 from prefect_dask import get_dask_client
 
 from saildrone.store import PostgresDB, FileSegmentService
-from saildrone.process import apply_calibration
+from saildrone.calibrate import apply_calibration
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage
 
 
-CHUNKS = {"ping_time": 1000, "range_sample": -1}
+CHUNKS = {"ping_time": 2000, "range_sample": -1}
 
 
 def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, sonar_model='EK80',
                           calibration_file=None, output_path=None,
-                          reprocess=None, converted_container_name=None) -> (int, str, str):
+                          reprocess=None, converted_container_name=None, chunks=chunks) -> (int, str, str):
     file_name = file_path.stem
     sv_zarr_path = None
     zarr_store = None
@@ -42,7 +42,7 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
                                                    cruise_id=cruise_id,
                                                    calibration_file=calibration_file,
                                                    container_name=converted_container_name,
-                                                   sonar_model=sonar_model)
+                                                   sonar_model=sonar_model, chunks=chunks)
             except Exception as e:
                 print(f'Error converting file {file_name}: {e}')
                 file_segment_service.update_file_record(file_info['id'], failed=True, error_details=str(e))
@@ -83,7 +83,7 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
 
 
 def convert_file(file_name, file_path, calibration_file=None,
-                 cruise_id=None, container_name=None, sonar_model='EK80'):
+                 cruise_id=None, container_name=None, sonar_model='EK80', chunks=None):
     echodata = open_raw(file_path, sonar_model=sonar_model)
 
     if echodata.beam is None:
@@ -98,7 +98,9 @@ def convert_file(file_name, file_path, calibration_file=None,
         zarr_path = f"{file_name}.zarr"
 
     if container_name is not None:
-        # echodata = echodata.chunk(CHUNKS)
+        if chunks is not None:
+            echodata = echodata.chunk(chunks)
+
         save_zarr_to_blobstorage(echodata, container_name=container_name, zarr_path=zarr_path)
 
     return echodata, zarr_path
