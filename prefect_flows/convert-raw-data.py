@@ -55,11 +55,10 @@ if not AZURE_STORAGE_CONNECTION_STRING:
 )
 def convert_single_file(file_path: Path, cruise_id=None, survey_db_id=None, store_to_directory=None,
                         output_directory=None, reprocess=None,
-                        apply_calibration=None, store_to_blobstorage=None, blobstorage_container=None,
+                        apply_calibration=None, calibration_file=None,
+                        store_to_blobstorage=None, blobstorage_container=None,
                         sonar_model='EK80', chunks=None):
     load_dotenv()
-
-    calibration_file = os.getenv('CALIBRATION_FILE')
 
     try:
         converted_container_name = None
@@ -113,10 +112,11 @@ def load_and_convert_files_to_zarr(source_directory: str,
                                    cruise_id: str,
                                    store_to_directory: Optional[bool],
                                    apply_calibration: Optional[bool],
-                                   reprocess: Optional[bool],
-                                   output_directory: Optional[str],
-                                   store_to_blobstorage: Optional[bool],
-                                   blobstorage_container: Optional[str],
+                                   calibration_file: Optional[str] = None,
+                                   reprocess: Optional[bool] = False,
+                                   output_directory: Optional[str] = None,
+                                   store_to_blobstorage: Optional[bool] = False,
+                                   blobstorage_container: Optional[str] = None,
                                    chunks_ping_time: int = 2000,
                                    chunks_range_sample: int = -1,
                                    batch_size: int = BATCH_SIZE
@@ -164,6 +164,7 @@ def load_and_convert_files_to_zarr(source_directory: str,
                                             store_to_directory=store_to_directory,
                                             output_directory=output_directory,
                                             apply_calibration=apply_calibration,
+                                            calibration_file=calibration_file,
                                             store_to_blobstorage=store_to_blobstorage,
                                             blobstorage_container=blobstorage_container,
                                             chunks=chunks)
@@ -201,6 +202,7 @@ if __name__ == "__main__":
                 'cruise_id': '',
                 'store_to_directory': True,
                 'apply_calibration': True,
+                'calibration_file': CALIBRATION_FILE,
                 'reprocess': False,
                 'output_directory': ECHODATA_OUTPUT_PATH,
                 'store_to_blobstorage': False,
