@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import sys
@@ -8,14 +9,15 @@ from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from prefect import flow, task
+from prefect import flow, task, get_client
 from dask.distributed import Client
 from prefect_dask import DaskTaskRunner
 from prefect.cache_policies import Inputs
 from prefect.states import Completed
+from prefect.concurrency.sync import concurrency
 from prefect.futures import as_completed
 
-from saildrone.calibrate import apply_calibration
+from saildrone.calibrate import apply_calibration as apply_calibration_fn
 from saildrone.utils import load_local_files
 from saildrone.store import PostgresDB, SurveyService, FileSegmentService, save_zarr_store
 
@@ -37,6 +39,7 @@ CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
+TAG = "convert-file-tag"
 
 
 @task(
@@ -60,7 +63,6 @@ def convert_single_file(file_path: Path,
                         store_to_blobstorage=None,
                         blobstorage_container=None,
                         chunks=None):
-
     load_dotenv()
 
     try:
@@ -120,11 +122,11 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
         print(f"File info for {file_name}: {file_info}")
 
         try:
-            echodata, zarr_path = convert_file(file_name, file_path,
-                                               cruise_id=cruise_id,
-                                               calibration_file=calibration_file,
-                                               container_name=converted_container_name,
-                                               sonar_model=sonar_model, chunks=chunks)
+            echodata, zarr_path = convert_raw_file_to_echodata(file_name, file_path,
+                                                               cruise_id=cruise_id,
+                                                               calibration_file=calibration_file,
+                                                               container_name=converted_container_name,
+                                                               sonar_model=sonar_model, chunks=chunks)
         except Exception as e:
             print(f'Error converting file {file_name}: {e}')
             file_segment_service.update_file_record(file_info['id'], failed=True, error_details=str(e))
@@ -164,9 +166,8 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
         return file_id, zarr_store, sv_zarr_path
 
 
-def convert_file(file_name, file_path, calibration_file=None,
-                 cruise_id=None, container_name=None, sonar_model='EK80', chunks=None):
-
+def convert_raw_file_to_echodata(file_name, file_path, calibration_file=None,
+                                 cruise_id=None, container_name=None, sonar_model='EK80', chunks=None):
     from echopype.convert.api import open_raw
 
     echodata = open_raw(file_path, sonar_model=sonar_model)
@@ -175,7 +176,7 @@ def convert_file(file_name, file_path, calibration_file=None,
         return echodata, None
 
     if calibration_file:
-        echodata = apply_calibration(echodata, calibration_file)
+        echodata = apply_calibration_fn(echodata, calibration_file)
         print('Applied calibration to echodata for file:', file_name)
 
     if cruise_id:
@@ -190,7 +191,6 @@ def convert_file(file_name, file_path, calibration_file=None,
         save_zarr_store(echodata, container_name=container_name, zarr_path=zarr_path)
 
     return echodata, zarr_path
-
 
 
 @flow(
@@ -242,12 +242,10 @@ def load_and_convert_files_to_zarr(source_directory: str,
     }
 
     total_files = len(raw_files)
-    in_flight = []
     print(f"Total files to process: {total_files}")
 
-    # Process files in batches
+    in_flight = []
     for file_path in raw_files:
-        print('Processing file:', file_path)
         future = convert_single_file.submit(file_path,
                                             cruise_id=cruise_id,
                                             survey_db_id=survey_db_id,
@@ -259,15 +257,12 @@ def load_and_convert_files_to_zarr(source_directory: str,
                                             store_to_blobstorage=store_to_blobstorage,
                                             blobstorage_container=blobstorage_container,
                                             chunks=chunks)
-
         in_flight.append(future)
 
-        # Throttle when max concurrent tasks reached
         if len(in_flight) >= batch_size:
             finished = next(as_completed(in_flight))
             in_flight.remove(finished)
 
-        # Wait for remaining tasks
     for future_task in in_flight:
         future_task.result()
 

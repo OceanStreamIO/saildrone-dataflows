@@ -1,12 +1,10 @@
 import logging
 import time
 
-from echopype.convert.api import open_raw
 from pathlib import Path
 from prefect_dask import get_dask_client
 
 from saildrone.store import PostgresDB, FileSegmentService
-from saildrone.calibrate import apply_calibration
 from saildrone.store import save_zarr_store as save_zarr_to_blobstorage
 
 
@@ -20,19 +18,22 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
     sv_zarr_path = None
     zarr_store = None
 
+    print('Starting conversion for file:', file_name)
+
     with PostgresDB() as db_connection:
         file_segment_service = FileSegmentService(db_connection)
 
         # Check if the file has already been processed
         if file_segment_service.is_file_converted(file_name) and not reprocess:
-            logging.info(f'Skipping already converted file: {file_name}')
+            print(f'Skipping already converted file: {file_name}')
             return None, None, None
 
         if file_segment_service.is_file_failed(file_name):
-            logging.info(f'Skipping failed file: {file_name}')
+            print(f'Skipping failed file: {file_name}')
             return None, None, None
 
         file_info = file_segment_service.get_file_info(file_name)
+        print(f"File info for {file_name}: {file_info}")
 
         with get_dask_client():
             print(f"convert_file_and_save: {file_name}, file_path: {file_path}, output_path: {output_path}, converted_container_name: {converted_container_name}")
@@ -84,7 +85,13 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
 
 def convert_file(file_name, file_path, calibration_file=None,
                  cruise_id=None, container_name=None, sonar_model='EK80', chunks=None):
+
+    from echopype.convert.api import open_raw
+    from saildrone.calibrate import apply_calibration
+
     echodata = open_raw(file_path, sonar_model=sonar_model)
+
+    print('Loaded echodata for file:', file_name, echodata)
 
     if echodata.beam is None:
         return echodata, None
