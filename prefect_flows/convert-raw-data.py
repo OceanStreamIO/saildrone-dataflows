@@ -66,7 +66,6 @@ def convert_single_file(file_path: Path,
     load_dotenv()
 
     try:
-        start_time = time.time()
         converted_container_name = None
         output_path = None
         if store_to_blobstorage:
@@ -91,12 +90,6 @@ def convert_single_file(file_path: Path,
             converted_container_name=converted_container_name,
             chunks=chunks
         )
-
-        processing_time = time.time() - start_time
-        if processing_time < MINIMUM_THROTTLE:
-            sleep_time = MINIMUM_THROTTLE - processing_time
-            print(f"Sleeping for {sleep_time} seconds to ensure task completion.")
-            time.sleep(sleep_time)
 
         return file_id
 
@@ -265,8 +258,11 @@ def load_and_convert_files_to_zarr(source_directory: str,
         in_flight.append(future)
 
         if len(in_flight) >= batch_size:
-            finished = next(as_completed(in_flight))
-            in_flight.remove(finished)
+            done = next(as_completed(in_flight))
+            try:
+                done.result()
+            finally:
+                in_flight.remove(done)
 
     for future_task in in_flight:
         future_task.result()

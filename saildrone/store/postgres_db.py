@@ -4,6 +4,14 @@ from dotenv import load_dotenv
 from typing import Optional
 
 
+from psycopg2.pool import ThreadedConnectionPool
+
+POOL = ThreadedConnectionPool(
+    minconn=1,
+    maxconn=int(os.getenv("PG_POOL_MAX", 2)),
+    dsn=os.getenv("PG_DSN"),
+)
+
 class PostgresDB:
     def __init__(self) -> None:
         self.conn = None
