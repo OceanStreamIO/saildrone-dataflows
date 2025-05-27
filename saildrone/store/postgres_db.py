@@ -8,9 +8,14 @@ from psycopg2.pool import ThreadedConnectionPool
 
 POOL = ThreadedConnectionPool(
     minconn=1,
-    maxconn=int(os.getenv("PG_POOL_MAX", 2)),
-    dsn=os.getenv("PG_DSN"),
+    maxconn=int(os.getenv("PG_POOL_MAX", 4)),
+    host=os.getenv("DB_HOST"),
+    port=os.getenv("DB_PORT", "5432"),
+    dbname=os.getenv("DB_NAME"),
+    user=os.getenv('DB_USER', 'postgres'),
+    password=os.getenv("DB_PASSWORD"),
 )
+
 
 class PostgresDB:
     def __init__(self) -> None:
@@ -29,19 +34,17 @@ class PostgresDB:
         """
         load_dotenv()
 
-        self.conn = psycopg2.connect(
-            host=os.getenv('DB_HOST', 'localhost'),
-            port=os.getenv('DB_PORT', '5432'),
-            dbname=os.getenv('DB_NAME', ''),
-            user=os.getenv('DB_USER', 'postgres'),
-            password=os.getenv('DB_PASSWORD', '')
-        )
+        self.conn = POOL.getconn()
         self.cursor = self.conn.cursor()
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self.conn:
-            self.conn.close()
+        try:
+            self.cursor.close()
+            self.conn.rollback()
+        finally:
+            POOL.putconn(self.conn)
 
     def create_tables(self) -> None:
         """
