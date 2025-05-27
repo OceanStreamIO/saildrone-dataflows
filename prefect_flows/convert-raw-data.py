@@ -39,7 +39,7 @@ CONVERTED_CONTAINER_NAME = os.getenv('CONVERTED_CONTAINER_NAME')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 CALIBRATION_FILE = os.getenv('CALIBRATION_FILE')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
-TAG = "convert-file-tag"
+MINIMUM_THROTTLE = int(os.getenv('MINIMUM_THROTTLE', 30))
 
 
 @task(
@@ -93,8 +93,8 @@ def convert_single_file(file_path: Path,
         )
 
         processing_time = time.time() - start_time
-        if processing_time < 10_000:
-            sleep_time = 10_000 - processing_time
+        if processing_time < MINIMUM_THROTTLE:
+            sleep_time = MINIMUM_THROTTLE - processing_time
             print(f"Sleeping for {sleep_time} seconds to ensure task completion.")
             time.sleep(sleep_time)
 
