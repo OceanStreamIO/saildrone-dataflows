@@ -1,21 +1,7 @@
 import os
+import psycopg2
 from dotenv import load_dotenv
 from typing import Optional
-
-
-from psycopg2.pool import ThreadedConnectionPool
-
-
-load_dotenv()
-POOL = ThreadedConnectionPool(
-    minconn=1,
-    maxconn=int(os.getenv("PG_POOL_MAX", 4)),
-    host=os.getenv("DB_HOST"),
-    port=os.getenv("DB_PORT", "5432"),
-    dbname=os.getenv("DB_NAME"),
-    user=os.getenv('DB_USER', 'postgres'),
-    password=os.getenv("DB_PASSWORD"),
-)
 
 
 class PostgresDB:
@@ -33,17 +19,21 @@ class PostgresDB:
         PostgresDB
             The database instance itself for context management.
         """
-        self.conn = POOL.getconn()
-        self.cursor = self.conn.cursor()
+        load_dotenv()
 
+        self.conn = psycopg2.connect(
+            host=os.getenv('DB_HOST', 'localhost'),
+            port=os.getenv('DB_PORT', '5432'),
+            dbname=os.getenv('DB_NAME', ''),
+            user=os.getenv('DB_USER', 'postgres'),
+            password=os.getenv('DB_PASSWORD', '')
+        )
+        self.cursor = self.conn.cursor()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        try:
-            self.cursor.close()
-            self.conn.rollback()
-        finally:
-            POOL.putconn(self.conn)
+        if self.conn:
+            self.conn.close()
 
     def create_tables(self) -> None:
         """
