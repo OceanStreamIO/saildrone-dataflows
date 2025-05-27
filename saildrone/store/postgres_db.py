@@ -5,6 +5,8 @@ from typing import Optional
 
 from psycopg2.pool import ThreadedConnectionPool
 
+
+load_dotenv()
 POOL = ThreadedConnectionPool(
     minconn=1,
     maxconn=int(os.getenv("PG_POOL_MAX", 4)),
@@ -31,8 +33,6 @@ class PostgresDB:
         PostgresDB
             The database instance itself for context management.
         """
-        load_dotenv()
-
         self.conn = POOL.getconn()
         self.cursor = self.conn.cursor()
 
