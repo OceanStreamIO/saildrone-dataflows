@@ -66,6 +66,7 @@ def convert_single_file(file_path: Path,
     load_dotenv()
 
     try:
+        start_time = time.time()
         converted_container_name = None
         output_path = None
         if store_to_blobstorage:
@@ -77,9 +78,9 @@ def convert_single_file(file_path: Path,
         if apply_calibration is not True:
             calibration_file = None
 
-        print(f"Converting file: {file_path}, cruise_id: {cruise_id}, survey_db_id: {survey_db_id}")
+        print(f"Converting file: {file_path}, cruise_id: {cruise_id}, reprocess: {reprocess}")
 
-        file_id, zarr_store, sv_zarr_path = convert_file_and_save(
+        file_id = convert_file_and_save(
             file_path,
             cruise_id=cruise_id,
             survey_db_id=survey_db_id,
@@ -91,8 +92,13 @@ def convert_single_file(file_path: Path,
             chunks=chunks
         )
 
-        print(f"File ID: {file_id}, Zarr Store: {zarr_store}, SV Zarr Path: {sv_zarr_path}")
-        return file_id, zarr_store, sv_zarr_path
+        processing_time = time.time() - start_time
+        if processing_time < 10_000:
+            sleep_time = 10_000 - processing_time
+            print(f"Sleeping for {sleep_time} seconds to ensure task completion.")
+            time.sleep(sleep_time)
+
+        return file_id
 
     except Exception as e:
         print(f"Error processing file: {file_path.name}" + str(e))
@@ -105,9 +111,6 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
                           calibration_file=None, output_path=None,
                           reprocess=None, converted_container_name=None, chunks=None) -> (int, str, str):
     file_name = file_path.stem
-    sv_zarr_path = None
-    zarr_store = None
-
     print('Starting conversion for file:', file_name)
 
     with PostgresDB() as db_connection:
@@ -116,22 +119,24 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
         # Check if the file has already been processed
         if file_segment_service.is_file_converted(file_name) and not reprocess:
             print(f'Skipping already converted file: {file_name}')
-            return None, None, None
+            return None
 
         file_info = file_segment_service.get_file_info(file_name)
         print(f"File info for {file_name}: {file_info}")
 
         try:
-            echodata, zarr_path = convert_raw_file_to_echodata(file_name, file_path,
+            echodata, zarr_path = convert_raw_file_to_echodata(file_name,
+                                                               file_path,
                                                                cruise_id=cruise_id,
                                                                calibration_file=calibration_file,
                                                                container_name=converted_container_name,
-                                                               sonar_model=sonar_model, chunks=chunks)
+                                                               sonar_model=sonar_model,
+                                                               chunks=chunks)
         except Exception as e:
-            print(f'Error converting file {file_name}: {e}')
+            print(f'Error converting file {file_path}: {e}')
             file_segment_service.update_file_record(file_info['id'], failed=True, error_details=str(e))
 
-            return None, None, None
+            return None
 
         if output_path is not None:
             output_zarr_path = f"{output_path}/{file_name}.zarr"
@@ -142,10 +147,11 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
         print(f"File info {file_name}: {file_info}")
 
         if file_info is not None:
-            if file_info['converted'] is True:
-                return None, None, None
-
             file_id = file_info['id']
+
+            if file_info['converted'] is True:
+                return file_id
+
             file_segment_service.update_file_record(
                 file_id,
                 size=file_path.stat().st_size,
@@ -163,7 +169,7 @@ def convert_file_and_save(file_path: Path, cruise_id=None, survey_db_id=None, so
                 converted=True
             )
 
-        return file_id, zarr_store, sv_zarr_path
+        return file_id
 
 
 def convert_raw_file_to_echodata(file_name, file_path, calibration_file=None,
@@ -177,7 +183,6 @@ def convert_raw_file_to_echodata(file_name, file_path, calibration_file=None,
 
     if calibration_file:
         echodata = apply_calibration_fn(echodata, calibration_file)
-        print('Applied calibration to echodata for file:', file_name)
 
     if cruise_id:
         zarr_path = f"{cruise_id}/{file_name}.zarr"
