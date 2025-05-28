@@ -472,9 +472,9 @@ def _prepare_file_list(
     start_datetime: Optional[datetime],
     end_datetime: Optional[datetime],
     reprocess: bool,
-) -> list[Union[str, Path]]:
+):
     """Fetch the list of files to be processed."""
-    file_names = None
+    files = None
 
     with PostgresDB() as db_connection:
         survey_service = SurveyService(db_connection)
@@ -491,18 +491,23 @@ def _prepare_file_list(
                     f" AND file_start_time > '{start_datetime}' "
                     f"AND file_end_time < '{end_datetime}'"
                 )
-            file_names = file_service.get_files_list_with_condition(survey_id, condition)
-
-    if file_names and not load_from_blobstorage:
-        return [Path(source_directory) / f"{fname}.raw" for fname in file_names]
-
-    if file_names and load_from_blobstorage:
-        return list_zarr_files(source_container, cruise_id=cruise_id, file_names=file_names)
+            files = file_service.get_files_by_survey_id(survey_id, condition)
 
     if load_from_blobstorage:
-        return list_zarr_files(source_container, cruise_id=cruise_id)
+        file_names = [f['file_name'] for f in files] if files else None
+        zarr_paths = list_zarr_files(
+            source_container,
+            cruise_id=cruise_id,
+            file_names=file_names,
+        )
+    elif files:
+        # If files are provided and not loading from blob storage, construct paths
+        zarr_paths = [Path(source_directory) / f"{file['file_name']}.zarr" for file in files]
+    else:
+        # If no files are provided, load local files from the source directory
+        zarr_paths = load_local_files(source_directory, source_directory, '*.zarr')
 
-    return load_local_files(source_directory, source_directory, '*.zarr')
+    return zarr_paths, files
 
 
 def _process_files(
@@ -762,7 +767,7 @@ def load_and_process_files_to_zarr(source_directory: str,
     # Generate export key early so the NetCDF archive can be named accordingly
     export_key = f"{output_container}-{uuid.uuid4().hex[:6]}"
 
-    files_list = _prepare_file_list(
+    files_list, files_data = _prepare_file_list(
         source_directory,
         cruise_id,
         load_from_blobstorage,

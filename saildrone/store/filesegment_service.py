@@ -428,11 +428,13 @@ class FileSegmentService:
         list
             A list of location_data dictionaries from the database.
         """
+        if not condition:
+            condition = 'AND processed = TRUE'
 
         query = f'''
             SELECT location, file_name, id, location_data, file_freqs, file_start_time, file_end_time
             FROM {self.table_name}
-            WHERE survey_db_id = %s AND processed = TRUE {condition}
+            WHERE survey_db_id = %s {condition}
             ORDER BY file_start_time ASC
         '''
 
