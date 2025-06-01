@@ -2,6 +2,19 @@ from .plot import plot_sv_data, plot_and_upload_echograms
 from .process_raw_file import process_raw_file
 from .convert import convert_file_and_save
 from .workflow import process_converted_file, apply_denoising
+from .echodata import (
+    open_echodata,
+    prepare_file_list,
+    process_files,
+    task_concatenate_processed_zarr,
+    task_plot_combined_echograms,
+    register_export,
+)
+from .nasc import (
+    get_nasc_zarr_path,
+    load_nasc_dataset,
+    insert_nasc_points,
+)
 from .location import extract_location_data, extract_start_end_lat_lon
 from .process_gps import (consolidate_csv_to_geoparquet_partitioned, query_location_points_between_timestamps,
                           save_to_partitioned_geoparquet, extract_start_end_coordinates)
@@ -24,4 +37,13 @@ __all__ = [
     'create_geodataframe_from_location_data',
     'extract_start_end_lat_lon',
     'get_seabed_mask_multichannel'
+    , 'open_echodata'
+    , 'prepare_file_list'
+    , 'process_files'
+    , 'task_concatenate_processed_zarr'
+    , 'task_plot_combined_echograms'
+    , 'register_export'
+    , 'get_nasc_zarr_path'
+    , 'load_nasc_dataset'
+    , 'insert_nasc_points'
 ]

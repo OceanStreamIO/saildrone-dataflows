@@ -14,7 +14,6 @@ from echopype.mask import apply_mask
 from echopype.clean import mask_transient_noise as mask_transient_noise_func
 from echopype.commongrid import compute_NASC, compute_MVBS
 
-from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage)
 from saildrone.azure_iot import serialize_location_data
 from saildrone.denoise import (get_impulse_noise_mask,
@@ -28,11 +27,10 @@ from .sv_dataset import compute_sv
 from .plot import plot_and_upload_echograms, ensure_channel_labels
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
-from ..store.nascpoint_service import NASCPointService
 
 
-def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = False, **kwargs) -> dict:
-    """Process a converted file and store the results in the database.
+def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = False, file_id: int = None, survey_db_id: int = None, **kwargs) -> dict:
+    """Process a converted file without interacting with the database.
 
     Parameters:
     - source_path: Path
@@ -49,32 +47,7 @@ def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = 
     """
 
     start_time = time.time()
-    file_id = None
     file_name = source_path.stem if isinstance(source_path, Path) else source_path
-
-    with PostgresDB() as db_connection:
-        file_segment_service = FileSegmentService(db_connection)
-        survey_service = SurveyService(db_connection)
-
-        file_info = file_segment_service.get_file_info(file_name)
-
-        if file_info is None:
-            raise RuntimeError(f"File '{file_name}' not found in the database.")
-
-        survey_db_id = survey_service.get_survey_by_cruise_id(cruise_id)
-        if survey_db_id is None:
-            raise RuntimeError(f"Survey with cruse id '{cruise_id}' not found in the database.")
-
-        # Check processing status
-        if file_info["processed"] and not reprocess:
-            logging.info(f"Skipping already processed file: {file_name}")
-            return {"status": "skipped", "file_name": file_name}
-
-        file_id = file_info["id"]
-
-    # Process the file and handle potential errors
-    if file_id is None:
-        raise RuntimeError(f"File ID not found for file '{file_name}'")
 
     try:
         return _process_file_workflow(
@@ -90,16 +63,6 @@ def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = 
         error_message = f"Error processing file '{file_name}': {e}"
         logging.error(error_message)
         traceback.print_exc()
-
-        # Update the database with the failure details
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            file_segment_service.update_file_record(
-                file_id=file_id,
-                failed=True,
-                error_details=str(e),
-            )
-
         raise RuntimeError(error_message)
 
 
@@ -151,9 +114,6 @@ def _process_file_workflow(
     if echodata.beam is None:
         error_message = f"No beam data found in file: {file_name}"
         logging.error(error_message)
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            _update_file_failure(file_segment_service, file_id, error_message)
         raise RuntimeError(error_message)
 
     #####################################################################
@@ -207,9 +167,6 @@ def _process_file_workflow(
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
         logging.error(error_message)
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            _update_file_failure(file_segment_service, file_id, error_message)
         raise RuntimeError(error_message)
 
     #####################################################################
@@ -297,29 +254,24 @@ def _process_file_workflow(
     )
 
     #####################################################################
-    # 6. Add location data if not present in the dataset or the database
+    # 6. Add location data if not present in the dataset
     #####################################################################
-    has_location_in_db = _has_location_data_in_db(file_id)
     has_location_data_ds = _has_location_data(sv_dataset)
 
-    if not has_location_data_ds or not has_location_in_db:
+    if not has_location_data_ds:
         interp_lat, interp_lon, location_data, gps_data = _load_location_data(sv_dataset, gps_container_name, cruise_id)
+        sv_dataset = sv_dataset.assign_coords(latitude=("ping_time", interp_lat),
+                                              longitude=("ping_time", interp_lon))
+        location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
+        gps_result = extract_start_end_coordinates(gps_data)
 
-        if not has_location_data_ds:
-            sv_dataset = sv_dataset.assign_coords(latitude=("ping_time", interp_lat),
-                                                  longitude=("ping_time", interp_lon))
-
-        if not has_location_in_db:
-            location_data_str = serialize_location_data(location_data.to_dict(orient="records"))
-            gps_result = extract_start_end_coordinates(gps_data)
-
-            payload.update({
-                "file_start_lat": gps_result["file_start_lat"],
-                "file_start_lon": gps_result["file_start_lon"],
-                "file_end_lat": gps_result["file_end_lat"],
-                "file_end_lon": gps_result["file_end_lon"],
-                "location_data": location_data_str
-            })
+        payload.update({
+            "file_start_lat": gps_result["file_start_lat"],
+            "file_start_lon": gps_result["file_start_lon"],
+            "file_end_lat": gps_result["file_end_lat"],
+            "file_end_lon": gps_result["file_end_lon"],
+            "location_data": location_data_str
+        })
 
     #####################################################################
     # 7. Compute NASC
@@ -400,17 +352,6 @@ def _process_file_workflow(
         "seabed_mask": sv_dataset_seabed is not None
     })
 
-    with PostgresDB() as db_connection:
-        if ds_NASC:
-            nasc_service = NASCPointService(db_connection)
-            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=False, clearTables=True)
-            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=True)
-
-        file_segment_service = FileSegmentService(db_connection)
-        file_segment_service.update_file_record(
-            file_id=file_id, **payload, processed=True
-        )
-
     payload["file_id"] = file_id
     return payload
 
@@ -439,13 +380,6 @@ def _save_processed_data(
         sv_zarr_path, zarr_store = None, None
 
     return sv_zarr_path, zarr_store
-
-
-def _has_location_data_in_db(file_id: int) -> bool:
-    with PostgresDB() as db_connection:
-        file_service = FileSegmentService(db_connection)
-
-        return file_service.file_has_location_data(file_id)
 
 
 def _has_location_data(sv_dataset: xr.Dataset) -> bool:
@@ -544,13 +478,6 @@ def _prepare_payload(
     #     })
 
     return payload
-
-
-def _update_file_failure(file_segment_service, file_id: int, error_message: str):
-    """Log failure details in the database."""
-    file_segment_service.update_file_record(
-        file_id=file_id, failed=True, error_details=error_message
-    )
 
 
 def apply_denoising(sv_dataset, **kwargs):

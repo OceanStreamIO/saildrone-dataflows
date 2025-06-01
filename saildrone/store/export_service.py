@@ -119,6 +119,7 @@ class ExportService:
         row = self.db.cursor.fetchone()
         if not row:
             return None
+
         return {
             "id": row[0],
             "container_name": row[1],
