@@ -31,7 +31,7 @@ from .location import extract_location_data
 from ..store.nascpoint_service import NASCPointService
 
 
-def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = False, **kwargs) -> dict:
+def process_converted_file(source_path: Path, **kwargs) -> dict:
     """Process a converted file and store the results in the database.
 
     Parameters:
@@ -49,40 +49,34 @@ def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = 
     """
 
     start_time = time.time()
-    file_id = None
-    file_name = source_path.stem if isinstance(source_path, Path) else source_path
-
-    with PostgresDB() as db_connection:
-        file_segment_service = FileSegmentService(db_connection)
-        survey_service = SurveyService(db_connection)
-
-        file_info = file_segment_service.get_file_info(file_name)
-
-        if file_info is None:
-            raise RuntimeError(f"File '{file_name}' not found in the database.")
-
-        survey_db_id = survey_service.get_survey_by_cruise_id(cruise_id)
-        if survey_db_id is None:
-            raise RuntimeError(f"Survey with cruse id '{cruise_id}' not found in the database.")
-
-        # Check processing status
-        if file_info["processed"] and not reprocess:
-            logging.info(f"Skipping already processed file: {file_name}")
-            return {"status": "skipped", "file_name": file_name}
-
-        file_id = file_info["id"]
-
-    # Process the file and handle potential errors
-    if file_id is None:
-        raise RuntimeError(f"File ID not found for file '{file_name}'")
+    file_name = kwargs.get("file_name", source_path.stem if isinstance(source_path, Path) else source_path)
+    # with PostgresDB() as db_connection:
+    #     file_segment_service = FileSegmentService(db_connection)
+    #     survey_service = SurveyService(db_connection)
+    #
+    #     file_info = file_segment_service.get_file_info(file_name)
+    #
+    #     if file_info is None:
+    #         raise RuntimeError(f"File '{file_name}' not found in the database.")
+    #
+    #     survey_db_id = survey_service.get_survey_by_cruise_id(cruise_id)
+    #     if survey_db_id is None:
+    #         raise RuntimeError(f"Survey with cruse id '{cruise_id}' not found in the database.")
+    #
+    #     # Check processing status
+    #     if file_info["processed"] and not reprocess:
+    #         logging.info(f"Skipping already processed file: {file_name}")
+    #         return {"status": "skipped", "file_name": file_name}
+    #
+    #     file_id = file_info["id"]
+    #
+    # # Process the file and handle potential errors
+    # if file_id is None:
+    #     raise RuntimeError(f"File ID not found for file '{file_name}'")
 
     try:
         return _process_file_workflow(
-            file_name=file_name,
             source_path=source_path,
-            cruise_id=cruise_id,
-            survey_db_id=survey_db_id,
-            file_id=file_id,
             start_time=start_time,
             **kwargs
         )
@@ -92,13 +86,13 @@ def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = 
         traceback.print_exc()
 
         # Update the database with the failure details
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            file_segment_service.update_file_record(
-                file_id=file_id,
-                failed=True,
-                error_details=str(e),
-            )
+        # with PostgresDB() as db_connection:
+        #     file_segment_service = FileSegmentService(db_connection)
+        #     file_segment_service.update_file_record(
+        #         file_id=file_id,
+        #         failed=True,
+        #         error_details=str(e),
+        #     )
 
         raise RuntimeError(error_message)
 
@@ -106,13 +100,13 @@ def process_converted_file(source_path: Path, cruise_id: str, reprocess: bool = 
 def _process_file_workflow(
     file_name=None,
     source_path=None,
-    cruise_id=None,
     survey_db_id=None,
-    file_id=None,
     start_time=None,
     **kwargs
 ) -> dict:
     """Core processing logic, encapsulating the main workflow."""
+    cruise_id = kwargs.get("cruise_id", None)
+    location_data = kwargs.get("location_data", None)
     load_from_blobstorage = kwargs.get("load_from_blobstorage", False)
     converted_container_name = kwargs.get("converted_container_name")
     colormap = kwargs.get("colormap", "ocean_r")
@@ -151,9 +145,11 @@ def _process_file_workflow(
     if echodata.beam is None:
         error_message = f"No beam data found in file: {file_name}"
         logging.error(error_message)
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            _update_file_failure(file_segment_service, file_id, error_message)
+
+        # with PostgresDB() as db_connection:
+        #     file_segment_service = FileSegmentService(db_connection)
+        #     _update_file_failure(file_segment_service, file_id, error_message)
+
         raise RuntimeError(error_message)
 
     #####################################################################
@@ -207,9 +203,11 @@ def _process_file_workflow(
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
         logging.error(error_message)
-        with PostgresDB() as db_connection:
-            file_segment_service = FileSegmentService(db_connection)
-            _update_file_failure(file_segment_service, file_id, error_message)
+
+        # with PostgresDB() as db_connection:
+        #     file_segment_service = FileSegmentService(db_connection)
+        #     _update_file_failure(file_segment_service, file_id, error_message)
+
         raise RuntimeError(error_message)
 
     #####################################################################
@@ -291,7 +289,6 @@ def _process_file_workflow(
         sv_dataset,
         file_name=file_name,
         start_time=start_time,
-        survey_db_id=survey_db_id,
         echogram_files=echogram_files,
         cruise_id=cruise_id
     )
@@ -299,11 +296,13 @@ def _process_file_workflow(
     #####################################################################
     # 6. Add location data if not present in the dataset or the database
     #####################################################################
-    has_location_in_db = _has_location_data_in_db(file_id)
+    has_location_in_db = location_data is not None
     has_location_data_ds = _has_location_data(sv_dataset)
 
     if not has_location_data_ds or not has_location_in_db:
-        interp_lat, interp_lon, location_data, gps_data = _load_location_data(sv_dataset, gps_container_name, cruise_id)
+        interp_lat, interp_lon, location_data, gps_data = _load_location_data_from_geoparquet(sv_dataset,
+                                                                                              gps_container_name,
+                                                                                              cruise_id)
 
         if not has_location_data_ds:
             sv_dataset = sv_dataset.assign_coords(latitude=("ping_time", interp_lat),
@@ -400,18 +399,18 @@ def _process_file_workflow(
         "seabed_mask": sv_dataset_seabed is not None
     })
 
-    with PostgresDB() as db_connection:
-        if ds_NASC:
-            nasc_service = NASCPointService(db_connection)
-            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=False, clearTables=True)
-            nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=True)
-
-        file_segment_service = FileSegmentService(db_connection)
-        file_segment_service.update_file_record(
-            file_id=file_id, **payload, processed=True
-        )
-
-    payload["file_id"] = file_id
+    # with PostgresDB() as db_connection:
+    #     if ds_NASC:
+    #         nasc_service = NASCPointService(db_connection)
+    #         nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=False, clearTables=True)
+    #         nasc_service.insert_nasc_points(file_id, survey_db_id, ds_NASC, average=True)
+    #
+    #     file_segment_service = FileSegmentService(db_connection)
+    #     file_segment_service.update_file_record(
+    #         file_id=file_id, **payload, processed=True
+    #     )
+    #
+    # payload["file_id"] = file_id
     return payload
 
 
@@ -457,7 +456,7 @@ def _has_location_data(sv_dataset: xr.Dataset) -> bool:
     return (has_lat_coord or has_lat_var) and (has_lon_coord or has_lon_var)
 
 
-def _load_location_data(ds_Sv: xr.Dataset, gps_container_name, cruise_id) -> xr.Dataset:
+def _load_location_data_from_geoparquet(ds_Sv: xr.Dataset, gps_container_name, cruise_id) -> xr.Dataset:
     """
     Adds latitude and longitude coordinates to an Sv xarray dataset based on provided location data.
 

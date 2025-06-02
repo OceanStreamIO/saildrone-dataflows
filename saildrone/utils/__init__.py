@@ -1,11 +1,12 @@
-from .pathdata import map_file_paths, load_local_files
+from .pathdata import map_file_paths, load_local_files, get_metadata_for_files
 from .fix_calibration import load_values_from_xlsx
 
 __all__ = [
     "frequency_nominal_to_channel",
     "load_values_from_xlsx",
     "map_file_paths",
-    "load_local_files"
+    "load_local_files",
+    "get_metadata_for_files"
 ]
 
 

@@ -55,3 +55,40 @@ def load_local_files(directory: str, map_to_directory: str, glob_expression: str
     ]
 
     return mapped_files
+
+
+def get_metadata_for_files(zarr_paths: list[Path], files: list[dict]) -> list[tuple[Path, dict]]:
+    """
+    Given:
+      - zarr_paths: a list of Path objects pointing to <something>/*.zarr
+      - files:      a list of dicts from FileSegment_Service.get_files_by_survey_id(), each with a 'file_name' key
+
+    Returns:
+      A list of (zarr_path, file_record) tuples, matching on the base file_name.
+      Raises RuntimeError if any zarr_path has no matching DB row.
+    """
+
+    # 1) Build a lookup from filename (no extension) → record
+    #    e.g. { "cruiseid_file001": {"file_name":"mysurvey_001", "location_data":..., ...}, ... }
+    metadata_by_name: dict[str, dict] = {
+        record["file_name"]: record
+        for record in files
+    }
+
+    paired: list[tuple[Path, dict]] = []
+    for z in zarr_paths:
+        # Extract just the final component “something.zarr” → “something”
+        name = z.name
+        if not name.endswith(".zarr"):
+            raise RuntimeError(f"Unexpected zarr path that does not end with .zarr: {z!r}")
+
+        base_name = name[: -len(".zarr")]
+
+        if base_name not in metadata_by_name:
+            # No matching DB record for this zarr folder
+            raise RuntimeError(f"No database record found for zarr folder {z!r} (looking for file_name={base_name!r})")
+
+        record = metadata_by_name[base_name]
+        paired.append((z, record))
+
+    return paired

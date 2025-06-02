@@ -18,27 +18,13 @@ from prefect.cache_policies import Inputs
 from prefect.states import Completed
 from prefect.artifacts import create_markdown_artifact
 from prefect.deployments import run_deployment
-import uuid
 
+from prefect_flows.pydantic_models import ReprocessingOptions, MaskImpulseNoise, \
+    MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise
 from saildrone.process import process_converted_file, plot_and_upload_echograms
-from saildrone.utils import load_local_files
-from saildrone.store import (
-    FileSegmentService,
-    PostgresDB,
-    SurveyService,
-    open_zarr_store,
-    save_dataset_to_netcdf,
-    ensure_container_exists,
-    save_zarr_store,
-    list_zarr_files,
-    ExportService,
-    get_container_base_url,
-    get_blob_size,
-    generate_container_name,
-)
-from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
-from dask import delayed
-
+from saildrone.utils import load_local_files, get_metadata_for_files
+from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
+                             save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
 
 input_cache_policy = Inputs()
 
@@ -65,54 +51,8 @@ DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
 
-class DenoiseOptions(BaseModel):
-    def get(self, key, default_value=None):
-        return getattr(self, key, default_value)
-
-
-class ReprocessingOptions(DenoiseOptions):
-    reprocess: bool = Field(default=False,
-                            description='Load and reprocess the raw data for files that '
-                                        'have been already marked as processed.')
-    skip_processed: bool = Field(default=False,
-                                 description='Skip processing and only generate outputs'
-                                             ' (e.g., echograms, NetCDF files); requires previously processed files.')
-
-
-class MaskImpulseNoise(DenoiseOptions):
-    depth_bin: int = Field(default=10, description="Downsampling bin size along vertical range variable (`range_var`) in meters.")
-    num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
-    threshold: float = Field(default=10, description="Impulse noise threshold value (in dB) for the two-side comparison.")
-    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
-
-
-class MaskAttenuatedSignal(DenoiseOptions):
-    upper_limit_sl: int = Field(default=180, description="Upper limit of deep scattering layer line (m).")
-    lower_limit_sl: int = Field(default=300, description="Lower limit of deep scattering layer line (m).")
-    num_side_pings: int = Field(default=15, description="Number of preceding & subsequent pings defining the block.")
-    threshold: float = Field(default=10, description="Attenuation signal threshold value (dB) for the ping-block comparison.")
-    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
-
-
-class TransientNoiseMask(DenoiseOptions):
-    operation: str = Field(default='nanmedian', description="Pooling function used in the pooled Sv aggregation, either 'nanmedian' or 'nanmean'.")
-    depth_bin: int = Field(default=10, description="Bin size for depth calculation.")
-    num_side_pings: int = Field(default=25, description="Number of side pings to include.")
-    exclude_above: float = Field(default=250.0, description="Exclude data above this depth value.")
-    threshold: float = Field(default=12.0, description="Transient noise threshold value (in dB) for the pooling comparison.")
-    range_var: str = Field(default='depth', description="Vertical Range Variable. Can be either `depth` or `echo_range`.")
-
-
-class RemoveBackgroundNoise(DenoiseOptions):
-    ping_num: int = Field(default=5, description="Number of pings to obtain noise estimates")
-    range_sample_num: int = Field(default=30, description="Number of range samples to consider.")
-    background_noise_max: float = Field(default=-125, description="Maximum allowable background noise estimation (in dB).")
-    SNR_threshold: float = Field(default=3.0, description="Signal-to-noise ratio threshold for background noise removal.")
-
-
 @task
-def trigger_netcdf_flow(container, file_list, zip_name):
-    """Trigger the NetCDF combining flow."""
+def trigger_netcdf_flow(container, file_list):
     flat_paths = [p for group in file_list for p in group if p]  # flatten and skip empty
 
     print('Triggering NetCDF flow with container:', flat_paths)
@@ -121,10 +61,9 @@ def trigger_netcdf_flow(container, file_list, zip_name):
         name="generate-netcdf-zip-export/generate-netcdf-zip",
         parameters={
             "output_container": container,
-            "file_list": flat_paths,
-            "zip_name": zip_name,
+            "file_list": flat_paths
         },
-        timeout=0,
+        timeout=0
     )
 
     return state
@@ -145,56 +84,26 @@ def task_save_to_netcdf(payload, file_name, container_name, chunks=None):
         file_path = f"{cruise_id}/{file_name}/{file_name}"
         nc_file_path = f"{file_path}.nc"
         zarr_path = f"{file_path}.zarr"
-        saved = []
+        saved_paths = []
 
         zarr_path_denoised = f"{file_path}_denoised.zarr" if denoising_applied else None
         nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-
-        # Attach location data from the database if available
-        location_data = None
-        file_id = payload.get('file_id')
-        survey_db_id = payload.get('survey_db_id')
-        if file_id is not None and survey_db_id is not None:
-            with PostgresDB() as db_connection:
-                file_service = FileSegmentService(db_connection)
-                files = file_service.get_files_by_survey_id(
-                    survey_db_id, condition=f" AND id = {file_id}"
-                )
-                if files:
-                    location_data = files[0]['location_data']
-
-        if location_data:
-            ds = merge_location_data(ds, location_data)
-        nc_file_output_path = save_dataset_to_netcdf(
-            ds,
-            container_name=container_name,
-            ds_path=nc_file_path,
-            base_local_temp_path=NETCDF_ROOT_DIR,
-            is_temp_dir=False,
-        )
-        saved.append({"path": nc_file_path, "size": os.path.getsize(nc_file_output_path)})
+        nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
+                                                     base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
+        saved_paths.append(nc_file_output_path)
 
         if zarr_path_denoised:
-            ds_denoised = open_zarr_store(
-                zarr_path_denoised,
-                container_name=container_name,
-                chunks=chunks,
-                rechunk_after=True,
-            )
-            if location_data:
-                ds_denoised = merge_location_data(ds_denoised, location_data)
-            nc_file_denoised_output_path = save_dataset_to_netcdf(
-                ds_denoised,
-                container_name=container_name,
-                ds_path=nc_file_path_denoised,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
-            saved.append({"path": nc_file_path_denoised, "size": os.path.getsize(nc_file_denoised_output_path)})
+            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
+                                          rechunk_after=True)
+            nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
+                                                                  ds_path=nc_file_path_denoised,
+                                                                  base_local_temp_path=NETCDF_ROOT_DIR,
+                                                                  is_temp_dir=False)
+            saved_paths.append(nc_file_denoised_output_path)
 
-        return saved
+        return saved_paths
     except Exception as e:
         traceback.print_exc()
 
@@ -374,9 +283,9 @@ def task_plot_echograms_seabed(payload, file_name, container_name, echograms_con
     result_storage=None,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
     log_prints=True,
-    task_run_name="process-{source_path.stem}",
+    task_run_name="process-{file_name}",
 )
-def process_single_file(source_path: Path, chunks_echodata, **kwargs):
+def process_single_file(source_path: Path, file_name, denoised, location_data, **kwargs):
     try:
         worker = get_worker()
         print(f"Running on Dask worker: {worker.address}")
@@ -388,25 +297,11 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
         output_container = kwargs.get('output_container')
         save_to_directory = kwargs.get('save_to_directory')
         output_directory = kwargs.get('output_directory')
-        reprocess = kwargs.get('reprocess')
-        compute_nasc = kwargs.get('compute_nasc')
-        compute_mvbs = kwargs.get('compute_mvbs')
-        encode_mode = kwargs.get('encode_mode')
-        colormap = kwargs.get('colormap')
-        waveform_mode = kwargs.get('waveform_mode')
-        depth_offset = kwargs.get('depth_offset')
-        mask_transient_noise = kwargs.get('mask_transient_noise')
-        mask_impulse_noise = kwargs.get('mask_impulse_noise')
-        mask_attenuated_signal = kwargs.get('mask_attenuated_signal')
-        remove_background_noise = kwargs.get('remove_background_noise')
+        chunks_echodata = kwargs.get('chunks_echodata', None)
         apply_seabed_mask = kwargs.get('apply_seabed_mask', False)
         skip_processed = kwargs.get('skip_processed', False)
 
         if skip_processed:
-            denoised = (mask_impulse_noise is not None or
-                        mask_transient_noise is not None or
-                        mask_attenuated_signal is not None or
-                        remove_background_noise is not None)
             payload = {
                 'file_name': source_path.stem,
                 'cruise_id': cruise_id,
@@ -430,27 +325,14 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
             processed_container_name = output_container
 
         return process_converted_file(source_path,
-                                      cruise_id=cruise_id,
                                       output_path=output_path,
                                       chunks=chunks_echodata,
-                                      load_from_blobstorage=load_from_blobstorage,
+                                      file_name=file_name,
+                                      location_data=location_data,
                                       converted_container_name=converted_container_name,
-                                      save_to_blobstorage=save_to_blobstorage,
-                                      save_to_directory=save_to_directory,
                                       processed_container_name=processed_container_name,
-                                      reprocess=reprocess,
-                                      depth_offset=depth_offset,
-                                      compute_nasc=compute_nasc,
-                                      compute_mvbs=compute_mvbs,
                                       gps_container_name=GPSDATA_CONTAINER_NAME,
-                                      encode_mode=encode_mode,
-                                      waveform_mode=waveform_mode,
-                                      mask_transient_noise=mask_transient_noise,
-                                      mask_impulse_noise=mask_impulse_noise,
-                                      mask_attenuated_signal=mask_attenuated_signal,
-                                      remove_background_noise=remove_background_noise,
-                                      apply_seabed_mask=apply_seabed_mask
-                                      )
+                                      **kwargs)
     except Exception as e:
         print(f"Error processing file: {source_path.name}: ${str(e)}")
 
@@ -463,6 +345,176 @@ def process_single_file(source_path: Path, chunks_echodata, **kwargs):
         return Completed(message="Task completed with errors")
 
 
+def _process_files_list(files_list_with_data, save_to_netcdf, denoised=None, **kwargs):
+    in_flight = []
+    side_running_tasks = []
+    netcdf_outputs = []
+
+    plot_echograms = kwargs.get('plot_echograms', False)
+    chunks_sv_data = kwargs.get('chunks_sv_data', None)
+    output_container = kwargs.get('output_container', None)
+    echograms_container = kwargs.get('echograms_container', None)
+    colormap = kwargs.get('colormap', 'ocean_r')
+    apply_seabed_mask = kwargs.get('apply_seabed_mask', False)
+    batch_size = kwargs.get('batch_size', BATCH_SIZE)
+
+    for source_path, file_record in files_list_with_data:
+        location_data = file_record["location_data"] if 'location_data' in file_record else None
+        file_name = file_record["file_name"]
+        future = process_single_file.submit(source_path,
+                                            file_name=file_name,
+                                            denoised=denoised,
+                                            location_data=location_data,
+                                            **kwargs)
+
+        if save_to_netcdf:
+            future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
+            side_running_tasks.append(future_nc_task)
+            netcdf_outputs.append(future_nc_task)
+
+        if plot_echograms:
+            future_plot_task = task_plot_echograms_normal.submit(future,
+                                                                 file_name,
+                                                                 output_container,
+                                                                 echograms_container,
+                                                                 chunks_sv_data,
+                                                                 colormap)
+            future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
+                                                                            file_name,
+                                                                            output_container,
+                                                                            echograms_container,
+                                                                            chunks_sv_data,
+                                                                            colormap)
+
+            side_running_tasks.append(future_plot_task)
+            side_running_tasks.append(future_plot_task_denoised)
+
+            if apply_seabed_mask:
+                future_plot_task = task_plot_echograms_seabed.submit(future,
+                                                                     file_name,
+                                                                     output_container,
+                                                                     echograms_container,
+                                                                     chunks_sv_data,
+                                                                     colormap)
+                side_running_tasks.append(future_plot_task)
+
+        in_flight.append(future)
+
+        # Throttle when max concurrent tasks reached
+        if len(in_flight) >= batch_size:
+            finished = next(as_completed(in_flight))
+            in_flight.remove(finished)
+
+    # Wait for remaining tasks
+    for future_task in in_flight + side_running_tasks:
+        future_task.result()
+
+    if save_to_netcdf:
+        future_zip = trigger_netcdf_flow.submit(
+            file_list=netcdf_outputs,
+            container=output_container
+        )
+        future_zip.wait()
+
+    if os.path.exists('/tmp/oceanstream/netcdfdata'):
+        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
+
+    logging.info("All batches have been processed.")
+
+
+@flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
+def load_and_process_files_to_zarr(source_directory: str,
+                                   cruise_id: str,
+                                   load_from_blobstorage: bool,
+                                   source_container: str,
+                                   get_list_from_db: bool,
+                                   start_datetime: Optional[datetime],
+                                   end_datetime: Optional[datetime],
+                                   save_to_blobstorage: bool,
+                                   output_container: str,
+                                   save_to_directory: bool,
+                                   output_directory: str,
+                                   reprocess_options: Optional[ReprocessingOptions],
+                                   plot_echograms: bool,
+                                   compute_nasc: bool,
+                                   compute_mvbs: bool,
+                                   echograms_container: str,
+                                   encode_mode: str,
+                                   colormap: str,
+                                   waveform_mode: str,
+                                   depth_offset: float,
+                                   chunks_ping_time: int,
+                                   chunks_range_sample: Optional[int],
+                                   mask_impulse_noise: Optional[MaskImpulseNoise] = None,
+                                   mask_attenuated_signal: Optional[MaskAttenuatedSignal] = None,
+                                   mask_transient_noise: Optional[TransientNoiseMask] = None,
+                                   remove_background_noise: Optional[RemoveBackgroundNoise] = None,
+                                   apply_seabed_mask: bool = False,
+                                   save_to_netcdf: bool = False,
+                                   batch_size: int = BATCH_SIZE):
+    reprocess = reprocess_options.get('reprocess', False) if reprocess_options else False
+    skip_processed = reprocess_options.get('skip_processed', False) if reprocess_options else False
+    denoised = (mask_impulse_noise is not None or
+                mask_transient_noise is not None or
+                mask_attenuated_signal is not None or
+                remove_background_noise is not None)
+
+    files_list, files_data = _prepare_file_list(
+        source_directory,
+        cruise_id,
+        load_from_blobstorage,
+        source_container,
+        get_list_from_db,
+        start_datetime,
+        end_datetime,
+        reprocess
+    )
+
+    print('source_directory:', source_directory)
+    total_files = len(files_list)
+    print(f"Total files to process: {total_files}")
+    files_list_with_data = get_metadata_for_files(files_list, files_data)
+    chunks_echodata = {
+        'ping_time': chunks_ping_time,
+        'range_sample': chunks_range_sample
+    }
+
+    chunks_sv_data = {
+        'ping_time': chunks_ping_time,
+        'depth': 1000
+    }
+
+    _process_files_list(files_list_with_data,
+                        save_to_netcdf=save_to_netcdf,
+                        denoised=denoised,
+                        cruise_id=cruise_id,
+                        plot_echograms=plot_echograms,
+                        load_from_blobstorage=load_from_blobstorage,
+                        source_container=source_container,
+                        output_container=output_container,
+                        reprocess=reprocess,
+                        chunks_echodata=chunks_echodata,
+                        chunks_sv_data=chunks_sv_data,
+                        compute_nasc=compute_nasc,
+                        compute_mvbs=compute_mvbs,
+                        save_to_blobstorage=save_to_blobstorage,
+                        save_to_directory=save_to_directory,
+                        output_directory=output_directory,
+                        encode_mode=encode_mode,
+                        colormap=colormap,
+                        skip_processed=skip_processed,
+                        waveform_mode=waveform_mode,
+                        depth_offset=depth_offset,
+                        mask_impulse_noise=mask_impulse_noise,
+                        mask_attenuated_signal=mask_attenuated_signal,
+                        mask_transient_noise=mask_transient_noise,
+                        remove_background_noise=remove_background_noise,
+                        apply_seabed_mask=apply_seabed_mask,
+                        echograms_container=echograms_container,
+                        batch_size=batch_size
+                        )
+
+
 def _prepare_file_list(
     source_directory: str,
     cruise_id: str,
@@ -471,7 +523,7 @@ def _prepare_file_list(
     get_list_from_db: bool,
     start_datetime: Optional[datetime],
     end_datetime: Optional[datetime],
-    reprocess: bool,
+    reprocess: bool
 ):
     """Fetch the list of files to be processed."""
     files = None
@@ -510,395 +562,11 @@ def _prepare_file_list(
     return zarr_paths, files
 
 
-def _process_files(
-    files_list,
-    batch_size,
-    chunks_echodata,
-    chunks_sv_data,
-    **kwargs,
-) -> tuple[list[dict], dict[str, list], list[tuple[str, any]]]:
-    """Schedule processing tasks for a list of files."""
-    in_flight = []
-    side_tasks = []
-    netcdf_outputs: list[tuple[str, any]] = []
-    file_results: list[dict] = []
-    nc_result_map: dict[str, list] = {}
-
-    for src in files_list:
-        file_name = src.stem if isinstance(src, Path) else src
-        future = process_single_file.submit(src, chunks_echodata=chunks_echodata, **kwargs)
-
-        if kwargs.get("save_to_netcdf"):
-            future_nc_task = task_save_to_netcdf.submit(
-                future,
-                file_name,
-                kwargs["output_container"],
-                chunks_sv_data,
-            )
-            side_tasks.append(future_nc_task)
-            netcdf_outputs.append((file_name, future_nc_task))
-
-        if kwargs.get("plot_echograms"):
-            future_plot_task = task_plot_echograms_normal.submit(
-                future,
-                file_name,
-                kwargs["output_container"],
-                kwargs["echograms_container"],
-                chunks_sv_data,
-                kwargs.get("colormap", "ocean_r"),
-            )
-            side_tasks.append(future_plot_task)
-
-            future_plot_denoised = task_plot_echograms_denoised.submit(
-                future,
-                file_name,
-                kwargs["output_container"],
-                kwargs["echograms_container"],
-                chunks_sv_data,
-                kwargs.get("colormap", "ocean_r"),
-            )
-            side_tasks.append(future_plot_denoised)
-
-            if kwargs.get("apply_seabed_mask"):
-                future_plot_seabed = task_plot_echograms_seabed.submit(
-                    future,
-                    file_name,
-                    kwargs["output_container"],
-                    kwargs["echograms_container"],
-                    chunks_sv_data,
-                    kwargs.get("colormap", "ocean_r"),
-                )
-                side_tasks.append(future_plot_seabed)
-
-        in_flight.append(future)
-
-        if len(in_flight) >= batch_size:
-            finished = next(as_completed(in_flight))
-            res = finished.result()
-            if isinstance(res, dict):
-                file_results.append(res)
-            in_flight.remove(finished)
-
-    # wait for remaining main tasks
-    for fut in in_flight:
-        res = fut.result()
-        if isinstance(res, dict):
-            file_results.append(res)
-
-    # wait for side tasks
-    for fut in side_tasks:
-        res = fut.result()
-        if fut in [ft for _, ft in netcdf_outputs]:
-            nc_result_map[[n for n, ft in netcdf_outputs if ft == fut][0]] = res
-
-    return file_results, nc_result_map, netcdf_outputs
-
-
-def _get_write_mode(key: str, write_mode_dict: dict) -> str:
-    mode = write_mode_dict.setdefault(key, "w")
-    write_mode_dict[key] = "a"
-    return mode
-
-
-@delayed
-def _concat_single_file(file, source_container_name, cruise_id, chunks, temp_container_name, batch_index, file_index, export_name):
-    zarr_path = f"{file['file_name']}/{file['file_name']}.zarr"
-    ds = open_zarr_store(zarr_path, cruise_id=cruise_id, container_name=source_container_name, chunks=chunks)
-    ds = merge_location_data(ds, file['location_data'])
-    temp_path = f"{export_name}_{batch_index}_{file_index}.zarr"
-    return save_zarr_store(ds, container_name=temp_container_name, zarr_path=temp_path)
-
-
-def _concat_batch(batch_files, source_container_name, cruise_id, chunks, temp_container_name, batch_index, export_name):
-    delayed_results = [
-        _concat_single_file(file, source_container_name, cruise_id, chunks, temp_container_name, batch_index, idx, export_name)
-        for idx, file in enumerate(batch_files)
-    ]
-    with get_dask_client() as dask_client:
-        futures = dask_client.compute(delayed_results)
-        return dask_client.gather(futures)
-
-
-def _concatenate_zarr_files(files, source_container_name, output_container, cruise_id, export_name, chunks, batch_size):
-    temp_container_name = generate_container_name(export_name)
-    ensure_container_exists(temp_container_name)
-    write_mode = {}
-    batch_index = 0
-
-    for i in range(0, len(files), batch_size):
-        batch = files[i:i + batch_size]
-        paths = _concat_batch(batch, source_container_name, cruise_id, chunks, temp_container_name, batch_index, export_name)
-        valid_paths = [p for p in paths if p]
-        if not valid_paths:
-            batch_index += 1
-            continue
-
-        combined_ds = concatenate_and_rechunk(valid_paths, container_name=temp_container_name, chunks=chunks)
-        zarr_path = f"{cruise_id}/{export_name}.zarr"
-        mode = _get_write_mode("combined", write_mode)
-        save_zarr_store(combined_ds, container_name=output_container, zarr_path=zarr_path, mode=mode, append_dim="ping_time")
-        batch_index += 1
-
-    return f"{cruise_id}/{export_name}.zarr"
-
-
-@task(log_prints=True)
-def task_concatenate_processed_zarr(cruise_id: str, container_name: str, export_name: str,
-                                    start_datetime: Optional[datetime], end_datetime: Optional[datetime],
-                                    chunks: dict, batch_size: int):
-    with PostgresDB() as db_connection:
-        survey_service = SurveyService(db_connection)
-        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
-        if not survey_id:
-            return None
-        file_service = FileSegmentService(db_connection)
-        condition = ""
-        if start_datetime and end_datetime:
-            condition += f" AND file_start_time > '{start_datetime}' AND file_end_time < '{end_datetime}'"
-        files = file_service.get_files_by_survey_id(survey_id, condition=condition)
-
-    if not files:
-        return None
-
-    return _concatenate_zarr_files(files, container_name, container_name, cruise_id, export_name, chunks, batch_size)
-
-
-@task(log_prints=True, timeout_seconds=DEFAULT_TASK_TIMEOUT)
-def task_plot_combined_echograms(zarr_path, cruise_id, export_name, container_name, echograms_container, chunks=None, cmap="ocean_r"):
-    if zarr_path is None:
-        return Completed(message="no combined zarr")
-
-    ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-    upload_path = f"{cruise_id}/{export_name}"
-    plot_and_upload_echograms(ds,
-                              file_base_name=export_name,
-                              save_to_blobstorage=True,
-                              depth_var="depth",
-                              upload_path=upload_path,
-                              cmap=cmap,
-                              container_name=echograms_container)
-    return Completed(message="plot_combined_echograms completed")
-
-
-def _register_export(
-    export_key: str,
-    output_container: str,
-    start_run: datetime,
-    end_run: datetime,
-    file_results: list[dict],
-    nc_result_map: dict[str, list],
-    denoise_params: dict,
-    combined_zip_path: Optional[str],
-    combined_zip_size: Optional[int],
-) -> None:
-    """Store export details and processed file references in the DB."""
-    base_url = get_container_base_url(output_container)
-
-    with PostgresDB() as db_connection:
-        export_service = ExportService(db_connection)
-        export_id, _ = export_service.insert_export(
-            container_name=output_container,
-            base_url=base_url,
-            start_date=start_run,
-            end_date=end_run,
-            num_files=len(file_results),
-            denoise_params=denoise_params,
-            combined_netcdf_path=combined_zip_path,
-            combined_netcdf_size=combined_zip_size,
-            export_key=export_key,
-        )
-
-        for res in file_results:
-            fid = res.get("file_id")
-            if fid is None:
-                continue
-            nc_info = nc_result_map.get(res["file_name"], [])
-            nc_entry = nc_info[0] if nc_info else None
-            export_service.add_file(
-                export_id,
-                fid,
-                res.get("echogram_files"),
-                sv_zarr_path=res.get("location"),
-                denoised_zarr_path=(
-                    f"{res['cruise_id']}/{res['file_name']}/{res['file_name']}_denoised.zarr"
-                    if res.get("denoised")
-                    else None
-                ),
-                netcdf_path=nc_entry["path"] if nc_entry else None,
-                netcdf_size=nc_entry["size"] if nc_entry else None,
-            )
-
-
-@flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
-def load_and_process_files_to_zarr(source_directory: str,
-                                   cruise_id: str,
-                                   load_from_blobstorage: bool,
-                                   source_container: str,
-                                   get_list_from_db: bool,
-                                   start_datetime: Optional[datetime],
-                                   end_datetime: Optional[datetime],
-                                   save_to_blobstorage: bool,
-                                   output_container: str,
-                                   save_to_directory: bool,
-                                   output_directory: str,
-                                   reprocess_options: Optional[ReprocessingOptions],
-                                   plot_echograms: bool,
-                                   compute_nasc: bool,
-                                   compute_mvbs: bool,
-                                   echograms_container: str,
-                                   encode_mode: str,
-                                   colormap: str,
-                                   waveform_mode: str,
-                                   depth_offset: float,
-                                   chunks_ping_time: int,
-                                   chunks_range_sample: Optional[int],
-                                   mask_impulse_noise: Optional[MaskImpulseNoise] = None,
-                                   mask_attenuated_signal: Optional[MaskAttenuatedSignal] = None,
-                                   mask_transient_noise: Optional[TransientNoiseMask] = None,
-                                   remove_background_noise: Optional[RemoveBackgroundNoise] = None,
-                                   apply_seabed_mask: bool = False,
-                                   save_to_netcdf: bool = False,
-                                   batch_size: int = BATCH_SIZE):
-    reprocess = reprocess_options.get('reprocess', False) if reprocess_options else False
-    skip_processed = reprocess_options.get('skip_processed', False) if reprocess_options else False
-
-    start_run = datetime.utcnow()
-
-    # Generate export key early so the NetCDF archive can be named accordingly
-    export_key = f"{output_container}-{uuid.uuid4().hex[:6]}"
-
-    files_list, files_data = _prepare_file_list(
-        source_directory,
-        cruise_id,
-        load_from_blobstorage,
-        source_container,
-        get_list_from_db,
-        start_datetime,
-        end_datetime,
-        reprocess,
-    )
-
-    print('source_directory:', source_directory)
-    total_files = len(files_list)
-    print(f"Total files to process: {total_files}")
-
-    chunks_echodata = {
-        'ping_time': chunks_ping_time,
-        'range_sample': chunks_range_sample,
-    }
-    chunks_sv_data = {
-        'ping_time': chunks_ping_time,
-        'depth': 1000,
-    }
-
-    process_kwargs = dict(
-        cruise_id=cruise_id,
-        load_from_blobstorage=load_from_blobstorage,
-        source_container=source_container,
-        output_container=output_container,
-        reprocess=reprocess,
-        chunks_ping_time=chunks_ping_time,
-        chunks_range_sample=chunks_range_sample,
-        compute_nasc=compute_nasc,
-        compute_mvbs=compute_mvbs,
-        save_to_blobstorage=save_to_blobstorage,
-        save_to_directory=save_to_directory,
-        output_directory=output_directory,
-        encode_mode=encode_mode,
-        colormap=colormap,
-        skip_processed=skip_processed,
-        waveform_mode=waveform_mode,
-        depth_offset=depth_offset,
-        mask_impulse_noise=mask_impulse_noise,
-        mask_attenuated_signal=mask_attenuated_signal,
-        mask_transient_noise=mask_transient_noise,
-        remove_background_noise=remove_background_noise,
-        apply_seabed_mask=apply_seabed_mask,
-        echograms_container=echograms_container,
-        plot_echograms=plot_echograms,
-        save_to_netcdf=save_to_netcdf,
-    )
-
-    file_results, nc_result_map, netcdf_outputs = _process_files(
-        files_list,
-        batch_size,
-        chunks_echodata,
-        chunks_sv_data,
-        **process_kwargs,
-    )
-
-    combined_zip_path = None
-    combined_zip_size = None
-    if save_to_netcdf and file_results:
-        first_start = min(datetime.fromisoformat(r["file_start_time"]) for r in file_results)
-        last_end = max(datetime.fromisoformat(r["file_end_time"]) for r in file_results)
-        duration_hours = (last_end - first_start).total_seconds() / 3600
-        if duration_hours <= 24:
-            future_zip = trigger_netcdf_flow.submit(
-                file_list=[ft for _, ft in netcdf_outputs],
-                container=output_container,
-                zip_name=export_key,
-            )
-            future_zip.wait()
-            combined_zip_path = f"{export_key}.zip"
-            combined_zip_size = get_blob_size(output_container, combined_zip_path)
-
-            combined_zarr_future = task_concatenate_processed_zarr.submit(
-                cruise_id=cruise_id,
-                container_name=output_container,
-                export_name=export_key,
-                start_datetime=start_datetime,
-                end_datetime=end_datetime,
-                chunks=chunks_sv_data,
-                batch_size=batch_size,
-            )
-            combined_zarr_path = combined_zarr_future.result()
-
-            if plot_echograms:
-                task_plot_combined_echograms.submit(
-                    combined_zarr_path,
-                    cruise_id,
-                    export_key,
-                    output_container,
-                    echograms_container,
-                    chunks_sv_data,
-                    colormap,
-                )
-
-    if os.path.exists('/tmp/oceanstream/netcdfdata'):
-        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
-
-    end_run = datetime.utcnow()
-
-    denoise_params = {
-        'mask_impulse_noise': mask_impulse_noise.dict() if mask_impulse_noise else None,
-        'mask_attenuated_signal': mask_attenuated_signal.dict() if mask_attenuated_signal else None,
-        'mask_transient_noise': mask_transient_noise.dict() if mask_transient_noise else None,
-        'remove_background_noise': remove_background_noise.dict() if remove_background_noise else None,
-        'apply_seabed_mask': apply_seabed_mask
-    }
-
-    _register_export(
-        export_key=export_key,
-        output_container=output_container,
-        start_run=start_run,
-        end_run=end_run,
-        file_results=file_results,
-        nc_result_map=nc_result_map,
-        denoise_params=denoise_params,
-        combined_zip_path=combined_zip_path,
-        combined_zip_size=combined_zip_size,
-    )
-
-    logging.info(f"All batches have been processed. Export key: {export_key}")
-
-
 if __name__ == "__main__":
     with PostgresDB() as db:
         db.create_tables()
 
     client = Client(address=DASK_CLUSTER_ADDRESS)
-
     ensure_container_exists(PROCESSED_CONTAINER_NAME)
 
     try:

@@ -91,10 +91,10 @@ def enrich_sv_dataset(ds_Sv: xr.Dataset, echodata, **kwargs) -> xr.Dataset:
     ]
     splitbeam_args = {k: kwargs.get(k) for k in splitbeam_keys}
 
-    try:
-        ds_Sv = add_location(ds_Sv, echodata, **location_args)
-    except (KeyError, ValueError) as e:
-        logging.warning(f"Failed to add location due to error: {str(e)}", exc_info=True)
+    # try:
+    #     ds_Sv = add_location(ds_Sv, echodata, **location_args)
+    # except (KeyError, ValueError) as e:
+    #     logging.warning(f"Failed to add location due to error: {str(e)}", exc_info=True)
 
     try:
         ds_Sv = add_splitbeam_angle(ds_Sv, echodata, to_disk=False, pulse_compression=False, **splitbeam_args)
