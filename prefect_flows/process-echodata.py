@@ -339,6 +339,10 @@ def process_single_file(source_path: Path, file_name, denoised, location_data, *
         markdown_report = f"""# Error report for {source_path.name}
         Error occurred while processing the file: {source_path}
         {str(e)}
+        
+        ## Error details
+        - **Error Message**: {str(e)}
+        - **Traceback**: {traceback.format_exc()}
         """
         create_markdown_artifact(markdown_report)
 

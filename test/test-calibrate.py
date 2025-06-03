@@ -1,7 +1,9 @@
 import numpy as np
 import echopype as ep
+from echopype.calibrate import compute_Sv
 
 from saildrone.calibrate import apply_calibration
+import pytest
 
 
 # @pytest.mark.skip(reason="Temporarily")
@@ -79,3 +81,17 @@ def test_apply_calibration_defaults_long_pulse():
     # Sa_corr
     sa = ed["Vendor_specific"].sa_correction.values
     assert np.allclose(np.asarray(sa, dtype=float), -0.26)
+
+
+# @pytest.mark.skip(reason="Temporarily")
+def test_apply_calibration_invalid_str_excel():
+    cal_file = 'calibration/calibration_values.xlsx'
+    raw_file = 'test/data/SD_TPOS2023_v03-Phase0-D20231007-T235959-0.raw'
+    ed = ep.open_raw(raw_file=str(raw_file), sonar_model="EK80")
+    ed = apply_calibration(ed, cal_file)
+
+    sv_dataset = compute_Sv(ed, waveform_mode='CW', encode_mode='complex')
+    sv_dataset = sv_dataset.dropna(dim='ping_time', how='all', subset=['Sv'])
+
+    assert sv_dataset is not None
+

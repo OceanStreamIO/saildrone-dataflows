@@ -166,6 +166,7 @@ def _process_file_workflow(
         )
 
         sv_dataset = ensure_channel_labels(sv_dataset, add_freq=True)
+
         sv_dataset_denoised = apply_denoising(sv_dataset, **kwargs)
         sv_dataset_seabed = None
 
@@ -203,6 +204,7 @@ def _process_file_workflow(
     except Exception as e:
         error_message = f"Failed to compute Sv for file '{file_name}'. Error: {str(e)}"
         logging.error(error_message)
+        traceback.print_exc()
 
         # with PostgresDB() as db_connection:
         #     file_segment_service = FileSegmentService(db_connection)

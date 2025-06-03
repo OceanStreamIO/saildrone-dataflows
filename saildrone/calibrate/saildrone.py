@@ -1,9 +1,37 @@
+import re
+
 import numpy as np
 import pandas as pd
 
 
 SHORT_MS = 1.024e-3        # 1.024 ms  → “short”
-LONG_MS  = 2.048e-3        # 2.048 ms  → “long”
+LONG_MS = 2.048e-3        # 2.048 ms  → “long”
+_num = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")  # first numeric token
+
+
+def _f(x):
+    """
+    Robust scalar → float|nan.
+    - bytes  → decode
+    - str    → normalise NBSP / fancy minus, grab first number
+    - else   → float(x) or nan
+    """
+    try:
+        if isinstance(x, (bytes, bytearray)):
+            x = x.decode("utf-8", "ignore")
+
+        if isinstance(x, str):
+            txt = (
+                x.replace("\xa0", " ")        # NBSP → space
+                 .replace("\u2212", "-")      # math minus → hyphen
+                 .strip()
+            )
+            m = _num.search(txt)
+            return float(m.group(0)) if m else np.nan
+
+        return float(x)
+    except Exception:
+        return np.nan
 
 
 def load_values_from_xlsx(file_path):
@@ -12,7 +40,7 @@ def load_values_from_xlsx(file_path):
     # Correct the spelling and set column names
     cal.columns = ["Variable", "38k short pulse", "38k long pulse", "200k short pulse"]
 
-    return cal
+    return cal.applymap(_f)
 
 
 def _channel_pulse_mode(echodata, atol=5e-6):
