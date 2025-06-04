@@ -11,8 +11,6 @@ pydantic==2.10.1
 bottleneck==1.5.0
 pydantic_core==2.27.1
 cloudpickle==3.0.0
-#xarray==2024.11.0
-xarray
 dask-expr==1.1.14
 python-dotenv==1.0.1
 typing_extensions
@@ -29,4 +27,6 @@ google-api-python-client
 requests
 psycopg2-binary
 netCDF4
-
+fsspec==2025.5.1
+xarray==2024.11.0
+xarray-datatree==0.0.6

@@ -9,7 +9,6 @@ from dask.distributed import get_worker
 from pathlib import Path
 from typing import List, Optional, Union
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
 from dask.distributed import Client
 from prefect import flow, task
 from prefect.futures import as_completed
@@ -468,10 +467,10 @@ def load_and_process_files_to_zarr(source_directory: str,
         cruise_id,
         load_from_blobstorage,
         source_container,
-        get_list_from_db,
-        start_datetime,
-        end_datetime,
-        reprocess
+        get_list_from_db=get_list_from_db,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        reprocess=reprocess
     )
 
     print('source_directory:', source_directory)
@@ -548,6 +547,9 @@ def _prepare_file_list(
                     f"AND file_end_time < '{end_datetime}'"
                 )
             files = file_service.get_files_by_survey_id(survey_id, condition)
+            if not files:
+                logging.warning(f"No files found for survey_id: {survey_id} with condition: {condition}")
+                return [], []
 
     if load_from_blobstorage:
         file_names = [f['file_name'] for f in files] if files else None

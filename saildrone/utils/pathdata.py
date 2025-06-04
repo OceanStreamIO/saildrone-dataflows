@@ -86,7 +86,7 @@ def get_metadata_for_files(zarr_paths: list[Path], files: list[dict]) -> list[tu
 
         if base_name not in metadata_by_name:
             # No matching DB record for this zarr folder
-            raise RuntimeError(f"No database record found for zarr folder {z!r} (looking for file_name={base_name!r})")
+            raise RuntimeError(f"No database record found for zarr store {z!r} (looking for file_name={base_name!r})")
 
         record = metadata_by_name[base_name]
         paired.append((z, record))
