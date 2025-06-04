@@ -27,6 +27,6 @@ google-api-python-client
 requests
 psycopg2-binary
 netCDF4
-fsspec==2025.5.1
+fsspec==2025.3.2
 xarray==2024.11.0
 xarray-datatree==0.0.6
