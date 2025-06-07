@@ -3,6 +3,8 @@ import os
 import shutil
 import sys
 import traceback
+import dask
+
 from datetime import datetime
 from dask.distributed import get_worker
 
@@ -20,7 +22,7 @@ from prefect.deployments import run_deployment
 
 from prefect_flows.pydantic_models import ReprocessingOptions, MaskImpulseNoise, \
     MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise
-from saildrone.process import process_converted_file, plot_and_upload_echograms
+from saildrone.process import process_converted_file, plot_and_upload_echograms, get_files_list
 from saildrone.utils import load_local_files, get_metadata_for_files
 from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
                              save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
@@ -48,6 +50,17 @@ BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
 NETCDF_ROOT_DIR = '/mnt/saildronedata'
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
+
+
+@task(log_prints=True)
+def get_worker_addresses(scheduler: str) -> list[str]:
+    """
+    A tiny prefect task that opens a short-lived Dask Client,
+    asks the scheduler for the current workers, and returns *only*
+    a list of their addresses (plain strings).
+    """
+    with Client(scheduler, name="discover-workers", timeout="5s") as c:
+        return list(c.scheduler_info()["workers"])
 
 
 @task
@@ -348,12 +361,11 @@ def process_single_file(source_path: Path, file_name, denoised, location_data, *
         return Completed(message="Task completed with errors")
 
 
-def _process_files_list(files_list_with_data, save_to_netcdf, denoised=None, **kwargs):
+def _process_files_list(files_list_with_data, workers, save_to_netcdf, denoised=None, **kwargs):
     in_flight = []
     side_running_tasks = []
     netcdf_outputs = []
-
-    plot_echograms = kwargs.get('plot_echograms', False)
+    n_workers = len(workers)
     chunks_sv_data = kwargs.get('chunks_sv_data', None)
     output_container = kwargs.get('output_container', None)
     echograms_container = kwargs.get('echograms_container', None)
@@ -361,45 +373,48 @@ def _process_files_list(files_list_with_data, save_to_netcdf, denoised=None, **k
     apply_seabed_mask = kwargs.get('apply_seabed_mask', False)
     batch_size = kwargs.get('batch_size', BATCH_SIZE)
 
-    for source_path, file_record in files_list_with_data:
-        location_data = file_record["location_data"] if 'location_data' in file_record else None
-        file_name = file_record["file_name"]
-        future = process_single_file.submit(source_path,
-                                            file_name=file_name,
-                                            denoised=denoised,
-                                            location_data=location_data,
-                                            **kwargs)
+    for idx, (source_path, file_record) in enumerate(files_list_with_data):
+        target_worker = workers[idx % n_workers]
+
+        with dask.annotate(workers=[target_worker], allow_other_workers=False):
+            location_data = file_record["location_data"] if 'location_data' in file_record else None
+            file_name = file_record["file_name"]
+            future = process_single_file.submit(source_path,
+                                                file_name=file_name,
+                                                denoised=denoised,
+                                                location_data=location_data,
+                                                **kwargs)
 
         if save_to_netcdf:
             future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
             side_running_tasks.append(future_nc_task)
             netcdf_outputs.append(future_nc_task)
 
-        if plot_echograms:
-            future_plot_task = task_plot_echograms_normal.submit(future,
+        # if plot_echograms:
+        #     future_plot_task = task_plot_echograms_normal.submit(future,
+        #                                                          file_name,
+        #                                                          output_container,
+        #                                                          echograms_container,
+        #                                                          chunks_sv_data,
+        #                                                          colormap)
+        #     future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
+        #                                                                     file_name,
+        #                                                                     output_container,
+        #                                                                     echograms_container,
+        #                                                                     chunks_sv_data,
+        #                                                                     colormap)
+        #
+        #     side_running_tasks.append(future_plot_task)
+        #     side_running_tasks.append(future_plot_task_denoised)
+
+        if apply_seabed_mask:
+            future_plot_task = task_plot_echograms_seabed.submit(future,
                                                                  file_name,
                                                                  output_container,
                                                                  echograms_container,
                                                                  chunks_sv_data,
                                                                  colormap)
-            future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
-                                                                            file_name,
-                                                                            output_container,
-                                                                            echograms_container,
-                                                                            chunks_sv_data,
-                                                                            colormap)
-
             side_running_tasks.append(future_plot_task)
-            side_running_tasks.append(future_plot_task_denoised)
-
-            if apply_seabed_mask:
-                future_plot_task = task_plot_echograms_seabed.submit(future,
-                                                                     file_name,
-                                                                     output_container,
-                                                                     echograms_container,
-                                                                     chunks_sv_data,
-                                                                     colormap)
-                side_running_tasks.append(future_plot_task)
 
         in_flight.append(future)
 
@@ -462,12 +477,12 @@ def load_and_process_files_to_zarr(source_directory: str,
                 mask_attenuated_signal is not None or
                 remove_background_noise is not None)
 
-    files_list, files_data = _prepare_file_list(
+    files_list = get_files_list(
         source_directory,
-        cruise_id,
-        load_from_blobstorage,
-        source_container,
+        cruise_id=cruise_id,
+        load_from_blobstorage=load_from_blobstorage,
         get_list_from_db=get_list_from_db,
+        source_container=source_container,
         start_datetime=start_datetime,
         end_datetime=end_datetime,
         reprocess=reprocess
@@ -476,7 +491,7 @@ def load_and_process_files_to_zarr(source_directory: str,
     print('source_directory:', source_directory)
     total_files = len(files_list)
     print(f"Total files to process: {total_files}")
-    files_list_with_data = get_metadata_for_files(files_list, files_data)
+
     chunks_echodata = {
         'ping_time': chunks_ping_time,
         'range_sample': chunks_range_sample
@@ -487,7 +502,10 @@ def load_and_process_files_to_zarr(source_directory: str,
         'depth': 1000
     }
 
-    _process_files_list(files_list_with_data,
+    workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
+
+    _process_files_list(files_list,
+                        workers=workers,
                         save_to_netcdf=save_to_netcdf,
                         denoised=denoised,
                         cruise_id=cruise_id,
@@ -516,56 +534,6 @@ def load_and_process_files_to_zarr(source_directory: str,
                         echograms_container=echograms_container,
                         batch_size=batch_size
                         )
-
-
-def _prepare_file_list(
-    source_directory: str,
-    cruise_id: str,
-    load_from_blobstorage: bool,
-    source_container: str,
-    get_list_from_db: bool,
-    start_datetime: Optional[datetime],
-    end_datetime: Optional[datetime],
-    reprocess: bool
-):
-    """Fetch the list of files to be processed."""
-    files = None
-
-    with PostgresDB() as db_connection:
-        survey_service = SurveyService(db_connection)
-        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
-        if not survey_id:
-            survey_id = survey_service.insert_survey(cruise_id)
-            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
-
-        if get_list_from_db:
-            file_service = FileSegmentService(db_connection)
-            condition = "" if reprocess else "AND processed IS NOT True"
-            if start_datetime and end_datetime:
-                condition += (
-                    f" AND file_start_time > '{start_datetime}' "
-                    f"AND file_end_time < '{end_datetime}'"
-                )
-            files = file_service.get_files_by_survey_id(survey_id, condition)
-            if not files:
-                logging.warning(f"No files found for survey_id: {survey_id} with condition: {condition}")
-                return [], []
-
-    if load_from_blobstorage:
-        file_names = [f['file_name'] for f in files] if files else None
-        zarr_paths = list_zarr_files(
-            source_container,
-            cruise_id=cruise_id,
-            file_names=file_names,
-        )
-    elif files:
-        # If files are provided and not loading from blob storage, construct paths
-        zarr_paths = [Path(source_directory) / f"{file['file_name']}.zarr" for file in files]
-    else:
-        # If no files are provided, load local files from the source directory
-        zarr_paths = load_local_files(source_directory, source_directory, '*.zarr')
-
-    return zarr_paths, files
 
 
 if __name__ == "__main__":

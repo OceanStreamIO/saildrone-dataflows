@@ -1,11 +1,13 @@
 import logging
 import os
+import shutil
 import time
 import traceback
 
 import numpy as np
 import pandas as pd
 import xarray as xr
+from datetime import datetime
 
 from xarray import Dataset
 from pathlib import Path
@@ -13,14 +15,16 @@ from typing import Optional, Tuple
 from echopype.mask import apply_mask
 from echopype.clean import mask_transient_noise as mask_transient_noise_func
 from echopype.commongrid import compute_NASC, compute_MVBS
+from prefect.futures import as_completed
 
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
-from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, open_converted as open_from_blobstorage)
+from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, list_zarr_files)
 from saildrone.azure_iot import serialize_location_data
 from saildrone.denoise import (get_impulse_noise_mask,
                                create_multichannel_mask,
                                get_attenuation_mask,
                                remove_background_noise as remove_background_noise_func)
+from saildrone.utils import load_local_files, get_metadata_for_files
 
 from .seabed import mask_true_seabed
 from .echodata import open_echodata
@@ -29,6 +33,139 @@ from .plot import plot_and_upload_echograms, ensure_channel_labels
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
 from ..store.nascpoint_service import NASCPointService
+
+
+def get_files_list(
+    source_directory: str = None,
+    cruise_id: str = None,
+    load_from_blobstorage: bool = True,
+    source_container: str = None,
+    get_list_from_db: bool = True,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None,
+    reprocess: bool = True
+):
+    """Fetch the list of files to be processed."""
+    files = None
+
+    with PostgresDB() as db_connection:
+        survey_service = SurveyService(db_connection)
+        survey_id = survey_service.get_survey_by_cruise_id(cruise_id)
+        if not survey_id:
+            survey_id = survey_service.insert_survey(cruise_id)
+            logging.info(f"Inserted new survey with cruise_id: {cruise_id}")
+
+        if get_list_from_db:
+            file_service = FileSegmentService(db_connection)
+            condition = "" if reprocess else "AND processed IS NOT True"
+            if start_datetime and end_datetime:
+                condition += (
+                    f" AND file_start_time > '{start_datetime}' "
+                    f"AND file_end_time < '{end_datetime}'"
+                )
+            files = file_service.get_files_by_survey_id(survey_id, condition)
+            if not files:
+                logging.warning(f"No files found for survey_id: {survey_id} with condition: {condition}")
+                return [], []
+
+    if load_from_blobstorage:
+        file_names = [f['file_name'] for f in files] if files else None
+        zarr_paths = list_zarr_files(
+            source_container,
+            cruise_id=cruise_id,
+            file_names=file_names,
+        )
+    elif files:
+        # If files are provided and not loading from blob storage, construct paths
+        zarr_paths = [Path(source_directory) / f"{file['file_name']}.zarr" for file in files]
+    else:
+        # If no files are provided, load local files from the source directory
+        zarr_paths = load_local_files(source_directory, source_directory, '*.zarr')
+
+    return get_metadata_for_files(zarr_paths, files)
+
+
+def process_files_list(files_list_with_data, save_to_netcdf, denoised=None, **kwargs):
+    in_flight = []
+    side_running_tasks = []
+    netcdf_outputs = []
+
+    plot_echograms = kwargs.get('plot_echograms', False)
+    chunks_sv_data = kwargs.get('chunks_sv_data', None)
+    output_container = kwargs.get('output_container', None)
+    echograms_container = kwargs.get('echograms_container', None)
+    colormap = kwargs.get('colormap', 'ocean_r')
+    apply_seabed_mask = kwargs.get('apply_seabed_mask', False)
+    batch_size = kwargs.get('batch_size', 10)
+    task_plot_echograms_normal = kwargs.get('task_plot_echograms_normal', None)
+    task_plot_echograms_denoised = kwargs.get('task_plot_echograms_denoised', None)
+    task_save_to_netcdf = kwargs.get('task_save_to_netcdf', None)
+    process_single_file = kwargs.get('process_single_file', None)
+    task_plot_echograms_seabed = kwargs.get('task_plot_echograms_seabed', None)
+    trigger_netcdf_flow = kwargs.get('trigger_netcdf_flow', None)
+
+    for source_path, file_record in files_list_with_data:
+        location_data = file_record["location_data"] if 'location_data' in file_record else None
+        file_name = file_record["file_name"]
+        future = process_single_file.submit(source_path,
+                                            file_name=file_name,
+                                            denoised=denoised,
+                                            location_data=location_data,
+                                            **kwargs)
+
+        if save_to_netcdf:
+            future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
+            side_running_tasks.append(future_nc_task)
+            netcdf_outputs.append(future_nc_task)
+
+        if plot_echograms:
+            future_plot_task = task_plot_echograms_normal.submit(future,
+                                                                 file_name,
+                                                                 output_container,
+                                                                 echograms_container,
+                                                                 chunks_sv_data,
+                                                                 colormap)
+            future_plot_task_denoised = task_plot_echograms_denoised.submit(future,
+                                                                            file_name,
+                                                                            output_container,
+                                                                            echograms_container,
+                                                                            chunks_sv_data,
+                                                                            colormap)
+
+            side_running_tasks.append(future_plot_task)
+            side_running_tasks.append(future_plot_task_denoised)
+
+            if apply_seabed_mask:
+                future_plot_task = task_plot_echograms_seabed.submit(future,
+                                                                     file_name,
+                                                                     output_container,
+                                                                     echograms_container,
+                                                                     chunks_sv_data,
+                                                                     colormap)
+                side_running_tasks.append(future_plot_task)
+
+        in_flight.append(future)
+
+        # Throttle when max concurrent tasks reached
+        if len(in_flight) >= batch_size:
+            finished = next(as_completed(in_flight))
+            in_flight.remove(finished)
+
+    # Wait for remaining tasks
+    for future_task in in_flight + side_running_tasks:
+        future_task.result()
+
+    if save_to_netcdf:
+        future_zip = trigger_netcdf_flow.submit(
+            file_list=netcdf_outputs,
+            container=output_container
+        )
+        future_zip.wait()
+
+        if os.path.exists('/tmp/oceanstream/netcdfdata'):
+            shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
+
+    logging.info("All batches have been processed.")
 
 
 def process_converted_file(source_path: Path, **kwargs) -> dict:
@@ -100,7 +237,6 @@ def process_converted_file(source_path: Path, **kwargs) -> dict:
 def _process_file_workflow(
     file_name=None,
     source_path=None,
-    survey_db_id=None,
     start_time=None,
     **kwargs
 ) -> dict:
@@ -326,28 +462,8 @@ def _process_file_workflow(
     # 7. Compute NASC
     #####################################################################
     if compute_nasc_opt:
-        ds_NASC = compute_NASC(
-            sv_dataset,
-            range_bin="10m",
-            dist_bin="0.5nmi"
-        )
-
-        # Log-transform the NASC values for plotting
-        ds_NASC["NASC_log"] = 10 * np.log10(ds_NASC["NASC"])
-        ds_NASC["NASC_log"].attrs = {
-            "long_name": "Log of NASC",
-            "units": "m2 nmi-2"
-        }
-        _save_processed_data(
-            ds_NASC,
-            cruise_id=cruise_id,
-            base_file_name=file_name,
-            file_name=f"{file_name}_nasc",
-            processed_container_name=processed_container_name,
-            output_path=output_path,
-            save_to_directory=save_to_directory,
-            save_to_blobstorage=save_to_blobstorage,
-        )
+        ds_NASC = compute_and_save_nasc(cruise_id, file_name, output_path, processed_container_name,
+                                        save_to_blobstorage, save_to_directory, sv_dataset)
 
         dist_max = ds_NASC.attrs["distance_max"]
     else:
@@ -416,6 +532,88 @@ def _process_file_workflow(
     return payload
 
 
+def compute_and_save_nasc(
+    sv_dataset,
+    compute_nasc_opts=None,
+    cruise_id=None,
+    file_name=None,
+    output_path=None,
+    zarr_path=None,
+    container_name=None,
+    save_to_blobstorage=True,
+    save_to_directory=False
+):
+    compute_nasc_opts = compute_nasc_opts or {}
+    range_bin = compute_nasc_opts.get("range_bin", "10m")
+    dist_bin = compute_nasc_opts.get("dist_bin", "0.5nmi")
+    closed = compute_nasc_opts.get("closed", "left")
+
+    ds_NASC = compute_NASC(
+        sv_dataset,
+        range_bin=range_bin,
+        dist_bin=dist_bin,
+        closed=closed,
+    )
+
+    # Log-transform the NASC values for plotting
+    ds_NASC["NASC_log"] = 10 * np.log10(ds_NASC["NASC"])
+    ds_NASC["NASC_log"].attrs = {
+        "long_name": "Log of NASC",
+        "units": "m2 nmi-2"
+    }
+    _save_processed_data(
+        ds_NASC,
+        cruise_id=cruise_id,
+        base_file_name=file_name,
+        file_name=f"{file_name}--nasc",
+        processed_container_name=container_name,
+        output_path=output_path,
+        zarr_path=zarr_path,
+        save_to_directory=save_to_directory,
+        save_to_blobstorage=save_to_blobstorage,
+    )
+    return ds_NASC
+
+
+def compute_and_save_mvbs(
+    sv_dataset,
+    compute_mvbs_opts=None,
+    cruise_id=None,
+    file_name=None,
+    output_path=None,
+    zarr_path=None,
+    container_name=None,
+    save_to_blobstorage=True,
+    save_to_directory=False
+):
+    compute_mvbs_opts = compute_mvbs_opts or {}
+    range_var = compute_mvbs_opts.get("range_var", "depth")
+    range_bin = compute_mvbs_opts.get("range_bin", "20m")
+    ping_time_bin = compute_mvbs_opts.get("ping_time_bin", "5s")
+    closed = compute_mvbs_opts.get("closed", "left")
+
+    ds_MVBS = compute_MVBS(
+        sv_dataset,
+        range_var=range_var,
+        range_bin=range_bin,
+        ping_time_bin=ping_time_bin,
+        closed=closed
+    )
+
+    _save_processed_data(
+        ds_MVBS,
+        cruise_id=cruise_id,
+        base_file_name=file_name,
+        file_name=f"{file_name}--mvbs",
+        processed_container_name=container_name,
+        output_path=output_path,
+        zarr_path=zarr_path,
+        save_to_directory=save_to_directory,
+        save_to_blobstorage=save_to_blobstorage,
+    )
+    return ds_MVBS
+
+
 def _save_processed_data(
     sv_dataset: Dataset,
     cruise_id: str = None,
@@ -423,12 +621,16 @@ def _save_processed_data(
     base_file_name: str = None,
     processed_container_name: Optional[str] = None,
     output_path: Optional[str] = None,
+    zarr_path: Optional[str] = None,
     save_to_directory: Optional[bool] = None,
     save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
     if processed_container_name and save_to_blobstorage:
-        sv_zarr_path = base_file_name and f"{cruise_id}/{base_file_name}/{file_name}.zarr" or f"{cruise_id}/{file_name}.zarr"
+        if zarr_path:
+            sv_zarr_path = zarr_path
+        else:
+            sv_zarr_path = base_file_name and f"{cruise_id}/{base_file_name}/{file_name}.zarr" or f"{cruise_id}/{file_name}.zarr"
         zarr_store = save_zarr_to_blobstorage(sv_dataset, container_name=processed_container_name,
                                               zarr_path=sv_zarr_path)
     elif output_path and save_to_directory:

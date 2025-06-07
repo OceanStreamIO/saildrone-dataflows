@@ -461,7 +461,6 @@ def upload_folder_to_blob_storage(folder_path, container_name, target_path):
             file_path = os.path.join(root, file)
             relative_path = os.path.relpath(file_path, start=folder_path)
             blob_path = os.path.join(target_path, relative_path).replace(os.sep, '/')
-
             blob_client = container_client.get_blob_client(blob_path)
 
             with open(file_path, "rb") as data:
