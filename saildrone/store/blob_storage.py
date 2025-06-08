@@ -226,7 +226,7 @@ def open_converted(zarr_path, survey_id=None, container_name=None, chunks=None):
     logger.info(f"Opening Zarr store: {zarr_path_full}")
     chunk_store = azfs.get_mapper(zarr_path_full)
 
-    ds = open_converted(chunk_store, chunks=chunks)
+    ds = open_converted(chunk_store)
     if chunks is not None:
         ds = ds.chunk(chunks)
 
