@@ -376,14 +376,14 @@ def _process_files_list(files_list_with_data, workers, save_to_netcdf, denoised=
     for idx, (source_path, file_record) in enumerate(files_list_with_data):
         target_worker = workers[idx % n_workers]
 
-        with dask.annotate(workers=[target_worker], allow_other_workers=False):
-            location_data = file_record["location_data"] if 'location_data' in file_record else None
-            file_name = file_record["file_name"]
-            future = process_single_file.submit(source_path,
-                                                file_name=file_name,
-                                                denoised=denoised,
-                                                location_data=location_data,
-                                                **kwargs)
+        # with dask.annotate(workers=[target_worker], allow_other_workers=False):
+        location_data = file_record["location_data"] if 'location_data' in file_record else None
+        file_name = file_record["file_name"]
+        future = process_single_file.submit(source_path,
+                                            file_name=file_name,
+                                            denoised=denoised,
+                                            location_data=location_data,
+                                            **kwargs)
 
         if save_to_netcdf:
             future_nc_task = task_save_to_netcdf.submit(future, file_name, output_container, chunks_sv_data)
