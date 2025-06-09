@@ -217,10 +217,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
         batch_results[category] = batch_results.get(category, [])
 
         zarr_path = f"{cruise_id}/{file['file_name']}/{file['file_name']}" + ("--denoised" if denoised else "") + ".zarr"
-        print(f"Adding file {zarr_path} to batch {batch_key}")
         batch_results[category].append(zarr_path)
 
-    print('container_name', container_name)
+    print('batch_results', batch_results)
 
     if batch_results["short_pulse"]:
         short_pulse_ds = concatenate_and_rechunk(batch_results["short_pulse"],
