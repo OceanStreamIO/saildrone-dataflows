@@ -154,7 +154,7 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
     }
 
     def _run(pulse, tag):
-        root = f"{cruise_id}/_combined/{batch_key}/{tag}"
+        root = f"{batch_key}/{tag}"
 
         ds = open_zarr_store(
             f"{root}.zarr",
@@ -177,7 +177,7 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
                 file_base_name=f"{tag}--mvbs",
                 save_to_blobstorage=True,
                 depth_var="depth",
-                upload_path=f"{cruise_id}/_combined/{batch_key}",
+                upload_path=f"{batch_key}",
                 cmap=colormap,
                 container_name=container_name,
             )
@@ -210,12 +210,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
         category = "short_pulse" if file_freqs == "38000.0,200000.0" \
             else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
         batch_results[category] = batch_results.get(category, [])
-        # batch_results[category].append(file['location'])
-        batch_results[category].append(
-            file["location"].replace(".zarr", "_denoised.zarr")
-            if denoised and file["location"].endswith(".zarr")
-            else file["location"]
-        )
+
+        zarr_path = f"{file['file_name']}/{file['file_name']}" + ("--denoised" if denoised else "") + ".zarr"
+        batch_results[category].append(zarr_path)
 
     if batch_results["short_pulse"]:
         short_pulse_ds = concatenate_and_rechunk(batch_results["short_pulse"],
@@ -223,19 +220,19 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
                                                  chunks=chunks)
         save_zarr_store(short_pulse_ds,
                         container_name=container_name,
-                        zarr_path=f"{cruise_id}/_combined/{batch_key}/short_pulse.zarr")
+                        zarr_path=f"{batch_key}/short_pulse.zarr")
 
         if plot_echograms:
             plot_and_upload_echograms(short_pulse_ds,
                                       file_base_name='short_pulse',
                                       save_to_blobstorage=True,
                                       depth_var="depth",
-                                      upload_path=f"{cruise_id}/_combined/{batch_key}",
+                                      upload_path=f"{batch_key}",
                                       cmap=colormap,
                                       container_name=container_name)
 
         if save_to_netcdf:
-            nc_file_path = f"{cruise_id}/_combined/{batch_key}/short_pulse.nc"
+            nc_file_path = f"{batch_key}/short_pulse.nc"
             save_dataset_to_netcdf(short_pulse_ds,
                                    container_name=container_name, ds_path=nc_file_path,
                                    base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
@@ -246,19 +243,19 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
                                                 chunks=chunks)
         save_zarr_store(long_pulse_ds,
                         container_name=container_name,
-                        zarr_path=f"{cruise_id}/_combined/{batch_key}/long_pulse.zarr")
+                        zarr_path=f"{batch_key}/long_pulse.zarr")
 
         if plot_echograms:
             plot_and_upload_echograms(long_pulse_ds,
                                       file_base_name='long_pulse',
                                       save_to_blobstorage=True,
                                       depth_var="depth",
-                                      upload_path=f"{cruise_id}/_combined/{batch_key}",
+                                      upload_path=f"{batch_key}",
                                       cmap=colormap,
                                       container_name=container_name)
 
         if save_to_netcdf:
-            nc_file_path = f"{cruise_id}/_combined/{batch_key}/long_pulse.nc"
+            nc_file_path = f"{batch_key}/long_pulse.nc"
             save_dataset_to_netcdf(long_pulse_ds,
                                    container_name=container_name, ds_path=nc_file_path,
                                    base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
@@ -269,19 +266,19 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
                                               chunks=chunks)
         save_zarr_store(exported_ds,
                         container_name=container_name,
-                        zarr_path=f"{cruise_id}/_combined/{batch_key}/{batch_key}.zarr")
+                        zarr_path=f"{batch_key}/{batch_key}.zarr")
 
         if plot_echograms:
             plot_and_upload_echograms(batch_key,
                                       file_base_name='long_pulse',
                                       save_to_blobstorage=True,
                                       depth_var="depth",
-                                      upload_path=f"{cruise_id}/_combined/{batch_key}",
+                                      upload_path=f"{batch_key}",
                                       cmap=colormap,
                                       container_name=container_name)
 
         if save_to_netcdf:
-            nc_file_path = f"{cruise_id}/_combined/{batch_key}/{batch_key}.nc"
+            nc_file_path = f"{batch_key}/{batch_key}.nc"
             save_dataset_to_netcdf(exported_ds,
                                    container_name=container_name, ds_path=nc_file_path,
                                    base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
@@ -329,11 +326,11 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         nc_file_output_path = None
         nc_file_output_path_denoised = None
-        file_path = f"{category}/{file_name}/{file_name}.zarr"
+        file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
 
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
         if save_to_netcdf:
-            nc_file_path = f"{category}/{file_name}/{file_name}.nc"
+            nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
             nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
                                                          ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
                                                          is_temp_dir=False)
@@ -345,13 +342,13 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         if sv_dataset_denoised is not None:
             denoising_applied = True
-            file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr"
+            file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.zarr"
 
             save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
                             chunks=chunks)
 
             if save_to_netcdf:
-                nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
+                nc_file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.nc"
                 nc_file_output_path_denoised = save_dataset_to_netcdf(sv_dataset_denoised,
                                                                       container_name=export_container_name,
                                                                       ds_path=nc_file_path_denoised,
@@ -433,8 +430,8 @@ def export_processed_data(cruise_id: str,
                 remove_background_noise is not None)
 
     files_list = get_files_list(
+        source_directory=source_container,
         cruise_id=cruise_id,
-        source_container=source_container,
         start_datetime=start_datetime,
         end_datetime=end_datetime,
     )
@@ -515,8 +512,6 @@ def export_processed_data(cruise_id: str,
 
     for key, files in by_batch.items():
         print('Processing batch:', key, 'with', len(files), 'files.')
-        print('FILES:', files)
-
         future = concatenate_batch_files.submit(key,
                                                 cruise_id,
                                                 files,
@@ -545,7 +540,7 @@ def export_processed_data(cruise_id: str,
             finished = next(as_completed(agg_in_flight))
             agg_in_flight.remove(finished)
 
-    for remaining in agg_in_flight:
+    for remaining in agg_in_flight + agg_side_tasks:
         remaining.result()
 
 
