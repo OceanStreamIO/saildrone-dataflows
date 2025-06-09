@@ -514,6 +514,8 @@ def export_processed_data(cruise_id: str,
 
     for key, files in by_batch.items():
         print('Processing batch:', key, 'with', len(files), 'files.')
+        print('FILES:', files)
+
         future = concatenate_batch_files.submit(key,
                                                 cruise_id,
                                                 files,
