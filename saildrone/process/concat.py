@@ -31,7 +31,10 @@ def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset
             kwargs={"fill_value": "extrapolate"}
         )
 
-    return ds.merge(nav)
+    vars_to_add = ["latitude", "longitude", "speed_knots"]
+    ds = ds.drop_vars([v for v in vars_to_add if v in ds])
+
+    return ds.assign(**{v: nav[v] for v in vars_to_add})
 
 
 def save_temp_zarr(ds, path_template, batch_index):
