@@ -292,59 +292,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
 
 
 @task(
-    log_prints=True,
-    timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="save_to_netcdf--{file_name}"
-)
-def task_save_to_netcdf(future, file_name, container_name, chunks=None):
-    if future is None:
-        return []
-
-    try:
-        denoising_applied, category = future
-
-        file_path = f"{category}/{file_name}/{file_name}"
-        zarr_path = f"{file_path}.zarr"
-        nc_file_path = f"{file_path}.nc"
-        saved_paths = []
-
-        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
-        nc_file_path_denoised = f"{file_path}--denoised.nc" if denoising_applied else None
-
-        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-        nc_file_output_path = save_dataset_to_netcdf(ds, container_name=container_name, ds_path=nc_file_path,
-                                                     base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
-        saved_paths.append(nc_file_output_path)
-
-        if zarr_path_denoised:
-            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
-                                          rechunk_after=True)
-            nc_file_denoised_output_path = save_dataset_to_netcdf(ds_denoised, container_name=container_name,
-                                                                  ds_path=nc_file_path_denoised,
-                                                                  base_local_temp_path=NETCDF_ROOT_DIR,
-                                                                  is_temp_dir=False)
-            saved_paths.append(nc_file_denoised_output_path)
-
-        return saved_paths
-    except Exception as e:
-        traceback.print_exc()
-
-        markdown_report = f"""# Error during save_to_netcdf
-        Error occurred while saving to NetCDF: {file_name}
-
-        {str(e)}
-        
-        ## Error details
-        - **Error Message**: {str(e)}
-        - **Traceback**: {traceback.format_exc()}
-        """
-
-        create_markdown_artifact(markdown_report)
-
-        return []
-
-
-@task(
     retries=3,
     retry_delay_seconds=60,
     cache_policy=input_cache_policy,
@@ -369,6 +316,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     file_freqs = file['file_freqs']
     file_start_time = file['file_start_time']
     file_end_time = file['file_end_time']
+    save_to_netcdf = kwargs.get('save_to_netcdf', False)
     file_id = file['id']
     category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
 
@@ -382,20 +330,38 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         # Merge location data
         ds = merge_location_data(ds, location_data)
 
+        nc_file_output_path = None
+        nc_file_output_path_denoised = None
         file_path = f"{category}/{file_name}/{file_name}.zarr"
+
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
+        if save_to_netcdf:
+            nc_file_path = f"{category}/{file_name}/{file_name}.nc"
+            nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
+                                                         ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
+                                                         is_temp_dir=False)
 
         # Apply denoising if specified
         denoising_applied = False
+
         sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
 
         if sv_dataset_denoised is not None:
             denoising_applied = True
             file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.zarr"
+
             save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
                             chunks=chunks)
 
-        return denoising_applied, category
+            if save_to_netcdf:
+                nc_file_path_denoised = f"{category}/{file_name}/{file_name}--denoised.nc"
+                nc_file_output_path_denoised = save_dataset_to_netcdf(sv_dataset_denoised,
+                                                                      container_name=export_container_name,
+                                                                      ds_path=nc_file_path_denoised,
+                                                                      base_local_temp_path=NETCDF_ROOT_DIR,
+                                                                      is_temp_dir=False)
+
+        return denoising_applied, category, nc_file_output_path, nc_file_output_path_denoised
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
@@ -518,11 +484,6 @@ def export_processed_data(cruise_id: str,
                                                 remove_background_noise=remove_background_noise,
                                                 apply_seabed_mask=apply_seabed_mask
                                                 )
-        if save_to_netcdf:
-            future_nc_task = task_save_to_netcdf.submit(future, file['file_name'], export_container_name, chunks)
-            side_running_tasks.append(future_nc_task)
-            netcdf_outputs.append(future_nc_task)
-
         in_flight.append(future)
 
         # Throttle when max concurrent tasks reached
@@ -534,12 +495,12 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight + side_running_tasks:
         remaining.result()
 
-    if save_to_netcdf:
-        future_zip = trigger_netcdf_flow.submit(
-            file_list=netcdf_outputs,
-            container=export_container_name
-        )
-        future_zip.wait()
+    # if save_to_netcdf:
+    #     future_zip = trigger_netcdf_flow.submit(
+    #         file_list=netcdf_outputs,
+    #         container=export_container_name
+    #     )
+    #     future_zip.wait()
 
         if os.path.exists('/tmp/oceanstream/netcdfdata'):
             shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
