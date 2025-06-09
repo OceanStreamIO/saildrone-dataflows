@@ -211,8 +211,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
             else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
         batch_results[category] = batch_results.get(category, [])
 
-        zarr_path = f"{file['file_name']}/{file['file_name']}" + ("--denoised" if denoised else "") + ".zarr"
+        zarr_path = f"{cruise_id}/{file['file_name']}/{file['file_name']}" + ("--denoised" if denoised else "") + ".zarr"
+        print(f"Adding file {zarr_path} to batch {batch_key}")
         batch_results[category].append(zarr_path)
+
+    print('container_name', container_name)
 
     if batch_results["short_pulse"]:
         short_pulse_ds = concatenate_and_rechunk(batch_results["short_pulse"],
@@ -329,8 +332,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
         print('Saving to Zarr store:', file_path)
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
-        print(f"Saved Zarr store to {zarr_path}")
-        
+
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
             nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
