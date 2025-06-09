@@ -327,8 +327,10 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         nc_file_output_path = None
         nc_file_output_path_denoised = None
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
-
+        print('Saving to Zarr store:', file_path)
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
+        print(f"Saved Zarr store to {zarr_path}")
+        
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
             nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
