@@ -74,7 +74,8 @@ def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
 @task(
     log_prints=True,
     retries=3,
-    retry_delay_seconds=60
+    retry_delay_seconds=60,
+    task_run_name="compute_batch_mvbs--{batch_key}"
 )
 def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, compute_nasc_options, plot_echograms=False,
                        save_to_netcdf=False, colormap='ocean_r', chunks=None):
@@ -137,7 +138,8 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, comp
 @task(
     log_prints=True,
     retries=3,
-    retry_delay_seconds=60
+    retry_delay_seconds=60,
+    task_run_name="compute_batch_mvbs--{batch_key}"
 )
 def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, compute_mvbs_options, plot_echograms=False,
                        save_to_netcdf=False, colormap='ocean_r', chunks=None):
@@ -198,7 +200,10 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
     return results
 
 
-@task(log_prints=True)
+@task(
+    log_prints=True,
+    task_run_name="concatenate_batch_files--{batch_key}"
+)
 def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_name, plot_echograms, save_to_netcdf,
                             colormap, chunks=None):
     """Run NASC, MVBS, … for one calendar batch."""
@@ -514,7 +519,10 @@ def export_processed_data(cruise_id: str,
         key = _batch_key(ts, days_to_combine)
         by_batch[key].append(file_record)
 
-    for key, files in by_batch.items():
+    batches = by_batch.items()
+    print(f"Total batches to process: {len(batches)}")
+
+    for key, files in batches:
         print('Processing batch:', key, 'with', len(files), 'files.')
         future = concatenate_batch_files.submit(key,
                                                 cruise_id,
