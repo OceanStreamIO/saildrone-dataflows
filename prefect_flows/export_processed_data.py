@@ -205,7 +205,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
 
     batch_results = {}
 
-    for source_path, file in files:
+    for file in files:
         file_freqs = file['file_freqs']
         category = "short_pulse" if file_freqs == "38000.0,200000.0" \
             else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
@@ -305,7 +305,8 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
 def process_single_file(file, file_name, source_container_name, cruise_id,
                         chunks, export_container_name, file_index, total, **kwargs):
     """
-    Process a single file for Dask Futures: open it, merge location data, save the dataset, and return its path and frequency category.
+    Process a single file for Dask Futures: open it, merge location data, save the dataset, and return its path and
+    frequency category.
     """
     zarr_path = f'{file_name}/{file_name}.zarr'
     location_data = file['location_data']
@@ -459,26 +460,26 @@ def export_processed_data(cruise_id: str,
     for idx, (source_path, file) in enumerate(files_list):
         target_worker = workers[idx % n_workers]
 
-        with dask.annotate(workers=[target_worker], allow_other_workers=False):
-            future = process_single_file.submit(file,
-                                                file_name=file['file_name'],
-                                                source_container_name=source_container,
-                                                cruise_id=cruise_id,
-                                                chunks=chunks,
-                                                export_container_name=export_container_name,
-                                                file_index=idx,
-                                                total=len(files_list),
-                                                plot_echograms=plot_echograms,
-                                                colormap=colormap,
-                                                compute_nasc_options=compute_nasc_options,
-                                                compute_mvbs_options=compute_mvbs_options,
-                                                save_to_netcdf=save_to_netcdf,
-                                                mask_impulse_noise=mask_impulse_noise,
-                                                mask_attenuated_signal=mask_attenuated_signal,
-                                                mask_transient_noise=mask_transient_noise,
-                                                remove_background_noise=remove_background_noise,
-                                                apply_seabed_mask=apply_seabed_mask
-                                                )
+        # with dask.annotate(workers=[target_worker], allow_other_workers=False):
+        future = process_single_file.submit(file,
+                                            file_name=file['file_name'],
+                                            source_container_name=source_container,
+                                            cruise_id=cruise_id,
+                                            chunks=chunks,
+                                            export_container_name=export_container_name,
+                                            file_index=idx,
+                                            total=len(files_list),
+                                            plot_echograms=plot_echograms,
+                                            colormap=colormap,
+                                            compute_nasc_options=compute_nasc_options,
+                                            compute_mvbs_options=compute_mvbs_options,
+                                            save_to_netcdf=save_to_netcdf,
+                                            mask_impulse_noise=mask_impulse_noise,
+                                            mask_attenuated_signal=mask_attenuated_signal,
+                                            mask_transient_noise=mask_transient_noise,
+                                            remove_background_noise=remove_background_noise,
+                                            apply_seabed_mask=apply_seabed_mask
+                                            )
         in_flight.append(future)
 
         # Throttle when max concurrent tasks reached
