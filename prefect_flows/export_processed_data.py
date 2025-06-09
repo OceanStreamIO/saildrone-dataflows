@@ -294,64 +294,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
 @task(
     log_prints=True,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
-    task_run_name="plot_echograms--{file_name}"
-)
-def task_plot_echograms(future, file_name, container_name, chunks=None, cmap='ocean_r'):
-    if future is None:
-        return None
-
-    try:
-        denoising_applied, category = future
-
-        file_path = f"{category}/{file_name}/{file_name}"
-        upload_path = f"{category}/{file_name}"
-        zarr_path = f"{file_path}.zarr"
-        zarr_path_denoised = f"{file_path}--denoised.zarr" if denoising_applied else None
-
-        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks, rechunk_after=True)
-
-        plot_and_upload_echograms(ds,
-                                  file_base_name=file_name,
-                                  save_to_blobstorage=True,
-                                  depth_var="depth",
-                                  upload_path=upload_path,
-                                  cmap=cmap,
-                                  container_name=container_name)
-
-        if zarr_path_denoised:
-            ds_denoised = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks,
-                                          rechunk_after=True)
-
-            plot_and_upload_echograms(ds_denoised,
-                                      file_base_name=f"{file_name}--denoised",
-                                      save_to_blobstorage=True,
-                                      depth_var="depth",
-                                      upload_path=upload_path,
-                                      cmap=cmap,
-                                      container_name=container_name)
-
-        return Completed(message="plot_echograms completed successfully")
-    except Exception as e:
-        traceback.print_exc()
-
-        markdown_report = f"""# Error during plot_echograms
-        Error occurred while plotting echograms: {file_name}
-
-        {str(e)}
-        
-        ## Error details
-        - **Error Message**: {str(e)}
-        - **Traceback**: {traceback.format_exc()}
-        """
-
-        create_markdown_artifact(markdown_report)
-
-        return Completed(message="plot_echograms completed with errors")
-
-
-@task(
-    log_prints=True,
-    timeout_seconds=DEFAULT_TASK_TIMEOUT,
     task_run_name="save_to_netcdf--{file_name}"
 )
 def task_save_to_netcdf(future, file_name, container_name, chunks=None):
@@ -430,7 +372,6 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     file_id = file['id']
     category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
 
-    return False, category
     try:
         print(f"Processing file {zarr_path} with frequencies {file_freqs}")
 
@@ -577,11 +518,6 @@ def export_processed_data(cruise_id: str,
                                                 remove_background_noise=remove_background_noise,
                                                 apply_seabed_mask=apply_seabed_mask
                                                 )
-        if plot_echograms:
-            future_plot_task = task_plot_echograms.submit(future, file['file_name'], export_container_name, chunks,
-                                                          colormap)
-            side_running_tasks.append(future_plot_task)
-
         if save_to_netcdf:
             future_nc_task = task_save_to_netcdf.submit(future, file['file_name'], export_container_name, chunks)
             side_running_tasks.append(future_nc_task)

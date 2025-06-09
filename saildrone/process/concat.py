@@ -8,27 +8,34 @@ import zarr
 from saildrone.store import open_zarr_store
 
 
-def merge_location_data(dataset: xr.Dataset, location_data) -> xr.Dataset:
-    # Convert location_data list of dicts to DataFrame
-    location_df = pd.DataFrame(location_data)
-    location_df['dt'] = pd.to_datetime(location_df['dt'])
+def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset:
+    # 1) build a cleaned DataFrame indexed by real datetimes
+    df = pd.DataFrame(location_data)
+    df["dt"] = pd.to_datetime(df["dt"], utc=True, infer_datetime_format=True)
+    df = df.set_index("dt").sort_index()
 
-    # Create a 1D time-aligned xarray Dataset
-    nav_ds = xr.Dataset({
-        "latitude": ("time", location_df["lat"].values),
-        "longitude": ("time", location_df["lon"].values),
-        "speed_knots": ("time", location_df["knt"].values)
-    }, coords={"time": location_df["dt"].values})
+    # 2) promote straight into an xarray Dataset
+    #    .to_xarray lifts the index into a coord named "dt"
+    nav = df[["lat", "lon", "knt"]].to_xarray()
 
-    if "ping_time" in dataset.coords:
-        nav_interp = nav_ds.interp(time=dataset["ping_time"], kwargs={"fill_value": "extrapolate"})
-    else:
-        nav_interp = nav_ds
+    # 3) rename coords/vars to match your pipeline
+    nav = nav.rename({
+        "dt": "time",
+        "lat": "latitude",
+        "lon": "longitude",
+        "knt": "speed_knots",
+    })
 
-    for var in nav_interp.data_vars:
-        dataset[var] = nav_interp[var]
+    # 4) if you have ping_time, interpolate; otherwise just merge directly
+    if "ping_time" in ds.coords:
+        nav = nav.interp(
+            time=ds["ping_time"],
+            method="nearest",
+            kwargs={"fill_value": "extrapolate"}
+        )
 
-    return dataset
+    # 5) one‐shot merge: adds/overwrites latitude, longitude, speed_knots
+    return ds.merge(nav)
 
 
 def save_temp_zarr(ds, path_template, batch_index):
