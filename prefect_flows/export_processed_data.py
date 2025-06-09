@@ -303,11 +303,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
     task_run_name="process_file--{file_index}/{total}-{file_name}",
 )
 def process_single_file(file, file_name, source_container_name, cruise_id,
-                        chunks,
-                        export_container_name,
-                        file_index,
-                        total,
-                        **kwargs):
+                        chunks, export_container_name, file_index, total, **kwargs):
     """
     Process a single file for Dask Futures: open it, merge location data, save the dataset, and return its path and frequency category.
     """
@@ -458,7 +454,6 @@ def export_processed_data(cruise_id: str,
     in_flight = []
     workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
     n_workers = len(workers)
-    side_running_tasks = []
     netcdf_outputs = []
 
     for idx, (source_path, file) in enumerate(files_list):
@@ -492,7 +487,7 @@ def export_processed_data(cruise_id: str,
             in_flight.remove(finished)
 
     # Wait for remaining tasks
-    for remaining in in_flight + side_running_tasks:
+    for remaining in in_flight:
         remaining.result()
 
     # if save_to_netcdf:
@@ -502,8 +497,8 @@ def export_processed_data(cruise_id: str,
     #     )
     #     future_zip.wait()
 
-        if os.path.exists('/tmp/oceanstream/netcdfdata'):
-            shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
+    if os.path.exists('/tmp/oceanstream/netcdfdata'):
+        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
 
     print("All files have been processed.")
 

@@ -9,16 +9,14 @@ from saildrone.store import open_zarr_store
 
 
 def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset:
-    # 1) build a cleaned DataFrame indexed by real datetimes
     df = pd.DataFrame(location_data)
-    df["dt"] = pd.to_datetime(df["dt"], utc=True, infer_datetime_format=True)
+    df["dt"] = (
+        pd.to_datetime(df["dt"], utc=True, errors="coerce")  # parse to UTC
+        .dt.tz_localize(None)
+    )
     df = df.set_index("dt").sort_index()
-
-    # 2) promote straight into an xarray Dataset
-    #    .to_xarray lifts the index into a coord named "dt"
     nav = df[["lat", "lon", "knt"]].to_xarray()
 
-    # 3) rename coords/vars to match your pipeline
     nav = nav.rename({
         "dt": "time",
         "lat": "latitude",
@@ -26,7 +24,6 @@ def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset
         "knt": "speed_knots",
     })
 
-    # 4) if you have ping_time, interpolate; otherwise just merge directly
     if "ping_time" in ds.coords:
         nav = nav.interp(
             time=ds["ping_time"],
@@ -34,7 +31,6 @@ def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset
             kwargs={"fill_value": "extrapolate"}
         )
 
-    # 5) one‐shot merge: adds/overwrites latitude, longitude, speed_knots
     return ds.merge(nav)
 
 
