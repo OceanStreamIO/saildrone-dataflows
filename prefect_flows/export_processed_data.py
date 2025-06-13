@@ -3,7 +3,6 @@ import os
 import shutil
 import sys
 import traceback
-import dask
 from collections import defaultdict
 
 from datetime import datetime, timedelta
@@ -41,11 +40,40 @@ load_dotenv()
 DASK_CLUSTER_ADDRESS = os.getenv('DASK_CLUSTER_ADDRESS')
 PROCESSED_CONTAINER_NAME = os.getenv('PROCESSED_CONTAINER_NAME')
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 6))
+CATEGORY_CONFIG = {
+    "short_pulse": {
+        "freq_key": "38000.0,200000.0",
+        "zarr_name": "short_pulse.zarr",
+        "nc_name": "short_pulse.nc",
+        "file_base": "short_pulse",
+    },
+    "long_pulse": {
+        "freq_key": "38000.0",
+        "zarr_name": "long_pulse.zarr",
+        "nc_name": "long_pulse.nc",
+        "file_base": "long_pulse",
+    },
+    "exported_ds": {
+        "freq_key": None,  # catch-all
+        "zarr_name": "{batch_key}.zarr",
+        "nc_name": "{batch_key}.nc",
+        "file_base": "{batch_key}"
+    }
+}
 
-NETCDF_ROOT_DIR = '/mnt/saildronedata'
+NETCDF_ROOT_DIR = os.getenv('NETCDF_ROOT_DIR', '/tmp/oceanstream/netcdfdata')
 CHUNKS = {"ping_time": 1000, "depth": -1}
 DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
+
+
+def _nav_to_data_vars(ds):
+    nav = ["latitude", "longitude", "speed_knots"]
+    coords = [v for v in nav if v in ds.coords]
+
+    if coords:
+        ds = ds.reset_coords(coords)
+    return ds
 
 
 @task(log_prints=True)
@@ -73,9 +101,11 @@ def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
 
 @task(
     log_prints=True,
-    retries=3,
     retry_delay_seconds=60,
-    task_run_name="compute_batch_mvbs--{batch_key}"
+    cache_policy=input_cache_policy,
+    refresh_cache=True,
+    result_storage=None,
+    task_run_name="compute_batch_nasc--{batch_key}"
 )
 def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, compute_nasc_options, plot_echograms=False,
                        save_to_netcdf=False, colormap='ocean_r', chunks=None):
@@ -88,11 +118,14 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, comp
     }
 
     def _run(pulse, tag):
-        root = f"{cruise_id}/_combined/{batch_key}/{tag}"
+        root = f"{batch_key}/{tag}"
         ds = open_zarr_store(f"{root}.zarr",
                              container_name=container_name,
-                             chunks=chunks,
-                             rechunk_after=True)
+                             rechunk_after=True,
+                             chunks=chunks)
+        ds = _nav_to_data_vars(ds)
+        print('Computing NASC for pulse:', pulse, 'with tag:', tag, f'and root: {root}.zarr')
+        print(ds.data_vars)
 
         nasc = compute_and_save_nasc(
             ds,
@@ -109,8 +142,9 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, comp
                 file_base_name=f"{tag}--nasc",
                 save_to_blobstorage=True,
                 depth_var="depth",
-                upload_path=f"{cruise_id}/_combined/{batch_key}",
+                upload_path=f"{batch_key}",
                 cmap=colormap,
+                plot_var='NASC_log',
                 container_name=container_name,
             )
 
@@ -137,8 +171,10 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, comp
 
 @task(
     log_prints=True,
-    retries=3,
     retry_delay_seconds=60,
+    cache_policy=input_cache_policy,
+    refresh_cache=True,
+    result_storage=None,
     task_run_name="compute_batch_mvbs--{batch_key}"
 )
 def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, compute_mvbs_options, plot_echograms=False,
@@ -158,15 +194,17 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
     def _run(pulse, tag):
         root = f"{batch_key}/{tag}"
 
-        ds = open_zarr_store(
-            f"{root}.zarr",
-            container_name=container_name,
-            chunks=chunks,
-            rechunk_after=True,
-        )
+        ds = open_zarr_store(f"{root}.zarr", container_name=container_name, chunks=chunks,
+                             rechunk_after=True)
+        ds = _nav_to_data_vars(ds)
+
+        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}.zarr')
+        print(ds.data_vars)
+        print(ds.dims)
 
         ds_mvbs = compute_and_save_mvbs(
             ds,
+            cruise_id=cruise_id,
             zarr_path=f"{root}--mvbs.zarr",
             compute_mvbs_opts=compute_mvbs_options,
             container_name=container_name,
@@ -207,91 +245,75 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
 def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_name, plot_echograms, save_to_netcdf,
                             colormap, chunks=None):
     """Run NASC, MVBS, … for one calendar batch."""
+    # 1) bucket files by category
+    batch_results = {cat: [] for cat in CATEGORY_CONFIG}
 
-    batch_results = {}
+    print('Concatenating files for batch:', batch_key, 'denoised:', denoised)
 
-    for file in files:
-        file_freqs = file['file_freqs']
-        category = "short_pulse" if file_freqs == "38000.0,200000.0" \
-            else "long_pulse" if file_freqs == "38000.0" else "exported_ds"
-        batch_results[category] = batch_results.get(category, [])
+    for file_info in files:
+        freqs = file_info["file_freqs"]
+        for category, cfg in CATEGORY_CONFIG.items():
+            if cfg["freq_key"] is None or freqs == cfg["freq_key"]:
+                zarr_suffix = "--denoised" if denoised else ""
+                path = (
+                    f"{cruise_id}/{file_info['file_name']}/{file_info['file_name']}"
+                    f"{zarr_suffix}.zarr"
+                )
+                batch_results[category].append(path)
+                break
 
-        zarr_path = f"{cruise_id}/{file['file_name']}/{file['file_name']}" + ("--denoised" if denoised else "") + ".zarr"
-        batch_results[category].append(zarr_path)
+    def _process_category(cat: str):
+        paths = batch_results[cat]
+        if not paths:
+            return
 
-    if batch_results["short_pulse"]:
-        short_pulse_ds = concatenate_and_rechunk(batch_results["short_pulse"], container_name=container_name,
-                                                 chunks=chunks)
-        print('Finished concatenating short pulse dataset:', short_pulse_ds)
-        print('Saving short pulse dataset to Zarr store:', f"{batch_key}/short_pulse.zarr", container_name)
-        save_zarr_store(short_pulse_ds, container_name=container_name, zarr_path=f"{batch_key}/short_pulse.zarr")
+        section = CATEGORY_CONFIG[cat]
+        print('Concatenating files for category:', cat, 'with paths:', paths)
+        ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
+        print(f"Finished concatenating {cat} dataset:", ds.data_vars)
 
+        # save Zarr
+        zarr_path = f"{batch_key}/{section['zarr_name']}".format(batch_key=batch_key)
+        save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
+
+        # optional echograms
         if plot_echograms:
-            plot_and_upload_echograms(short_pulse_ds,
-                                      file_base_name='short_pulse',
-                                      save_to_blobstorage=True,
-                                      depth_var="depth",
-                                      upload_path=f"{batch_key}",
-                                      cmap=colormap,
-                                      container_name=container_name)
+            plot_and_upload_echograms(
+                ds,
+                file_base_name=section["file_base"].format(batch_key=batch_key),
+                save_to_blobstorage=True,
+                depth_var="depth",
+                upload_path=batch_key,
+                cmap=colormap,
+                container_name=container_name,
+            )
 
+        # optional NetCDF
         if save_to_netcdf:
-            nc_file_path = f"{batch_key}/short_pulse.nc"
-            save_dataset_to_netcdf(short_pulse_ds,
-                                   container_name=container_name, ds_path=nc_file_path,
-                                   base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
+            nc_path = f"{batch_key}/{section['nc_name']}".format(batch_key=batch_key)
+            save_dataset_to_netcdf(
+                ds,
+                container_name=container_name,
+                ds_path=nc_path,
+                base_local_temp_path=NETCDF_ROOT_DIR,
+                is_temp_dir=False,
+            )
 
-    if batch_results["long_pulse"]:
-        long_pulse_ds = concatenate_and_rechunk(batch_results["long_pulse"],
-                                                container_name=container_name,
-                                                chunks=chunks)
-        print('Finished concatenating long pulse dataset:', long_pulse_ds)
-        save_zarr_store(long_pulse_ds, container_name=container_name, zarr_path=f"{batch_key}/long_pulse.zarr")
+    # 2) run through each category
+    for category in CATEGORY_CONFIG:
+        _process_category(category)
 
-        if plot_echograms:
-            plot_and_upload_echograms(long_pulse_ds,
-                                      file_base_name='long_pulse',
-                                      save_to_blobstorage=True,
-                                      depth_var="depth",
-                                      upload_path=f"{batch_key}",
-                                      cmap=colormap,
-                                      container_name=container_name)
-
-        if save_to_netcdf:
-            nc_file_path = f"{batch_key}/long_pulse.nc"
-            save_dataset_to_netcdf(long_pulse_ds,
-                                   container_name=container_name, ds_path=nc_file_path,
-                                   base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
-
-    if batch_results["exported_ds"]:
-        exported_ds = concatenate_and_rechunk(batch_results["exported_ds"], container_name=container_name,
-                                              chunks=chunks)
-        save_zarr_store(exported_ds, container_name=container_name, zarr_path=f"{batch_key}/{batch_key}.zarr")
-
-        if plot_echograms:
-            plot_and_upload_echograms(batch_key,
-                                      file_base_name='long_pulse',
-                                      save_to_blobstorage=True,
-                                      depth_var="depth",
-                                      upload_path=f"{batch_key}",
-                                      cmap=colormap,
-                                      container_name=container_name)
-
-        if save_to_netcdf:
-            nc_file_path = f"{batch_key}/{batch_key}.nc"
-            save_dataset_to_netcdf(exported_ds, container_name=container_name, ds_path=nc_file_path,
-                                   base_local_temp_path=NETCDF_ROOT_DIR, is_temp_dir=False)
-
-    logging.info(f'Running batch aggregation for key: {batch_key}, with {len(files)} files.')
-
+    logging.info(
+        f"Running batch aggregation for key: {batch_key}, with {len(files)} files."
+    )
     return batch_results
 
 
 @task(
     retries=3,
     retry_delay_seconds=60,
-    cache_policy=input_cache_policy,
     retry_jitter_factor=0.1,
+    cache_policy=input_cache_policy,
     refresh_cache=True,
     result_storage=None,
     timeout_seconds=DEFAULT_TASK_TIMEOUT,
@@ -314,7 +336,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
 
     try:
-        print(f"Processing file {zarr_path} with frequencies {file_freqs}")
+        print(f"1) Started processing file {zarr_path} with frequencies {file_freqs}")
 
         # Open the Zarr store lazily with Dask
         ds = open_zarr_store(zarr_path, cruise_id=cruise_id, container_name=source_container_name, chunks=chunks,
@@ -323,11 +345,12 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         # Merge location data
         ds = merge_location_data(ds, location_data)
 
+        print('2) Merged location data:', ds.data_vars)
         nc_file_output_path = None
         nc_file_output_path_denoised = None
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
-        print('Saving to Zarr store:', file_path)
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
+        print('3) Saved to Zarr store:', file_path)
 
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
@@ -335,10 +358,13 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                                          ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
                                                          is_temp_dir=False)
 
+            print('4) Saved to NetCDF:', nc_file_path)
+
         # Apply denoising if specified
         denoising_applied = False
-
         sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
+
+        print('5) Denoising applied', sv_dataset_denoised)
 
         if sv_dataset_denoised is not None:
             denoising_applied = True
@@ -346,7 +372,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
             save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
                             chunks=chunks)
-
+            print('6) Saved denoised dataset to Zarr store:', file_path_denoised)
             if save_to_netcdf:
                 nc_file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.nc"
                 nc_file_output_path_denoised = save_dataset_to_netcdf(sv_dataset_denoised,
@@ -354,6 +380,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                                                                       ds_path=nc_file_path_denoised,
                                                                       base_local_temp_path=NETCDF_ROOT_DIR,
                                                                       is_temp_dir=False)
+                print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
 
         return denoising_applied, category, nc_file_output_path, nc_file_output_path_denoised
     except Exception as e:
@@ -399,6 +426,15 @@ def trigger_netcdf_flow(container, file_list):
     )
 
     return state
+
+
+@task(
+    log_prints=True,
+    task_run_name="concatenate_batches--{cruise_id}"
+)
+def concatenate_batches(cruise_id, **kwargs):
+    print("Concatenating batches with files:", cruise_id)
+
 
 
 @flow(
@@ -455,8 +491,7 @@ def export_processed_data(cruise_id: str,
     netcdf_outputs = []
 
     for idx, (source_path, file) in enumerate(files_list):
-        target_worker = workers[idx % n_workers]
-
+        # target_worker = workers[idx % n_workers]
         # with dask.annotate(workers=[target_worker], allow_other_workers=False):
         future = process_single_file.submit(file,
                                             file_name=file['file_name'],
@@ -488,6 +523,15 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight:
         remaining.result()
 
+    future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
+                                            container_name=export_container_name,
+                                            compute_nasc_options=compute_nasc_options,
+                                            plot_echograms=compute_nasc_options,
+                                            save_to_netcdf=save_to_netcdf,
+                                            colormap=colormap,
+                                            chunks=chunks)
+    future_con.wait()
+
     # if save_to_netcdf:
     #     future_zip = trigger_netcdf_flow.submit(
     #         file_list=netcdf_outputs,
@@ -497,8 +541,6 @@ def export_processed_data(cruise_id: str,
 
     if os.path.exists('/tmp/oceanstream/netcdfdata'):
         shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
-
-    print("All files have been processed.")
 
     # Aggregate results by batch
     by_batch = defaultdict(list)
@@ -515,29 +557,28 @@ def export_processed_data(cruise_id: str,
 
     for key, files in batches:
         print('Processing batch:', key, 'with', len(files), 'files.')
-        future = concatenate_batch_files.submit(key,
-                                                cruise_id,
-                                                files,
-                                                denoised,
-                                                export_container_name,
-                                                plot_echograms,
-                                                save_to_netcdf,
-                                                colormap,
-                                                chunks
-                                                )
+        future = concatenate_batch_files.submit(key, cruise_id, files, denoised, export_container_name, plot_echograms,
+                                                save_to_netcdf, colormap, chunks)
+
+        agg_in_flight.append(future)
+
         if compute_nasc_options:
             future_nasc_task = compute_batch_nasc.submit(future, key, cruise_id, export_container_name,
-                                                         compute_nasc_options,
-                                                         plot_echograms, save_to_netcdf, colormap, chunks)
+                                                         compute_nasc_options=compute_nasc_options,
+                                                         plot_echograms=plot_echograms,
+                                                         save_to_netcdf=save_to_netcdf,
+                                                         colormap=colormap,
+                                                         chunks=chunks)
             agg_side_tasks.append(future_nasc_task)
 
         if compute_mvbs_options:
             future_mvbs_task = compute_batch_mvbs.submit(future, key, cruise_id, export_container_name,
-                                                         compute_mvbs_options,
-                                                         plot_echograms, save_to_netcdf, colormap, chunks)
+                                                         compute_mvbs_options=compute_mvbs_options,
+                                                         plot_echograms=plot_echograms,
+                                                         save_to_netcdf=save_to_netcdf,
+                                                         colormap=colormap,
+                                                         chunks=chunks)
             agg_side_tasks.append(future_mvbs_task)
-
-        agg_in_flight.append(future)
 
         if len(agg_in_flight) >= batch_size:
             finished = next(as_completed(agg_in_flight))

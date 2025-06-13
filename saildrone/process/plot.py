@@ -12,7 +12,7 @@ from saildrone.store import upload_folder_to_blob_storage
 
 
 def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
-                 depth_var: str = 'range_sample', colorbar_orientation: str = 'vertical') -> list:
+                 depth_var: str = 'range_sample', colorbar_orientation: str = 'vertical', plot_var='Sv') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -38,7 +38,7 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
     for channel in range(ds_Sv.dims['channel']):
         try:
             echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
-                                                                    depth_var, colorbar_orientation)
+                                                                    depth_var, colorbar_orientation, plot_var)
             echogram_files.append(echogram_file_path)
         except Exception as e:
             print(f"Error plotting echogram for {file_base_name}: {e}")
@@ -47,9 +47,127 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
     return echogram_files
 
 
-def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_base_name: str,
-                                       echogram_path: str, cmap: str, depth_var='range_sample',
-                                       colorbar_orientation='horizontal') -> str:
+def plot_individual_channel_simplified(
+    ds_Sv: xr.Dataset,
+    channel: int,
+    file_base_name,
+    echogram_path: str = ".",
+    cmap: str = "viridis",
+    depth_var: str = "depth",
+    colorbar_orientation: str = "horizontal",
+    plot_var: str = "Sv"
+):
+    # ───────────────────────────────────────────────────────────────────
+    # 0) label & select the DataArray
+    ch_lab = ds_Sv.channel_label.values[channel]
+    safe_lab = ch_lab.replace(" ", "-")
+    da_Sv = ds_Sv[plot_var].isel(channel=channel)
+
+    if "beam" in da_Sv.dims:
+        da_Sv = da_Sv.isel(beam=0).drop_vars("beam")
+
+    # ───────────────────────────────────────────────────────────────────
+    # 1a) choose x-axis: prefer 'distance', fall back to 'ping_time'
+    if "distance" in da_Sv.coords:
+        xdim = "distance"
+        x_label = "Along-track distance [nmi]"  # tweak as needed
+        x_formatter = None  # plain numeric
+    else:
+        xdim = "ping_time"
+        x_label = "Ping time [UTC]"
+        x_formatter = mdates.DateFormatter("%H:%M")
+
+    # 1b) choose and clean y-axis
+    if "depth" in da_Sv.coords:
+        ydim = "depth"
+    elif "echo_range" in da_Sv.coords:
+        ydim = "echo_range"
+    else:
+        ydim = depth_var
+
+    valid = np.isfinite(da_Sv[ydim].data)
+    da_Sv = (
+        da_Sv.isel({ydim: valid})
+        .dropna(dim=ydim, how="all")
+        .sortby(ydim)
+    )
+    top = float(da_Sv[ydim][0].compute())
+    bot = float(da_Sv[ydim][-1].compute())
+
+    # ───────────────────────────────────────────────────────────────────
+    # 2) plot
+    fig, ax = plt.subplots(figsize=(20, 12))
+
+    da_Sv.T.plot(
+        x=xdim,
+        y=ydim,
+        yincrease=False,
+        vmin=-80,
+        vmax=-50,
+        cmap=cmap,
+        add_colorbar=False,
+        ylim=(bot, top),
+        ax=ax,
+    )
+
+    # 3) cosmetic tweaks
+    ax.set_facecolor("#f9f9f9")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(True)
+    ax.spines["right"].set_linewidth(1.0)
+
+    if x_formatter is not None:
+        locator = mdates.AutoDateLocator(maxticks=12)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(x_formatter)
+
+    # 4) optional seabed overlay … (unchanged)
+
+    # 5) add colour-bar
+    if colorbar_orientation == "horizontal":
+        cbar = plt.colorbar(
+            ax.collections[0],
+            pad=0.08,
+            orientation="horizontal",
+            aspect=40,
+            shrink=0.8,
+        )
+    else:
+        cbar = fig.colorbar(
+            ax.collections[0],
+            ax=ax,
+            fraction=0.04,
+            pad=0.02,
+            shrink=0.8,
+        )
+    cbar.set_label("Volume backscattering strength (Sv re 1 m⁻¹)", fontsize=12)
+    cbar.ax.tick_params(labelsize=10)
+
+    # 6) labels & title
+    ax.set_xlabel(x_label, fontsize=16, labelpad=14)
+    ax.set_ylabel(
+        "Depth [m]" if ydim != "range_sample" else "Sample #",
+        fontsize=16,
+        labelpad=14,
+    )
+    ax.set_title(ch_lab, fontsize=18, fontweight="bold", pad=16)
+    ax.tick_params(which="major", length=6, width=1, labelsize=11)
+    ax.tick_params(which="minor", length=3, width=0.5)
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+
+    fig.tight_layout(pad=2)
+
+    # 7) save
+    out_path = Path(echogram_path) / f"{file_base_name}_{safe_lab}.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+    return out_path
+
+
+def __plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_base_name: str,
+                                         echogram_path: str, cmap: str, depth_var='range_sample',
+                                         colorbar_orientation='horizontal', plot_var='Sv') -> str:
     """
     Plot and save echogram for a single channel with optional regions and enhancements.
 
@@ -74,12 +192,22 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     # 0) labels & select the DataArray
     ch_lab = ds_Sv.channel_label.values[channel]
     safe_lab = ch_lab.replace(" ", "-")
-    da_Sv = ds_Sv['Sv'].isel(channel=channel)
+    da_Sv = ds_Sv[plot_var].isel(channel=channel)
 
     if 'beam' in da_Sv.dims:
         da_Sv = da_Sv.isel(beam=0).drop_vars('beam')
 
-    # 1) choose & clean the vertical axis
+    # 1a) choose x-axis: prefer 'distance', fall back to 'ping_time'
+    if "distance" in da_Sv.coords:
+        xdim = "distance"
+        x_label = "Along-track distance [nmi]"  # tweak as needed
+        x_formatter = None  # plain numeric
+    else:
+        xdim = "ping_time"
+        x_label = "Ping time [UTC]"
+        x_formatter = mdates.DateFormatter("%H:%M")
+
+    # 1b) choose and clean y-axis
     if 'depth' in da_Sv.coords:
         ydim = 'depth'
     elif 'echo_range' in da_Sv.coords:
@@ -98,12 +226,11 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
     bot = float(da_Sv[ydim].isel({ydim: -1}).compute().item())
 
     # 2) plot with xarray’s .plot
-    # plt.figure(figsize=(20, 12))
     fig, ax = plt.subplots(figsize=(20, 12))
 
     da_plot = da_Sv.T
     mesh = da_plot.plot(
-        x='ping_time',
+        x=xdim,
         y=ydim,
         yincrease=False,
         vmin=-80, vmax=-50,
@@ -191,7 +318,7 @@ def plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_bas
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
                               file_name=None, output_path=None, upload_path=None, container_name=None,
-                              cmap='ocean_r', depth_var='depth'):
+                              cmap='ocean_r', depth_var='depth', plot_var='Sv'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
     else:
@@ -206,6 +333,7 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
                                   depth_var=depth_var,
                                   file_base_name=file_name,
                                   output_path=echograms_output_path,
+                                  plot_var=plot_var,
                                   cmap=cmap)
 
     if save_to_blobstorage:

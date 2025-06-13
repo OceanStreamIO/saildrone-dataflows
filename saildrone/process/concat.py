@@ -1,11 +1,11 @@
 import os
 import shutil
-import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
 
 from saildrone.store import open_zarr_store
+from saildrone.store.utils import fix_chunking
 
 
 def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset:
@@ -16,9 +16,8 @@ def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset
     )
     df = df.set_index("dt").sort_index()
     nav = df[["lat", "lon", "knt"]].to_xarray()
-
     nav = nav.rename({
-        "dt": "time",
+        "dt": "ping_time",
         "lat": "latitude",
         "lon": "longitude",
         "knt": "speed_knots",
@@ -26,15 +25,36 @@ def merge_location_data(ds: xr.Dataset, location_data: list[dict]) -> xr.Dataset
 
     if "ping_time" in ds.coords:
         nav = nav.interp(
-            time=ds["ping_time"],
+            ping_time=ds["ping_time"],
             method="nearest",
-            kwargs={"fill_value": "extrapolate"}
+            kwargs={"fill_value": "extrapolate"},
         )
 
-    vars_to_add = ["latitude", "longitude", "speed_knots"]
-    ds = ds.drop_vars([v for v in vars_to_add if v in ds])
+    for v in ["latitude", "longitude", "speed_knots"]:
+        if v in ds.data_vars:
+            ds = ds.drop_vars(v)
+        if v in ds.coords:
+            ds = ds.reset_coords(v, drop=True)
 
-    return ds.assign(**{v: nav[v] for v in vars_to_add})
+    if "time" in ds:
+        ds = ds.drop_vars("time")
+
+    if "time" in ds.coords:
+        ds = ds.reset_coords("time", drop=True)
+
+    merged = xr.merge([ds, nav], compat="override")
+    merged = merged.reset_coords(
+        ["latitude", "longitude", "speed_knots"],
+        drop=False,  # keep them, just demote to data vars
+    )
+
+    if "time" in merged:
+        merged = merged.drop_vars("time")
+
+    if "time" in merged.coords:
+        merged = merged.reset_coords("time", drop=True)
+
+    return merged
 
 
 def save_temp_zarr(ds, path_template, batch_index):
@@ -86,37 +106,36 @@ def concatenate_and_rechunk(paths, container_name, dim="ping_time", chunks=None)
             if var in ds:
                 ds = ds.drop_vars(var)
 
+        for v in ("latitude", "longitude", "speed_knots"):
+            if v in ds.coords:
+                ds = ds.reset_coords(v)
+
         datasets.append(ds)
 
     datasets.sort(key=lambda ds: ds[dim].min().values)
 
     # Concatenate along the specified dimension
-    concatenated_ds = xr.concat(datasets, dim=dim)
+    concatenated_ds = xr.concat(
+        datasets,
+        dim=dim,
+        data_vars="all",
+        coords="minimal",
+        compat="override",
+        join="outer")
 
-    if 'frequency_nominal' in concatenated_ds:
-        freq = concatenated_ds.frequency_nominal
+    if "frequency_nominal" in concatenated_ds:
+        freq_1d = concatenated_ds["frequency_nominal"].mean("ping_time")
+        concatenated_ds = concatenated_ds.drop_vars("frequency_nominal")
+        concatenated_ds["frequency_nominal"] = freq_1d
 
-        if freq.ndim == 2:
-            # Ensure unique across files, collapse to 1D if possible
-            unique_rows = np.unique(freq.values, axis=0)
-            if unique_rows.shape[0] == 1:
-                frequency_1d = unique_rows[0]
-            else:
-                print("Multiple frequency_nominal rows found; using first row.")
-                frequency_1d = freq.values[0]
-        else:
-            frequency_1d = freq.values
-
-        frequency_1d = np.asarray(frequency_1d).astype(np.float64)
-        concatenated_ds = concatenated_ds.assign_coords({
-            "frequency": ("channel", frequency_1d)
-        })
+        # optional: also expose it as a coordinate
+        concatenated_ds = concatenated_ds.assign_coords(
+            frequency=("channel", freq_1d.values)
+        )
     else:
         print('frequency_nominal not in concatenated_ds')
 
-    return concatenated_ds.chunk(chunks)
+    concatenated_ds = concatenated_ds.chunk(chunks)
+    concatenated_ds = fix_chunking(concatenated_ds)
 
-
-
-
-
+    return concatenated_ds

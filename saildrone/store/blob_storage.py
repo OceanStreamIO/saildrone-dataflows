@@ -18,6 +18,7 @@ from typing import List, Union, TypedDict
 from adlfs import AzureBlobFileSystem
 from azure.storage.blob import BlobServiceClient, generate_container_sas, ContainerSasPermissions
 
+from .utils import fix_chunking, get_variable_encoding
 
 # Initialize the logger
 logger = logging.getLogger(__name__)
@@ -128,8 +129,13 @@ def ensure_container_exists(container_name: str, blob_service_client: BlobServic
         raise
 
 
+def _get_write_chunks(ds: xr.Dataset, base: dict) -> dict:
+    """Return a chunk dict containing *only* dimensions present in `ds`."""
+    return {dim: size for dim, size in base.items() if dim in ds.dims}
+
+
 def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name=None, mode="w", append_dim=None,
-                    storage_account_type=STORAGE_ACCOUNT_EXPORT, chunks=None):
+                    storage_account_type=STORAGE_ACCOUNT_EXPORT, chunks=None, rechunk=True):
     if survey_id is not None:
         zarr_path = f"{survey_id}/{zarr_path}"
 
@@ -145,10 +151,15 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
 
     if isinstance(echodata_or_sv_ds, xr.Dataset):
         ds = echodata_or_sv_ds
-        rechunked_ds = fix_chunking(ds)
 
-        write_chunks = chunks if chunks is not None else {'ping_time': 2000, 'depth': -1, 'channel': 1}
-        rechunked_ds = rechunked_ds.chunk(write_chunks)
+        if rechunk:
+            base_chunks = {"channel": 1, "ping_time": 2000, "distance": 500, "depth": -1}
+            write_chunks = chunks if chunks is not None else _get_write_chunks(ds, base_chunks)
+
+            rechunked_ds = ds.chunk(write_chunks)
+            rechunked_ds = fix_chunking(rechunked_ds)
+        else:
+            rechunked_ds = ds
 
         if mode == "w":
             rechunked_ds.to_zarr(store=zarr_store, mode='w')
@@ -252,58 +263,6 @@ def open_geo_parquet(pq_path, survey_id=None, container_name=None, has_geometry=
             gdf = pd.read_parquet(f)
 
     return gdf
-
-
-def fix_chunking(ds: xr.Dataset, *, tiny_limit: int = 10_000) -> xr.Dataset:
-    """
-    Harmonise Zarr‐chunk hints with current Dask chunking.
-
-    • For variables with < `tiny_limit` elements:
-        → compute to NumPy  (one scalar / small vector, no memory penalty)
-    • For the rest: drop an incompatible `encoding["chunks"]`.
-    """
-    for name, var in list(ds.variables.items()):
-        if name in {"Sv", "depth"}:
-            continue
-
-        # case A: tiny array → compute to NumPy
-        if var.size <= tiny_limit:
-            arr = var.compute().data  # NumPy array, no encoding
-            if name in ds.coords:
-                # re-attach as a coordinate
-                ds = ds.assign_coords({name: (var.dims, arr)})
-            else:
-                # re-attach as a data variable
-                ds[name] = (var.dims, arr)
-
-            # clear any leftover encoding on the new object
-            ds[name].encoding.clear()
-            continue
-
-        # case B: larger array → keep lazy but fix the hint if it mismatches
-        enc = var.encoding
-        if "chunks" in enc:
-            dask_chunks = getattr(var.data, "chunks", None)
-            if dask_chunks and enc["chunks"] != tuple(map(len, dask_chunks)):
-                enc.pop("chunks", None)
-
-    return ds
-
-
-def get_variable_encoding(ds: xr.Dataset, compression_level):
-    """Generate encoding dictionary for dataset variables."""
-    encoding = {}
-    for var in ds.data_vars:
-        if ds[var].dtype.kind in {"U", "S", "O"}:  # String or object types
-            # No compression or chunking for unsupported types
-            encoding[var] = {}
-        else:
-            # Apply compression for numeric types
-            encoding[var] = {
-                "zlib": True,
-                "complevel": compression_level,
-            }
-    return encoding
 
 
 def save_dataset_to_netcdf(
