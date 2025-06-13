@@ -345,7 +345,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         # Merge location data
         ds = merge_location_data(ds, location_data)
 
-        print('2) Merged location data:', ds.data_vars)
+        print('2) Merged location data')
         nc_file_output_path = None
         nc_file_output_path_denoised = None
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
@@ -362,6 +362,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         # Apply denoising if specified
         denoising_applied = False
+        print('5) Appying denoising')
         sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
 
         print('5) Denoising applied', sv_dataset_denoised)
