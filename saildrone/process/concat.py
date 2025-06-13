@@ -101,8 +101,7 @@ def concatenate_and_rechunk(paths, container_name, dim="ping_time", chunks=None)
     for path in paths:
         ds = open_zarr_store(path, container_name=container_name, chunks=None)
 
-        # Drop range_sample if present (e.g. redundant indexing axis)
-        for var in ["range_sample", "source_filenames"]:
+        for var in ["source_filenames"]:
             if var in ds:
                 ds = ds.drop_vars(var)
 

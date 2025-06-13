@@ -773,11 +773,14 @@ def apply_denoising(sv_dataset, **kwargs):
     if mask_impulse_noise:
         mask_channels = []
         range_var = mask_impulse_noise.get('range_var')
-        if range_var not in sv_dataset.dims and range_var in sv_dataset:
+
+        if range_var in sv_dataset.dims:
+            sv_for_clean = sv_dataset
+        else:
             sv_for_clean = sv_dataset.set_coords(range_var).swap_dims({'depth': range_var})
             range_var_dim_swapped = True
-        else:
-            sv_for_clean = sv_dataset
+
+        print('Range variable for impulse noise mask:', range_var, 'range_var_dim_swapped:', range_var_dim_swapped)
 
         params_impulse = {
             "depth_bin": mask_impulse_noise.get('depth_bin'),
@@ -793,17 +796,15 @@ def apply_denoising(sv_dataset, **kwargs):
         multi_channel_mask = create_multichannel_mask(mask_channels, sv_for_clean)
         sv_dataset_denoised = apply_mask(sv_for_clean, multi_channel_mask, var_name="Sv")
 
+        if range_var_dim_swapped and range_var is not None:
+            sv_dataset_denoised = sv_dataset_denoised.swap_dims({'range_sample': "depth"}).reset_coords("range_sample")
+
     #####################################################################
     # Step 2: Apply attenuated signal mask
     #####################################################################
     if mask_attenuated_signal:
         mask_channels = []
         range_var = mask_attenuated_signal.get('range_var')
-        if range_var not in sv_dataset.dims and range_var in sv_dataset:
-            sv_for_clean = sv_dataset.set_coords(range_var).swap_dims({'depth': range_var})
-            range_var_dim_swapped = True
-        else:
-            sv_for_clean = sv_dataset
 
         params_attn = {
             "upper_limit_sl": mask_attenuated_signal.get('upper_limit_sl'),
@@ -814,7 +815,7 @@ def apply_denoising(sv_dataset, **kwargs):
         }
 
         if sv_dataset_denoised is None:
-            sv_dataset_denoised = sv_for_clean
+            sv_dataset_denoised = sv_dataset
 
         for channel in sv_dataset.coords["channel"].values:
             attn_signal_mask = get_attenuation_mask(sv_dataset_denoised, params_attn, desired_channel=channel)
@@ -868,7 +869,5 @@ def apply_denoising(sv_dataset, **kwargs):
                                                            background_noise_max=remove_background_noise.get(
                                                                'background_noise_max')
                                                            )
-    if range_var_dim_swapped and range_var is not None:
-        sv_dataset_denoised = sv_dataset_denoised.swap_dims({'range_sample': "depth"}).reset_coords("range_sample")
 
     return sv_dataset_denoised

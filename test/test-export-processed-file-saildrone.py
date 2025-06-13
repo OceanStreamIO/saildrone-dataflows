@@ -8,7 +8,7 @@ from saildrone.calibrate import apply_calibration
 from saildrone.process.concat import merge_location_data
 from saildrone.process.sv_dataset import compute_sv
 from saildrone.process import apply_denoising, process_converted_file
-from saildrone.process.plot import ensure_channel_labels, plot_and_upload_echograms
+from saildrone.process.plot import ensure_channel_labels, plot_and_upload_echograms, plot_sv_data
 from saildrone.process.seabed import mask_true_seabed
 from saildrone.store import open_zarr_store, save_zarr_store
 
@@ -20,7 +20,7 @@ GPS_OUTPUT_FOLDER = "./test/gps-processed"
 def test_file_workflow_saildrone():
     cluster = LocalCluster(n_workers=4, threads_per_worker=1, memory_limit='12GB')
     client = Client(cluster)
-    file_name = 'SD_TPOS2023_v03-Phase0-D20230808-T015958-0'
+    file_name = 'SD_TPOS2023_v03-Phase0-D20230808-T005958-0'
     cruise_id = 'SD_TPOS2023_v03'
 
     source_container_name = 'processed-data'
@@ -33,11 +33,11 @@ def test_file_workflow_saildrone():
         use_index_binning=True
     )
     attenuated_signal_opts = dict(
-        upper_limit_sl=180,
-        lower_limit_sl=300,
+        upper_limit_sl=300,
+        lower_limit_sl=700,
         num_side_pings=15,
         threshold=10,
-        range_var="range_sample"
+        range_var="depth"
     )
 
     transient_noise_opts = dict(
@@ -60,14 +60,28 @@ def test_file_workflow_saildrone():
 
     # Merge location data
     # ds = merge_location_data(ds, location_data)
+
+    plot_sv_data(ds,
+                 file_base_name=file_name,
+                 depth_var='depth',
+                 output_path=f'./test/processed/echograms',
+                 )
+
     file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
-    sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks,
+    sv_dataset_denoised = apply_denoising(ds,
+                                          chunks_denoising=chunks,
                                           mask_impulse_noise=None,
-                                          mask_attenuated_signal=attenuated_signal_opts,
+                                          mask_attenuated_signal=None,
                                           mask_transient_noise=None,
-                                          remove_background_noise=None)
+                                          remove_background_noise=background_noise_opts)
     file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.zarr"
     print(sv_dataset_denoised)
+
+    plot_sv_data(sv_dataset_denoised,
+                 file_base_name=file_name + '--denoised',
+                 depth_var='depth',
+                 output_path=f'./test/processed/echograms',
+                 )
 
     # save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
     #                 chunks=chunks)
