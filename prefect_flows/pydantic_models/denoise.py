@@ -19,7 +19,7 @@ class MaskImpulseNoise(DenoiseOptions):
     depth_bin: int = Field(default=10, description="Downsampling bin size along vertical range variable (`range_var`) in meters.")
     num_side_pings: int = Field(default=2, description="Number of side pings to look at for the two-side comparison.")
     threshold: float = Field(default=10, description="Impulse noise threshold value (in dB) for the two-side comparison.")
-    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
+    range_var: str = Field(default='range_sample', description="Vertical Axis Range Variable. Can be either \"depth\" or \"echo_range\".")
 
 
 class MaskAttenuatedSignal(DenoiseOptions):
@@ -27,7 +27,7 @@ class MaskAttenuatedSignal(DenoiseOptions):
     lower_limit_sl: int = Field(default=300, description="Lower limit of deep scattering layer line (m).")
     num_side_pings: int = Field(default=15, description="Number of preceding & subsequent pings defining the block.")
     threshold: float = Field(default=10, description="Attenuation signal threshold value (dB) for the ping-block comparison.")
-    range_var: str = Field(default='range_sample', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
+    range_var: str = Field(default='depth', description="Vertical Axis Range Variable. Can be either `depth` or `echo_range`.")
 
 
 class TransientNoiseMask(DenoiseOptions):
