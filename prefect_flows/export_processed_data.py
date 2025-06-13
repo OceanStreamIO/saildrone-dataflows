@@ -332,6 +332,8 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
     file_start_time = file['file_start_time']
     file_end_time = file['file_end_time']
     save_to_netcdf = kwargs.get('save_to_netcdf', False)
+    plot_echograms = kwargs.get('plot_echograms', False)
+    colormap = kwargs.get('colormap', 'ocean_r')
     file_id = file['id']
     category = "short_pulse" if file_freqs == "38000.0,200000.0" else "long_pulse" if file_freqs == "38000.0" else cruise_id
 
@@ -352,6 +354,18 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
         print('3) Saved to Zarr store:', file_path)
 
+        if plot_echograms:
+            plot_and_upload_echograms(
+                ds,
+                file_base_name=file_name,
+                save_to_blobstorage=True,
+                depth_var="depth",
+                upload_path=f"{cruise_id}/{file_name}",
+                cmap=colormap,
+                plot_var='Sv',
+                container_name=export_container_name,
+            )
+
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
             nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
@@ -362,7 +376,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         # Apply denoising if specified
         denoising_applied = False
-        print('5) Appying denoising')
+        print('5) Applying denoising')
 
         try:
             sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
@@ -380,13 +394,29 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
             save_zarr_store(sv_dataset_denoised, container_name=export_container_name, zarr_path=file_path_denoised,
                             chunks=chunks)
             print('6) Saved denoised dataset to Zarr store:', file_path_denoised)
+
+            if plot_echograms:
+                plot_and_upload_echograms(
+                    ds,
+                    file_base_name=file_name,
+                    file_name=f"{file_name}--denoised",
+                    save_to_blobstorage=True,
+                    depth_var="depth",
+                    upload_path=f"{cruise_id}/{file_name}",
+                    cmap=colormap,
+                    container_name=export_container_name,
+                )
+
             if save_to_netcdf:
                 nc_file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.nc"
-                nc_file_output_path_denoised = save_dataset_to_netcdf(sv_dataset_denoised,
-                                                                      container_name=export_container_name,
-                                                                      ds_path=nc_file_path_denoised,
-                                                                      base_local_temp_path=NETCDF_ROOT_DIR,
-                                                                      is_temp_dir=False)
+                save_dataset_to_netcdf(
+                    sv_dataset_denoised,
+                    container_name=export_container_name,
+                    ds_path=nc_file_path_denoised,
+                    base_local_temp_path=NETCDF_ROOT_DIR,
+                    is_temp_dir=False,
+                )
+
                 print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
 
         return denoising_applied, category, nc_file_output_path, nc_file_output_path_denoised

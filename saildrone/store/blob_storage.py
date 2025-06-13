@@ -3,6 +3,7 @@ import random
 import re
 import shutil
 import tempfile
+import time
 import zipfile
 
 import pandas as pd
@@ -271,41 +272,53 @@ def save_dataset_to_netcdf(
     base_local_temp_path: str = '/tmp/oceanstream/netcdfdata',
     ds_path: str = "short_pulse_data.nc",
     compression_level: int = 5,
-    is_temp_dir: bool = True
+    is_temp_dir: bool = True,
+    write_chunks=None,
+    max_retries: int = 3,
+    backoff_sec: int = 5
 ):
+    if write_chunks:
+        ds = ds.chunk(write_chunks)
+
     # Construct full local path
-    full_dataset_path = Path(base_local_temp_path) / container_name / ds_path
+    local_path = (
+            Path(base_local_temp_path).expanduser()
+            / container_name
+            / ds_path
+    )
 
-    enc = get_variable_encoding(ds, compression_level)
+    if is_temp_dir:
+        local_path.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
+        os.chmod(local_path.parent, 0o775)
+    else:
+        local_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def _write_and_upload(d, path_str, encoding, filename, container):
-        p = Path(path_str)
-        if is_temp_dir:
-            p.parent.mkdir(parents=True, exist_ok=True, mode=0o775)
-            os.chmod(p.parent, 0o775)
-        else:
-            p.parent.mkdir(parents=True, exist_ok=True)
+    encoding = get_variable_encoding(ds, compression_level)
 
-        d.load()
-        d.to_netcdf(str(p), engine="netcdf4", format="NETCDF4", encoding=encoding)
-        upload_file_to_blob(str(p), filename, container_name=container)
-        return str(p)
+    ds.to_netcdf(
+        local_path,
+        engine="netcdf4",
+        format="NETCDF4",
+        encoding=encoding,
+        compute=True,  # build + immediately compute the graph
+    )
+    for attempt in range(1, max_retries + 1):
+        try:
+            upload_file_to_blob(str(local_path), ds_path, container_name)
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt == max_retries:
+                raise
+            sleep = backoff_sec * 2 ** (attempt - 1)
+            print(
+                f"[save_dataset_to_netcdf] upload failed "
+                f"(attempt {attempt}/{max_retries}): {exc!s}\n"
+                f"… retrying in {sleep} s"
+            )
+            time.sleep(sleep)
 
-    # Save the dataset to the full path
-    with get_dask_client() as client:
-        future = client.submit(
-            _write_and_upload,
-            ds,
-            str(full_dataset_path),
-            enc,
-            ds_path,
-            container_name,
-            pure=False
-        )
-        output_path = future.result()
-        print('Saved dataset to:', output_path)
-
-    return full_dataset_path
+    print("Saved and uploaded dataset:", local_path)
+    return local_path
 
 
 def save_datasets_to_netcdf(
