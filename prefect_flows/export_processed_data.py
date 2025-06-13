@@ -291,13 +291,13 @@ def concatenate_batch_files(batch_key, cruise_id, files, denoised, container_nam
         # optional NetCDF
         if save_to_netcdf:
             nc_path = f"{batch_key}/{section['nc_name']}".format(batch_key=batch_key)
-            save_dataset_to_netcdf(
-                ds,
-                container_name=container_name,
-                ds_path=nc_path,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
+            # save_dataset_to_netcdf(
+            #     ds,
+            #     container_name=container_name,
+            #     ds_path=nc_path,
+            #     base_local_temp_path=NETCDF_ROOT_DIR,
+            #     is_temp_dir=False,
+            # )
 
     # 2) run through each category
     for category in CATEGORY_CONFIG:
@@ -569,20 +569,11 @@ def export_processed_data(cruise_id: str,
                                             chunks=chunks)
     future_con.wait()
 
-    # if save_to_netcdf:
-    #     future_zip = trigger_netcdf_flow.submit(
-    #         file_list=netcdf_outputs,
-    #         container=export_container_name
-    #     )
-    #     future_zip.wait()
-
-    if os.path.exists('/tmp/oceanstream/netcdfdata'):
-        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
-
     # Aggregate results by batch
     by_batch = defaultdict(list)
     agg_in_flight = []
     agg_side_tasks = []
+    files_to_convert = []
 
     for source_path, file_record in files_list:
         ts = file_record["file_start_time"]
@@ -623,6 +614,17 @@ def export_processed_data(cruise_id: str,
 
     for remaining in agg_in_flight + agg_side_tasks:
         remaining.result()
+
+    # if save_to_netcdf:
+    #     future_zip = trigger_netcdf_flow.submit(
+    #         file_list=files_to_convert,
+    #         container=export_container_name
+    #     )
+    #     future_zip.wait()
+
+    if os.path.exists('/tmp/oceanstream/netcdfdata'):
+        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
+
 
 
 def _batch_key(ts: datetime, width_days: int) -> str:
