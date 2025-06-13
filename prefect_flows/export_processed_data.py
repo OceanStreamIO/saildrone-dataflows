@@ -363,7 +363,13 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         # Apply denoising if specified
         denoising_applied = False
         print('5) Appying denoising')
-        sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
+
+        try:
+            sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
+        except Exception as e:
+            print(f"Error applying denoising to {zarr_path}: {str(e)}")
+            traceback.print_exc()
+            sv_dataset_denoised = None
 
         print('5) Denoising applied', sv_dataset_denoised)
 
