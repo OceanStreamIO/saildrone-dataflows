@@ -546,14 +546,14 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight:
         remaining.result()
 
-    # future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
-    #                                         container_name=export_container_name,
-    #                                         compute_nasc_options=compute_nasc_options,
-    #                                         plot_echograms=compute_nasc_options,
-    #                                         save_to_netcdf=save_to_netcdf,
-    #                                         colormap=colormap,
-    #                                         chunks=chunks)
-    # future_con.wait()
+    future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
+                                            container_name=export_container_name,
+                                            compute_nasc_options=compute_nasc_options,
+                                            plot_echograms=compute_nasc_options,
+                                            save_to_netcdf=save_to_netcdf,
+                                            colormap=colormap,
+                                            chunks=chunks)
+    future_con.wait()
 
     # Aggregate results by batch
     by_batch = defaultdict(list)

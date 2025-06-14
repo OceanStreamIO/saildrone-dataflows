@@ -33,8 +33,8 @@ def test_file_workflow_saildrone():
         use_index_binning=True
     )
     attenuated_signal_opts = dict(
-        upper_limit_sl=300,
-        lower_limit_sl=700,
+        upper_limit_sl=400,
+        lower_limit_sl=500,
         num_side_pings=15,
         threshold=10,
         range_var="depth"
@@ -71,9 +71,9 @@ def test_file_workflow_saildrone():
     sv_dataset_denoised = apply_denoising(ds,
                                           chunks_denoising=chunks,
                                           mask_impulse_noise=None,
-                                          mask_attenuated_signal=None,
+                                          mask_attenuated_signal=attenuated_signal_opts,
                                           mask_transient_noise=None,
-                                          remove_background_noise=background_noise_opts)
+                                          remove_background_noise=None)
     file_path_denoised = f"{cruise_id}/{file_name}/{file_name}--denoised.zarr"
     print(sv_dataset_denoised)
 
