@@ -87,13 +87,6 @@ def get_worker_addresses(scheduler: str) -> list[str]:
         return list(c.scheduler_info()["workers"])
 
 
-@task(log_prints=True)
-def zip_netcdf_outputs(nc_file_paths, zip_name, container_name):
-    flat_paths = [p for group in nc_file_paths for p in group if p]  # flatten and skip empty
-
-    zip_and_save_netcdf_files(flat_paths, zip_name, container_name, tmp_dir=NETCDF_ROOT_DIR + '/tmp')
-    logging.info(f"Uploaded archive {zip_name} to container {container_name}")
-
 
 """
 ################################################### NASC ###################################################
@@ -239,113 +232,6 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, comp
 
 
 @task(
-    log_prints=True,
-    task_run_name="concatenate_batch_files--{batch_key}"
-)
-def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_echograms, save_to_netcdf,
-                            colormap, **kwargs):
-    """Run NASC, MVBS, … for one calendar batch."""
-    # 1) bucket files by category
-    batch_results = {cat: [] for cat in CATEGORY_CONFIG}
-    chunks = kwargs.get('chunks', None)
-
-    for file_info in files:
-        freqs = file_info["file_freqs"]
-        for category, cfg in CATEGORY_CONFIG.items():
-            if cfg["freq_key"] is None or freqs == cfg["freq_key"]:
-                path = f"{cruise_id}/{file_info['file_name']}/{file_info['file_name']}.zarr"
-                batch_results[category].append(path)
-                break
-
-    def _process_category(cat: str):
-        paths = batch_results[cat]
-        if not paths:
-            return
-
-        section = CATEGORY_CONFIG[cat]
-        print('Concatenating files for category:', cat, 'with paths:', paths)
-        ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
-        print(f"Finished concatenating {cat} dataset:", ds.data_vars)
-
-        # save Zarr
-        zarr_path = f"{batch_key}/{section['zarr_name']}".format(batch_key=batch_key, denoised='')
-        save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
-
-        # optional echograms
-        if plot_echograms:
-            plot_and_upload_echograms(
-                ds,
-                file_base_name=section["file_base"].format(batch_key=batch_key, denoised=''),
-                save_to_blobstorage=True,
-                depth_var="depth",
-                upload_path=batch_key,
-                cmap=colormap,
-                container_name=container_name,
-            )
-
-        ##########################################################
-        print('5) Applying denoising')
-        try:
-            sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
-        except Exception as e:
-            print(f"Error applying denoising to {zarr_path}: {str(e)}")
-            traceback.print_exc()
-            sv_dataset_denoised = None
-
-        print('5) Denoising applied', sv_dataset_denoised)
-
-        if sv_dataset_denoised is not None:
-            zarr_path_denoised = f"{batch_key}/{section['zarr_name']}".format(batch_key=batch_key, denoised='--denoised')
-            save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_denoised)
-            print('6) Saved denoised dataset to Zarr store:', zarr_path)
-
-            if plot_echograms:
-                plot_and_upload_echograms(
-                    ds,
-                    file_base_name=section["file_base"].format(batch_key=batch_key, denoised='--denoised'),
-                    save_to_blobstorage=True,
-                    depth_var="depth",
-                    upload_path=batch_key,
-                    cmap=colormap,
-                    container_name=container_name,
-                )
-
-            if save_to_netcdf:
-                # FIXME: move the NetCDF convertion to a new flow
-                nc_file_path_denoised = zarr_path
-                # save_dataset_to_netcdf(
-                #     sv_dataset_denoised,
-                #     container_name=export_container_name,
-                #     ds_path=nc_file_path_denoised,
-                #     base_local_temp_path=NETCDF_ROOT_DIR,
-                #     is_temp_dir=False,
-                # )
-                #
-                # print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
-        ##########################################################
-
-        # optional NetCDF
-        if save_to_netcdf:
-            nc_path = f"{batch_key}/{section['nc_name']}".format(batch_key=batch_key, denoised='')
-            # save_dataset_to_netcdf(
-            #     ds,
-            #     container_name=container_name,
-            #     ds_path=nc_path,
-            #     base_local_temp_path=NETCDF_ROOT_DIR,
-            #     is_temp_dir=False,
-            # )
-
-    # 2) run through each category
-    for category in CATEGORY_CONFIG:
-        _process_category(category)
-
-    logging.info(
-        f"Running batch aggregation for key: {batch_key}, with {len(files)} files."
-    )
-    return batch_results
-
-
-@task(
     retries=3,
     retry_delay_seconds=60,
     retry_jitter_factor=0.1,
@@ -439,16 +325,45 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
 
 @task
-def trigger_netcdf_flow(container, file_list):
-    flat_paths = [p for group in file_list for p in group if p]  # flatten and skip empty
-
-    print('Triggering NetCDF flow with container:', flat_paths)
+def trigger_concatenate_flow(
+    files_list=None,
+    days_to_combine=1,
+    cruise_id='',
+    container_name='',
+    plot_echograms=False,
+    save_to_netcdf=False,
+    colormap='ocean_r',
+    compute_nasc_options=None,
+    compute_mvbs_options=None,
+    mask_impulse_noise=None,
+    mask_attenuated_signal=None,
+    mask_transient_noise=None,
+    remove_background_noise=None,
+    apply_seabed_mask=None,
+    chunks=None
+):
+    files = files_list.copy() if files_list else []
+    for source_path, file_record in files:
+        file_record.pop('location_data', None)
 
     state = run_deployment(
-        name="generate-netcdf-zip-export/generate-netcdf-zip",
+        name="concatenate-processed-files/concatenate_processed_files",
         parameters={
-            "output_container": container,
-            "file_list": flat_paths
+            "files_list": files,
+            "days_to_combine": days_to_combine,
+            'cruise_id': cruise_id,
+            'container_name': container_name,
+            'plot_echograms': plot_echograms,
+            'save_to_netcdf': save_to_netcdf,
+            'colormap': colormap,
+            'compute_nasc_options': compute_nasc_options,
+            'compute_mvbs_options': compute_mvbs_options,
+            'mask_impulse_noise': mask_impulse_noise,
+            'mask_attenuated_signal': mask_attenuated_signal,
+            'mask_transient_noise': mask_transient_noise,
+            'remove_background_noise': remove_background_noise,
+            'apply_seabed_mask': apply_seabed_mask,
+            'chunks': chunks
         },
         timeout=0
     )
@@ -462,7 +377,6 @@ def trigger_netcdf_flow(container, file_list):
 )
 def concatenate_batches(cruise_id, **kwargs):
     print("Concatenating batches with files:", cruise_id)
-
 
 
 @flow(
@@ -488,13 +402,8 @@ def export_processed_data(cruise_id: str,
                           save_to_netcdf: bool = False,
                           batch_size: int = BATCH_SIZE
                           ):
-    denoised = (mask_impulse_noise is not None or
-                mask_transient_noise is not None or
-                mask_attenuated_signal is not None or
-                remove_background_noise is not None)
-
     files_list = get_files_list(
-        source_directory=source_container,
+        source_container=source_container,
         cruise_id=cruise_id,
         start_datetime=start_datetime,
         end_datetime=end_datetime,
@@ -514,9 +423,8 @@ def export_processed_data(cruise_id: str,
         ensure_container_exists(export_container_name, public_access='container')
 
     in_flight = []
-    workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
-    n_workers = len(workers)
-    netcdf_outputs = []
+    # workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
+    # n_workers = len(workers)
 
     for idx, (source_path, file) in enumerate(files_list):
         # target_worker = workers[idx % n_workers]
@@ -546,96 +454,78 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight:
         remaining.result()
 
-    future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
-                                            container_name=export_container_name,
-                                            compute_nasc_options=compute_nasc_options,
-                                            plot_echograms=compute_nasc_options,
-                                            save_to_netcdf=save_to_netcdf,
-                                            colormap=colormap,
-                                            chunks=chunks)
-    future_con.wait()
+    # future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
+    #                                         container_name=export_container_name,
+    #                                         compute_nasc_options=compute_nasc_options,
+    #                                         plot_echograms=compute_nasc_options,
+    #                                         save_to_netcdf=save_to_netcdf,
+    #                                         colormap=colormap,
+    #                                         chunks=chunks)
+    # future_con.wait()
+    #
+    # # Aggregate results by batch
+    # by_batch = defaultdict(list)
+    # agg_in_flight = []
+    # agg_side_tasks = []
+    #
+    # for key, files in batches:
+    #     print('Processing batch:', key, 'with', len(files), 'files.')
+    #     future = concatenate_batch_files.submit(key, cruise_id, files, export_container_name, plot_echograms,
+    #                                             save_to_netcdf, colormap,
+    #                                             mask_impulse_noise=mask_impulse_noise,
+    #                                             mask_attenuated_signal=mask_attenuated_signal,
+    #                                             mask_transient_noise=mask_transient_noise,
+    #                                             remove_background_noise=remove_background_noise,
+    #                                             apply_seabed_mask=apply_seabed_mask,
+    #                                             chunks=chunks)
+    #
+    #     agg_in_flight.append(future)
+    #
+    #     if compute_nasc_options:
+    #         future_nasc_task = compute_batch_nasc.submit(future, key, cruise_id, export_container_name,
+    #                                                      compute_nasc_options=compute_nasc_options,
+    #                                                      plot_echograms=plot_echograms,
+    #                                                      save_to_netcdf=save_to_netcdf,
+    #                                                      colormap=colormap,
+    #                                                      chunks=chunks)
+    #         agg_side_tasks.append(future_nasc_task)
+    #
+    #     if compute_mvbs_options:
+    #         future_mvbs_task = compute_batch_mvbs.submit(future, key, cruise_id, export_container_name,
+    #                                                      compute_mvbs_options=compute_mvbs_options,
+    #                                                      plot_echograms=plot_echograms,
+    #                                                      save_to_netcdf=save_to_netcdf,
+    #                                                      colormap=colormap,
+    #                                                      chunks=chunks)
+    #         agg_side_tasks.append(future_mvbs_task)
+    #
+    #     if len(agg_in_flight) >= batch_size:
+    #         finished = next(as_completed(agg_in_flight))
+    #         agg_in_flight.remove(finished)
+    #
+    # all_futures = agg_in_flight + agg_side_tasks
+    #
+    # for remaining in all_futures:
+    #     remaining.result()
 
-    # Aggregate results by batch
-    by_batch = defaultdict(list)
-    agg_in_flight = []
-    agg_side_tasks = []
-    files_to_convert = []
-
-    for source_path, file_record in files_list:
-        ts = file_record["file_start_time"]
-        key = _batch_key(ts, days_to_combine)
-        by_batch[key].append(file_record)
-
-    batches = by_batch.items()
-    print(f"Total batches to process: {len(batches)}")
-
-    for key, files in batches:
-        print('Processing batch:', key, 'with', len(files), 'files.')
-        future = concatenate_batch_files.submit(key, cruise_id, files, export_container_name, plot_echograms,
-                                                save_to_netcdf,
-                                                colormap,
-                                                mask_impulse_noise=mask_impulse_noise,
-                                                mask_attenuated_signal=mask_attenuated_signal,
-                                                mask_transient_noise=mask_transient_noise,
-                                                remove_background_noise=remove_background_noise,
-                                                apply_seabed_mask=apply_seabed_mask,
-                                                chunks=chunks)
-
-        agg_in_flight.append(future)
-
-        if compute_nasc_options:
-            future_nasc_task = compute_batch_nasc.submit(future, key, cruise_id, export_container_name,
-                                                         compute_nasc_options=compute_nasc_options,
-                                                         plot_echograms=plot_echograms,
-                                                         save_to_netcdf=save_to_netcdf,
-                                                         colormap=colormap,
-                                                         chunks=chunks)
-            agg_side_tasks.append(future_nasc_task)
-
-        if compute_mvbs_options:
-            future_mvbs_task = compute_batch_mvbs.submit(future, key, cruise_id, export_container_name,
-                                                         compute_mvbs_options=compute_mvbs_options,
-                                                         plot_echograms=plot_echograms,
-                                                         save_to_netcdf=save_to_netcdf,
-                                                         colormap=colormap,
-                                                         chunks=chunks)
-            agg_side_tasks.append(future_mvbs_task)
-
-        if len(agg_in_flight) >= batch_size:
-            finished = next(as_completed(agg_in_flight))
-            agg_in_flight.remove(finished)
-
-    for remaining in agg_in_flight + agg_side_tasks:
-        remaining.result()
-
-    # if save_to_netcdf:
-    #     future_zip = trigger_netcdf_flow.submit(
-    #         file_list=files_to_convert,
-    #         container=export_container_name
-    #     )
-    #     future_zip.wait()
-
-    if os.path.exists('/tmp/oceanstream/netcdfdata'):
-        shutil.rmtree('/tmp/oceanstream/netcdfdata', ignore_errors=True)
-
-
-
-def _batch_key(ts: datetime, width_days: int) -> str:
-    """
-    Anchor `ts` to the start of its `width`-day window and return a
-    filename-safe key.
-      width == 1  →  '2023-08-08'
-      width >  1  →  '2023-08-08_to_2023-08-10'   (inclusive range)
-    """
-    anchor = datetime(ts.year, ts.month, ts.day)  # midnight of that day
-
-    if width_days == 1:
-        return f"{anchor:%Y-%m-%d}"
-
-    anchor -= timedelta(days=(anchor - datetime.min).days % width_days)
-    end = anchor + timedelta(days=width_days - 1)
-
-    return f"{anchor:%Y-%m-%d}_to_{end:%Y-%m-%d}"
+    future_zip = trigger_concatenate_flow.submit(
+        files_list=files_list,
+        days_to_combine=days_to_combine,
+        cruise_id=cruise_id,
+        container_name=export_container_name,
+        plot_echograms=plot_echograms,
+        save_to_netcdf=save_to_netcdf,
+        colormap=colormap,
+        compute_nasc_options=compute_nasc_options,
+        compute_mvbs_options=compute_mvbs_options,
+        mask_impulse_noise=mask_impulse_noise,
+        mask_attenuated_signal=mask_attenuated_signal,
+        mask_transient_noise=mask_transient_noise,
+        remove_background_noise=remove_background_noise,
+        apply_seabed_mask=apply_seabed_mask,
+        chunks=chunks
+    )
+    future_zip.wait()
 
 
 if __name__ == "__main__":
