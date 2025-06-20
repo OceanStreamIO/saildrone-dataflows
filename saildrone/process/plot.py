@@ -12,7 +12,8 @@ from saildrone.store import upload_folder_to_blob_storage
 
 
 def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
-                 depth_var: str = 'range_sample', colorbar_orientation: str = 'vertical', plot_var='Sv') -> list:
+                 depth_var: str = 'range_sample', colorbar_orientation: str = 'vertical', plot_var='Sv',
+                 title_template='{channel_label}') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -38,7 +39,8 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
     for channel in range(ds_Sv.dims['channel']):
         try:
             echogram_file_path = plot_individual_channel_simplified(ds_Sv, channel, file_base_name, output_path, cmap,
-                                                                    depth_var, colorbar_orientation, plot_var)
+                                                                    depth_var, colorbar_orientation, plot_var,
+                                                                    title_template)
             echogram_files.append(echogram_file_path)
         except Exception as e:
             print(f"Error plotting echogram for {file_base_name}: {e}")
@@ -55,7 +57,8 @@ def plot_individual_channel_simplified(
     cmap: str = "viridis",
     depth_var: str = "depth",
     colorbar_orientation: str = "horizontal",
-    plot_var: str = "Sv"
+    plot_var: str = "Sv",
+    title_template: str = "{channel_label}"
 ):
     # ───────────────────────────────────────────────────────────────────
     # 0) label & select the DataArray
@@ -70,7 +73,7 @@ def plot_individual_channel_simplified(
     # 1a) choose x-axis: prefer 'distance', fall back to 'ping_time'
     if "distance" in da_Sv.coords:
         xdim = "distance"
-        x_label = "Along-track distance [nmi]"  # tweak as needed
+        x_label = "Along-track distance [nmi]"
         x_formatter = None  # plain numeric
     else:
         xdim = "ping_time"
@@ -121,7 +124,7 @@ def plot_individual_channel_simplified(
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(x_formatter)
 
-    # 4) optional seabed overlay … (unchanged)
+    # 4) optional seabed overlay
 
     # 5) add colour-bar
     if colorbar_orientation == "horizontal":
@@ -150,7 +153,9 @@ def plot_individual_channel_simplified(
         fontsize=16,
         labelpad=14,
     )
-    ax.set_title(ch_lab, fontsize=18, fontweight="bold", pad=16)
+
+    title_str = title_template.format(channel_label=ch_lab)
+    ax.set_title(title_str, fontsize=18, fontweight="bold", pad=16)
     ax.tick_params(which="major", length=6, width=1, labelsize=11)
     ax.tick_params(which="minor", length=3, width=0.5)
     plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
@@ -318,7 +323,7 @@ def __plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_b
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
                               file_name=None, output_path=None, upload_path=None, container_name=None,
-                              cmap='ocean_r', depth_var='depth', plot_var='Sv'):
+                              cmap='ocean_r', depth_var='depth', plot_var='Sv', title_template='{channel_label}'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
     else:
@@ -334,7 +339,8 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
                                   file_base_name=file_name,
                                   output_path=echograms_output_path,
                                   plot_var=plot_var,
-                                  cmap=cmap)
+                                  cmap=cmap,
+                                  title_template=title_template)
 
     if save_to_blobstorage:
         upload_path = upload_path or f'{cruise_id}/{file_base_name}'

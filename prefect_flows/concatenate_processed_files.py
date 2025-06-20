@@ -84,7 +84,7 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
     }
 
     def _run(pulse, tag):
-        root = f"{batch_key}/{tag}"
+        root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
         ds = open_zarr_store(f"{root}{suffix}.zarr",
                              container_name=container_name,
@@ -103,17 +103,17 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
         )
         results[pulse] = nasc
 
-        if plot_echograms:
-            plot_and_upload_echograms(
-                nasc,
-                file_base_name=f"{tag}--nasc",
-                save_to_blobstorage=True,
-                depth_var="depth",
-                upload_path=f"{batch_key}",
-                cmap=colormap,
-                plot_var='NASC_log',
-                container_name=container_name,
-            )
+        # if plot_echograms:
+        #     plot_and_upload_echograms(
+        #         nasc,
+        #         file_base_name=f"{tag}--nasc",
+        #         save_to_blobstorage=True,
+        #         depth_var="depth",
+        #         upload_path=f"{batch_key}",
+        #         cmap=colormap,
+        #         plot_var='NASC_log',
+        #         container_name=container_name,
+        #     )
 
         if save_to_netcdf:
             save_dataset_to_netcdf(
@@ -146,7 +146,7 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
     }
 
     def _run(pulse, tag):
-        root = f"{batch_key}/{tag}"
+        root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
         ds = open_zarr_store(f"{root}{suffix}.zarr", container_name=container_name, chunks=chunks,
                              rechunk_after=True)
@@ -174,6 +174,7 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
                 upload_path=f"{batch_key}",
                 cmap=colormap,
                 container_name=container_name,
+                title_template=f"{batch_key} ({tag})" + " | MVBS | {channel_label}",
             )
 
         if save_to_netcdf:
@@ -222,22 +223,23 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         print(f"Finished concatenating {cat} dataset:", ds)
 
         # save Zarr
-        zarr_path = f"{batch_key}/{section['zarr_name']}".format(batch_key=batch_key, denoised='')
+        zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
         save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
 
         # optional echograms
         if plot_echograms:
             plot_and_upload_echograms(
                 ds,
-                file_base_name=section["file_base"].format(batch_key=batch_key, denoised=''),
+                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
                 save_to_blobstorage=True,
                 depth_var="depth",
                 upload_path=batch_key,
                 cmap=colormap,
+                title_template=f"{batch_key} ({cat})" + " | {channel_label}",
                 container_name=container_name,
             )
 
-        ##########################################################
+        ##############################################################################################################
         print('5) Applying denoising')
         try:
             sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
@@ -249,25 +251,24 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         print('5) Denoising applied', sv_dataset_denoised)
 
         if sv_dataset_denoised is not None:
-            zarr_path_denoised = f"{batch_key}/{section['zarr_name']}".format(batch_key=batch_key,
-                                                                              denoised='--denoised')
+            zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
             save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_denoised)
             print('6) Saved denoised dataset to Zarr store:', zarr_path)
 
             if plot_echograms:
                 plot_and_upload_echograms(
                     ds,
-                    file_base_name=section["file_base"].format(batch_key=batch_key, denoised='--denoised'),
+                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
                     save_to_blobstorage=True,
                     depth_var="depth",
                     upload_path=batch_key,
                     cmap=colormap,
                     container_name=container_name,
+                    title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 )
 
             if save_to_netcdf:
-                nc_file_path_denoised = f"{batch_key}/{section['nc_name']}".format(batch_key=batch_key,
-                                                                                   denoised='--denoised')
+                nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
                 save_dataset_to_netcdf(
                     sv_dataset_denoised,
                     container_name=container_name,
@@ -277,11 +278,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 )
 
                 print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
-        ##########################################################
+        ###############################################################################################################
 
         # optional NetCDF
         if save_to_netcdf:
-            nc_path = f"{batch_key}/{section['nc_name']}".format(batch_key=batch_key, denoised='')
+            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
             save_dataset_to_netcdf(
                 ds,
                 container_name=container_name,

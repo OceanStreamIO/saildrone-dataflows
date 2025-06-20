@@ -419,8 +419,7 @@ def export_processed_data(cruise_id: str,
     }
 
     export_container_name = output_container if output_container != '' else generate_container_name(cruise_id)
-    if output_container == '':
-        ensure_container_exists(export_container_name, public_access='container')
+    ensure_container_exists(export_container_name, public_access='container')
 
     in_flight = []
     # workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
