@@ -12,19 +12,16 @@ from datetime import datetime
 from xarray import Dataset
 from pathlib import Path
 from typing import Optional, Tuple
-from echopype.mask import apply_mask
-from echopype.clean import mask_transient_noise as mask_transient_noise_func
+
 from echopype.commongrid import compute_NASC, compute_MVBS
 from prefect.futures import as_completed
 
 from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, list_zarr_files)
 from saildrone.azure_iot import serialize_location_data
-from saildrone.denoise import (get_impulse_noise_mask,
-                               create_multichannel_mask,
-                               get_attenuation_mask,
-                               remove_background_noise as remove_background_noise_func)
 from saildrone.utils import load_local_files, get_metadata_for_files
+from saildrone.denoise import (attenuation_mask, background_noise_mask, transient_noise_mask, impulsive_noise_mask,
+                               build_full_mask, apply_full_mask)
 
 from .seabed import mask_true_seabed
 from .echodata import open_echodata
@@ -757,117 +754,50 @@ def _update_file_failure(file_segment_service, file_id: int, error_message: str)
 
 
 def apply_denoising(sv_dataset, **kwargs):
-    mask_impulse_noise = kwargs.get("mask_impulse_noise", False)
-    mask_attenuated_signal = kwargs.get("mask_attenuated_signal", False)
-    mask_transient_noise = kwargs.get("mask_transient_noise", False)
-    remove_background_noise = kwargs.get("remove_background_noise", False)
-    chunks_denoising = kwargs.get("chunks_denoising")
+    impulse_noise_opts = kwargs.get("mask_impulse_noise", None)
+    attenuated_signal_opts = kwargs.get("mask_attenuated_signal", None)
+    transient_noise_opts = kwargs.get("mask_transient_noise", None)
+    background_noise_opts = kwargs.get("remove_background_noise", None)
 
-    sv_dataset_denoised = None
-    range_var_dim_swapped = False
-    range_var = None
+    if not any([impulse_noise_opts, attenuated_signal_opts, transient_noise_opts, background_noise_opts]):
+        return sv_dataset
 
-    #####################################################################
-    # Step 1: Apply impulse noise mask
-    #####################################################################
-    if mask_impulse_noise:
-        mask_channels = []
-        range_var = mask_impulse_noise.get('range_var')
-
-        if range_var in sv_dataset.dims:
-            sv_for_clean = sv_dataset
-        else:
-            sv_for_clean = sv_dataset.set_coords(range_var).swap_dims({'depth': range_var})
-            range_var_dim_swapped = True
-
-        print('Range variable for impulse noise mask:', range_var, 'range_var_dim_swapped:', range_var_dim_swapped)
-
-        params_impulse = {
-            "depth_bin": mask_impulse_noise.get('depth_bin'),
-            "num_side_pings": mask_impulse_noise.get('num_side_pings'),
-            "impulse_noise_threshold": mask_impulse_noise.get('threshold'),
-            "range_var": range_var,
-            "use_index_binning": False
+    stages = {
+        "signal-attenuation": {
+            "fn": attenuation_mask,
+            "param_sets": attenuated_signal_opts
+        },
+        "impulsive": {
+            "fn": impulsive_noise_mask,
+            "param_sets": impulse_noise_opts,
+        },
+        "transient": {
+            "fn": transient_noise_mask,
+            "param_sets": transient_noise_opts,
+        },
+        "background": {
+            "fn": background_noise_mask,
+            "param_sets": background_noise_opts,
         }
+    }
 
-        for channel in sv_for_clean.coords["channel"].values:
-            impulse_noise_mask = get_impulse_noise_mask(sv_for_clean, params_impulse, desired_channel=channel)
-            mask_channels.append(impulse_noise_mask)
-        multi_channel_mask = create_multichannel_mask(mask_channels, sv_for_clean)
-        sv_dataset_denoised = apply_mask(sv_for_clean, multi_channel_mask, var_name="Sv")
+    full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
+    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=False)
 
-        if range_var_dim_swapped and range_var is not None:
-            sv_dataset_denoised = sv_dataset_denoised.swap_dims({'range_sample': "depth"}).reset_coords("range_sample")
+    mask_dict = {"full": full_mask, **dict(stage_cubes)}
 
-    #####################################################################
-    # Step 2: Apply attenuated signal mask
-    #####################################################################
-    if mask_attenuated_signal:
-        mask_channels = []
-        range_var = mask_attenuated_signal.get('range_var')
+    mask_vars = {
+        f"mask_{key.replace(' ', '_').lower()}": arr.astype("bool")
+        for key, arr in mask_dict.items()
+    }
 
-        params_attn = {
-            "upper_limit_sl": mask_attenuated_signal.get('upper_limit_sl'),
-            "lower_limit_sl": mask_attenuated_signal.get('lower_limit_sl'),
-            "num_side_pings": mask_attenuated_signal.get('num_side_pings'),
-            "attenuation_signal_threshold": mask_attenuated_signal.get('threshold'),
-            "range_var": range_var
-        }
-
-        if sv_dataset_denoised is None:
-            sv_dataset_denoised = sv_dataset
-
-        for channel in sv_dataset.coords["channel"].values:
-            attn_signal_mask = get_attenuation_mask(sv_dataset_denoised, params_attn, desired_channel=channel)
-            mask_channels.append(attn_signal_mask)
-        multi_channel_mask = create_multichannel_mask(mask_channels, sv_dataset_denoised)
-        sv_dataset_denoised = apply_mask(sv_dataset_denoised, multi_channel_mask, var_name="Sv")
-
-    #####################################################################
-    # Step 3: Apply transient noise mask
-    #####################################################################
-    if mask_transient_noise:
-        threshold = f'{mask_transient_noise.get("threshold", 12.0)}dB'
-        exclude_above = f'{mask_transient_noise.get("exclude_above", 250.0)}m'
-        depth_bin = f'{mask_transient_noise.get("depth_bin", "10")}m'
-        num_side_pings = mask_transient_noise.get('num_side_pings', 25)
-        if sv_dataset_denoised is None:
-            sv_dataset_denoised = sv_dataset
-
-        transient_mask = mask_transient_noise_func(
-            sv_dataset_denoised,
-            func=mask_transient_noise.get('operation', 'nanmean'),
-            depth_bin=depth_bin,
-            num_side_pings=num_side_pings,
-            exclude_above=exclude_above,
-            transient_noise_threshold=threshold,
-            range_var=mask_transient_noise.get('range_var', 'depth'),
-            use_index_binning=True,
-            chunk_dict=chunks_denoising
+    mask_vars = {
+        name: arr.broadcast_like(sv_dataset["Sv"]).assign_attrs(
+            long_name=f"{key} quality-control mask (True = bad)"
         )
+        for (name, arr), (key, _) in zip(mask_vars.items(), mask_dict.items())
+    }
 
-        fill_value = np.nan
-        sv_dataset_denoised['Sv'] = xr.where(
-            transient_mask,
-            fill_value,
-            sv_dataset_denoised["Sv"]
-        )
-        sv_dataset_denoised = apply_mask(sv_dataset, transient_mask, var_name="Sv")
+    sv_dataset_denoised = sv_dataset_denoised.merge(mask_vars, compat="no_conflicts")
 
-    #####################################################################
-    # Step 4: Remove background noise
-    #####################################################################
-    if remove_background_noise:
-        if sv_dataset_denoised is None:
-            sv_dataset_denoised = sv_dataset
-
-        sv_dataset_denoised = remove_background_noise_func(sv_dataset_denoised,
-                                                           ping_num=remove_background_noise.get('ping_num'),
-                                                           SNR_threshold=remove_background_noise.get('SNR_threshold'),
-                                                           range_sample_num=remove_background_noise.get(
-                                                               'range_sample_num'),
-                                                           background_noise_max=remove_background_noise.get(
-                                                               'background_noise_max')
-                                                           )
-
-    return sv_dataset_denoised
+    return sv_dataset_denoised, mask_dict

@@ -148,14 +148,14 @@ def test_file_workflow_saildrone():
     # source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231010-T095958-0.zarr')
     #source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231008-T005959-0.zarr')
     # source_path = Path('converted/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231008-T065958-0.zarr')
-    # source_path = Path('echodata/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231007-T235959-0.zarr')
-    source_path = Path(f'test/data/{file_name}.raw')
+    source_path = Path('echodata/SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231007-T235959-0.zarr')
+    # source_path = Path(f'test/data/{file_name}.raw')
     # source_path = Path('test/reka-shipboard/converted/SE2204_-D20220706-T171126.zarr')
     cruise_id = 'SD_TPOS2023_v03'
     # cruise_id = 'SE2204'
     output_path = 'test/processed'
     save_to_blobstorage = False
-    load_from_blobstorage = False
+    load_from_blobstorage = True
     converted_container_name = 'echodata'
     save_to_directory = True
     # processed_container_name = 'localnetcdftest'
@@ -172,14 +172,14 @@ def test_file_workflow_saildrone():
         depth_bin=5,
         num_side_pings=2,
         threshold=10,
-        range_var="echo_range",
+        range_var="range_sample",
         use_index_binning=True
     )
     attenuated_signal_opts = dict(
-        upper_limit_sl=180,
-        lower_limit_sl=300,
+        upper_limit_sl=400,
+        lower_limit_sl=550,
         num_side_pings=15,
-        threshold=10,
+        threshold=8,
         range_var="range_sample"
     )
 
@@ -197,13 +197,8 @@ def test_file_workflow_saildrone():
     chunks = {'ping_time': 2000, 'range_sample': 1000}
     chunks_denoising = {'ping_time': 1000, 'depth': 1000}
 
-    echodata = open_raw(source_path, sonar_model="EK80")
-    echodata = apply_calibration(echodata, './calibration/calibration_values.xlsx')
-    output_data = Path('test/data/SD_TPOS2023_v03-Phase0-D20231007-T235959-0.zarr')
-    echodata.to_zarr(output_data, overwrite=True)
-
     payload = process_converted_file(
-        output_data,
+        source_path,
         file_name=file_name,
         cruise_id=cruise_id,
         output_path=output_path,
@@ -224,11 +219,11 @@ def test_file_workflow_saildrone():
         compute_mvbs=False,
         colormap='ocean_r',
         mask_transient_noise=None,
-        mask_impulse_noise=impulse_noise_opts,
+        mask_impulse_noise=None,
         mask_attenuated_signal=attenuated_signal_opts,
-        remove_background_noise=background_noise_opts,
+        remove_background_noise=None,
         chunks_denoising=chunks_denoising,
-        apply_seabed_mask=True,
+        apply_seabed_mask=False,
     )
 
     print(payload)

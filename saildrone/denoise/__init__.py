@@ -1,14 +1,15 @@
-from .impulse_noise import get_impulse_noise_mask
-from .attenuation_signal import get_attenuation_mask
-from .transient_noise import get_transient_noise_mask
-from .denoise import create_multichannel_mask
-from .remove_background_noise import remove_background_noise
+from .attenuation_signal import attenuation_mask
+from .background_noise import background_noise_mask
+from .transient_noise import transient_noise_mask
+from .impulse_noise import impulsive_noise_mask
+from .mask import build_full_mask, apply_full_mask
 
 
 __all__ = [
-    'get_impulse_noise_mask',
-    'get_attenuation_mask',
-    'get_transient_noise_mask',
-    'create_multichannel_mask',
-    'remove_background_noise'
+    'attenuation_mask',
+    'background_noise_mask',
+    'transient_noise_mask',
+    'impulsive_noise_mask',
+    'build_full_mask',
+    'apply_full_mask'
 ]

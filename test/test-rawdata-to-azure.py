@@ -5,7 +5,6 @@ import pytest
 from echopype.convert.api import open_raw
 from echopype.commongrid import compute_NASC, compute_MVBS
 
-from saildrone.process import apply_calibration
 from saildrone.process.workflow import compute_sv
 from saildrone.store import ensure_container_exists, open_converted, save_zarr_store
 
@@ -22,7 +21,7 @@ def test_convert_and_write_to_azure():
 
     file_path = f'./test/data/{filename}.raw'
     echodata = open_raw(file_path, sonar_model=SONAR_MODEL)
-    echodata = apply_calibration(echodata, './calibration/calibration_values.xlsx')
+    # echodata = apply_calibration(echodata, './calibration/calibration_values.xlsx')
 
     sv_dataset = compute_sv(echodata)
     sv_dataset.to_zarr(store=f'./test/combined/{filename}.zarr', mode='w', consolidated=True)

@@ -232,7 +232,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 ds,
                 file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
                 save_to_blobstorage=True,
-                depth_var="depth",
                 upload_path=batch_key,
                 cmap=colormap,
                 title_template=f"{batch_key} ({cat})" + " | {channel_label}",
@@ -321,9 +320,13 @@ def concatenate_processed_files(files_list=None,
     by_batch = defaultdict(list)
     in_flight = []
     side_tasks = []
-    denoised = (mask_impulse_noise is not None or mask_attenuated_signal is not None or
-                mask_transient_noise is not None or remove_background_noise is not None or
-                apply_seabed_mask is not None)
+    denoised = (
+            mask_impulse_noise
+            or mask_attenuated_signal
+            or mask_transient_noise
+            or remove_background_noise
+            or apply_seabed_mask
+    )
 
     for source_path, file_record in files_list:
         ts = datetime.fromisoformat(file_record["file_start_time"])

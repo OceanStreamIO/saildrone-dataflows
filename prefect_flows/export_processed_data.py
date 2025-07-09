@@ -19,7 +19,7 @@ from prefect.futures import as_completed, PrefectFuture
 from prefect.deployments import run_deployment
 
 from prefect_flows.pydantic_models import NASC_Compute_Options, MVBS_Compute_Options, MaskImpulseNoise, \
-    MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise
+    MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise, fill_missing_frequency_params
 
 from saildrone.process import apply_denoising, plot_and_upload_echograms, get_files_list
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
@@ -402,6 +402,19 @@ def export_processed_data(cruise_id: str,
                           save_to_netcdf: bool = False,
                           batch_size: int = BATCH_SIZE
                           ):
+
+    if mask_impulse_noise not in (None, False):
+        mask_impulse_noise = fill_missing_frequency_params(mask_impulse_noise)
+
+    if remove_background_noise not in (None, False):
+        remove_background_noise = fill_missing_frequency_params(remove_background_noise)
+
+    if mask_attenuated_signal not in (None, False):
+        mask_attenuated_signal = fill_missing_frequency_params(mask_attenuated_signal)
+
+    if mask_transient_noise not in (None, False):
+        mask_transient_noise = fill_missing_frequency_params(mask_transient_noise)
+
     files_list = get_files_list(
         source_container=source_container,
         cruise_id=cruise_id,
