@@ -241,7 +241,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         ##############################################################################################################
         print('5) Applying denoising')
         try:
-            sv_dataset_denoised = apply_denoising(ds, chunks_denoising=chunks, **kwargs)
+            sv_dataset_denoised, mask_dict = apply_denoising(ds, **kwargs)
         except Exception as e:
             print(f"Error applying denoising to {zarr_path}: {str(e)}")
             traceback.print_exc()
@@ -256,10 +256,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
             if plot_echograms:
                 plot_and_upload_echograms(
-                    ds,
+                    sv_dataset_denoised,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
                     save_to_blobstorage=True,
-                    depth_var="depth",
                     upload_path=batch_key,
                     cmap=colormap,
                     container_name=container_name,
