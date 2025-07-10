@@ -226,6 +226,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         # save Zarr
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
         save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
+        print(f"Finished saving zarr dataset to:", zarr_path)
 
         # optional NetCDF
         if save_to_netcdf:
@@ -237,6 +238,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 base_local_temp_path=NETCDF_ROOT_DIR,
                 is_temp_dir=False,
             )
+            print(f"Finished saving netcdf dataset to:", nc_path)
 
         # optional echograms
         if plot_echograms:
@@ -271,7 +273,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         if sv_dataset_denoised is not None:
             sv_dataset_denoised = sv_dataset_denoised.compute()
-            
+
             if plot_echograms:
                 plot_and_upload_echograms(
                     sv_dataset_denoised,
