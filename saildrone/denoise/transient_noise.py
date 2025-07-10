@@ -6,13 +6,8 @@ from typing import Tuple, Dict
 
 
 def rolling_nanpercentile(arr: np.ndarray | da.Array, q: float, axis=None):
-    if isinstance(arr, da.Array):
-        # result is a 0-D array → drop chunks, keep dtype
-        return da.map_blocks(
-            np.nanpercentile, arr, dtype=arr.dtype, chunks=(), q=q, axis=axis
-        )
-    
-    return np.nanpercentile(arr, q, axis=axis)
+    arr_np = np.asarray(arr)
+    return np.nanpercentile(arr_np, q, axis=axis, keepdims=True)
 
 
 def transient_noise_mask(
