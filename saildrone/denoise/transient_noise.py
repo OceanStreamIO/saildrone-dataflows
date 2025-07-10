@@ -1,7 +1,18 @@
 import numpy as np
 import xarray as xr
+import dask.array as da
 
 from typing import Tuple, Dict
+
+
+def rolling_nanpercentile(arr: np.ndarray | da.Array, q: float, axis=None):
+    """
+    Percentile reducer that works for both NumPy and Dask arrays.
+    """
+    if isinstance(arr, da.Array):
+        return da.nanpercentile(arr, q, axis=axis)
+
+    return np.nanpercentile(arr, q, axis=axis)
 
 
 def transient_noise_mask(
@@ -57,10 +68,10 @@ def transient_noise_mask(
         min_periods=min_periods,
     )
 
-    def _np_pct(arr: np.ndarray, axis=None):
-        return np.nanpercentile(arr, perc, axis=axis)
-
-    block_lin = rolled.reduce(_np_pct, keep_attrs=True)
+    block_lin = rolled.reduce(
+        lambda a, axis=None, q=perc: rolling_nanpercentile(a, q, axis=axis),
+        keep_attrs=True,
+    )
 
     # back to dB
     block_db = 10.0 * np.log10(block_lin)
