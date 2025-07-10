@@ -2,6 +2,7 @@ import numpy as np
 import xarray as xr
 import dask.array as da
 
+from functools import partial
 from typing import Tuple, Dict
 
 
@@ -84,10 +85,13 @@ def transient_noise_mask(
         min_periods=min_periods,
     )
 
-    block_lin = rolled.reduce(
-        lambda a, axis=None, q=perc: rolling_nanpercentile(a, q, axis=axis),
-        keep_attrs=True,
-    )
+    pct_func = partial(rolling_nanpercentile, q=perc)
+    block_lin = rolled.reduce(pct_func, keep_attrs=True)
+
+    # block_lin = rolled.reduce(
+    #     lambda a, axis=None, q=perc: rolling_nanpercentile(a, q, axis=axis),
+    #     keep_attrs=True,
+    # )
 
     # back to dB
     block_db = 10.0 * np.log10(block_lin)
