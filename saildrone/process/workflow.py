@@ -763,23 +763,32 @@ def apply_denoising(sv_dataset, **kwargs):
         return sv_dataset
 
     stages = {
-        "signal-attenuation": {
+    }
+
+    if attenuated_signal_opts:
+        stages["signal-attenuation"] = {
             "fn": attenuation_mask,
             "param_sets": attenuated_signal_opts
-        },
-        "impulsive": {
+        }
+
+    if impulse_noise_opts:
+        stages["impulsive"] = {
             "fn": impulsive_noise_mask,
             "param_sets": impulse_noise_opts,
-        },
-        "transient": {
+        }
+
+    if transient_noise_opts:
+        stages["transient"] = {
             "fn": transient_noise_mask,
             "param_sets": transient_noise_opts,
-        },
-        "background": {
+        }
+
+    if background_noise_opts:
+        stages["background"] = {
             "fn": background_noise_mask,
             "param_sets": background_noise_opts,
         }
-    }
+
 
     full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
     sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=False)
