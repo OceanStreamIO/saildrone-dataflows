@@ -5,9 +5,30 @@ import dask.array as da
 from typing import Tuple, Dict
 
 
-def rolling_nanpercentile(arr: np.ndarray | da.Array, q: float, axis=None):
-    arr_np = np.asarray(arr)
-    return np.nanpercentile(arr_np, q, axis=axis, keepdims=True)
+def _nanpct_keepdims(block: np.ndarray, *, q: float, axis=None):
+    """
+    NumPy helper: percentile over `axis`, but broadcast back so the result
+    has the *same shape* as `block`.  This satisfies xarray.rolling.reduce.
+    """
+    val = np.nanpercentile(block, q, axis=axis)
+    return np.broadcast_to(val, block.shape)          # keep dims!
+
+
+def rolling_nanpercentile(arr, *, q: float, axis=None):
+    """
+    Reducer usable in xarray.rolling.reduce that works for both NumPy
+    and Dask chunks, keeps dimensionality, and avoids the FutureWarning.
+    """
+    if isinstance(arr, da.Array):
+        return da.map_blocks(
+            _nanpct_keepdims,
+            arr,
+            dtype=arr.dtype,
+            chunks=arr.chunks,      # <- keep original chunk grid
+            q=q,
+            axis=axis,
+        )
+    return _nanpct_keepdims(arr, q=q, axis=axis)
 
 
 def transient_noise_mask(
