@@ -106,8 +106,14 @@ def _params_for_channel(param_sets, ch_ds):
         return param_sets                                    # single-dict case
 
     freq = float(ch_ds["frequency_nominal"].compute().item())  # per-frequency case
+    key_str = str(int(freq))
 
-    if freq not in param_sets:
-        raise ValueError(f"{freq} Hz parameters missing")
+    key_num = freq
 
-    return param_sets[freq]
+    if key_num in param_sets:
+        return param_sets[key_num]
+    
+    if key_str in param_sets:
+        return param_sets[key_str]
+
+    raise ValueError(f"{freq} Hz parameters missing")
