@@ -789,7 +789,6 @@ def apply_denoising(sv_dataset, **kwargs):
             "param_sets": background_noise_opts,
         }
 
-
     full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
     sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=False)
 

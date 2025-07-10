@@ -61,6 +61,16 @@ DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
 
+def _compute_dict(d):
+    out = {}
+    for k, v in d.items():
+        if hasattr(v, "compute"):
+            out[k] = v.compute()
+        else:
+            out[k] = v
+    return out
+
+
 def _nav_to_data_vars(ds):
     nav = ["latitude", "longitude", "speed_knots"]
     coords = [v for v in nav if v in ds.coords]
@@ -261,6 +271,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 ds_Sv = open_zarr_store(zarr_path, container_name=container_name, chunks=CHUNKS, rechunk_after=True)
                 print('ds_Sv', ds_Sv)
                 sv_dataset_denoised, mask_dict = apply_denoising(ds_Sv, **kwargs)
+
+                sv_dataset_denoised = sv_dataset_denoised.compute()  # <─ NEW
+                mask_dict = _compute_dict(mask_dict)
                 print('sv_dataset_denoised', sv_dataset_denoised)
 
                 if sv_dataset_denoised is not None:
