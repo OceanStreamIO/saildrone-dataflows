@@ -6,12 +6,6 @@ from typing import Tuple, Dict
 
 
 def rolling_nanpercentile(arr: np.ndarray | da.Array, q: float, axis=None):
-    """
-    Percentile reducer that works for both NumPy and Dask arrays.
-    """
-    if isinstance(arr, da.Array):
-        return da.nanpercentile(arr, q, axis=axis)
-
     return np.nanpercentile(arr, q, axis=axis)
 
 
