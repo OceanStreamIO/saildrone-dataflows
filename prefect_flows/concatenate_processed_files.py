@@ -109,7 +109,6 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
         #         nasc,
         #         file_base_name=f"{tag}--nasc",
         #         save_to_blobstorage=True,
-        #         depth_var="depth",
         #         upload_path=f"{batch_key}",
         #         cmap=colormap,
         #         plot_var='NASC_log',
@@ -171,7 +170,6 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
                 ds_mvbs,
                 file_base_name=f"{tag}--mvbs",
                 save_to_blobstorage=True,
-                depth_var="depth",
                 upload_path=f"{batch_key}",
                 cmap=colormap,
                 container_name=container_name,
@@ -258,10 +256,10 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             client = Client(address=DASK_CLUSTER_ADDRESS)
             print('Client', client)
 
-            with dask.config.set(scheduler="distributed"):
+            with client:
                 print('opening dataset')
-                ds_Sv = open_zarr_store(zarr_path, container_name=container_name)
-                print('ds_Sv', zarr_path)
+                ds_Sv = open_zarr_store(zarr_path, container_name=container_name, chunks=CHUNKS, rechunk_after=True)
+                print('ds_Sv', ds_Sv)
                 sv_dataset_denoised, mask_dict = apply_denoising(ds_Sv, **kwargs)
                 print('sv_dataset_denoised', sv_dataset_denoised)
 
