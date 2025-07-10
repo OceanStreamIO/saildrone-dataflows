@@ -220,45 +220,50 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         section = CATEGORY_CONFIG[cat]
         print('Concatenating files for category:', cat, f'with {len(paths)} paths:')
-        ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
+        # ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
         print(f"Finished concatenating {cat} dataset:", ds)
 
         # save Zarr
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
-        save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
+        # save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
         print(f"Finished saving zarr dataset to:", zarr_path)
 
         # optional NetCDF
-        if save_to_netcdf:
-            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            save_dataset_to_netcdf(
-                ds,
-                container_name=container_name,
-                ds_path=nc_path,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
-            print(f"Finished saving netcdf dataset to:", nc_path)
+        # if save_to_netcdf:
+        #     nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
+        #     save_dataset_to_netcdf(
+        #         ds,
+        #         container_name=container_name,
+        #         ds_path=nc_path,
+        #         base_local_temp_path=NETCDF_ROOT_DIR,
+        #         is_temp_dir=False,
+        #     )
+        #     print(f"Finished saving netcdf dataset to:", nc_path)
 
         # optional echograms
-        if plot_echograms:
-            plot_and_upload_echograms(
-                ds,
-                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
-                save_to_blobstorage=True,
-                upload_path=batch_key,
-                cmap=colormap,
-                title_template=f"{batch_key} ({cat})" + " | {channel_label}",
-                container_name=container_name,
-            )
+        # if plot_echograms:
+        #     plot_and_upload_echograms(
+        #         ds,
+        #         file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
+        #         save_to_blobstorage=True,
+        #         upload_path=batch_key,
+        #         cmap=colormap,
+        #         title_template=f"{batch_key} ({cat})" + " | {channel_label}",
+        #         container_name=container_name,
+        #     )
 
         ##############################################################################################################
         print('5) Applying denoising')
         try:
             client = Client(address=DASK_CLUSTER_ADDRESS)
+            print('Client', client)
+
             with dask.config.set(scheduler="distributed"):
+                print('opening dataset')
                 ds_Sv = open_zarr_store(zarr_path, container_name=container_name)
+                print('ds_Sv', zarr_path)
                 sv_dataset_denoised, mask_dict = apply_denoising(ds_Sv, **kwargs)
+                print('sv_dataset_denoised', sv_dataset_denoised)
 
                 if sv_dataset_denoised is not None:
                     zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
