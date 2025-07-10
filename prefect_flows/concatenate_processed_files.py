@@ -270,6 +270,8 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         print('5) Denoising applied', sv_dataset_denoised)
 
         if sv_dataset_denoised is not None:
+            sv_dataset_denoised = sv_dataset_denoised.compute()
+            
             if plot_echograms:
                 plot_and_upload_echograms(
                     sv_dataset_denoised,
