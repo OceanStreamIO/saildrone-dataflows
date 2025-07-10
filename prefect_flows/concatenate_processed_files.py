@@ -221,7 +221,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         section = CATEGORY_CONFIG[cat]
         print('Concatenating files for category:', cat, f'with {len(paths)} paths:')
         # ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
-        print(f"Finished concatenating {cat} dataset:", ds)
+        # print(f"Finished concatenating {cat} dataset:", ds)
 
         # save Zarr
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
