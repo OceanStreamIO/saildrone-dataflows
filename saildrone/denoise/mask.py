@@ -112,7 +112,7 @@ def _params_for_channel(param_sets, ch_ds):
 
     if key_num in param_sets:
         return param_sets[key_num]
-    
+
     if key_str in param_sets:
         return param_sets[key_str]
 

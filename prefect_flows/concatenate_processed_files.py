@@ -3,13 +3,14 @@ import os
 import shutil
 import sys
 import traceback
-from collections import defaultdict
+import dask
 
+from collections import defaultdict
+from dask.distributed import Client
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 from dotenv import load_dotenv
 
-from dask.distributed import Client
 
 from prefect import flow, task
 from prefect.cache_policies import Inputs
@@ -226,6 +227,17 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
         save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
 
+        # optional NetCDF
+        if save_to_netcdf:
+            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
+            save_dataset_to_netcdf(
+                ds,
+                container_name=container_name,
+                ds_path=nc_path,
+                base_local_temp_path=NETCDF_ROOT_DIR,
+                is_temp_dir=False,
+            )
+
         # optional echograms
         if plot_echograms:
             plot_and_upload_echograms(
@@ -241,7 +253,15 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         ##############################################################################################################
         print('5) Applying denoising')
         try:
-            sv_dataset_denoised, mask_dict = apply_denoising(ds, **kwargs)
+            client = Client(address=DASK_CLUSTER_ADDRESS)
+            with dask.config.set(scheduler="distributed"):
+                ds_Sv = open_zarr_store(zarr_path, container_name=container_name)
+                sv_dataset_denoised, mask_dict = apply_denoising(ds_Sv, **kwargs)
+
+                if sv_dataset_denoised is not None:
+                    zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
+                    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_denoised)
+                    print('6) Saved denoised dataset to Zarr store:', zarr_path)
         except Exception as e:
             print(f"Error applying denoising to {zarr_path}: {str(e)}")
             traceback.print_exc()
@@ -250,10 +270,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         print('5) Denoising applied', sv_dataset_denoised)
 
         if sv_dataset_denoised is not None:
-            zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
-            save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_denoised)
-            print('6) Saved denoised dataset to Zarr store:', zarr_path)
-
             if plot_echograms:
                 plot_and_upload_echograms(
                     sv_dataset_denoised,
@@ -277,17 +293,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
                 print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
         ###############################################################################################################
-
-        # optional NetCDF
-        if save_to_netcdf:
-            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            save_dataset_to_netcdf(
-                ds,
-                container_name=container_name,
-                ds_path=nc_path,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
 
     # 2) run through each category
     for category in CATEGORY_CONFIG:
