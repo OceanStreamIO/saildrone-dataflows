@@ -8,7 +8,7 @@ import dask
 from collections import defaultdict
 from dask.distributed import Client
 from datetime import datetime, timedelta
-from typing import List, Optional, Union
+from prefect.deployments import run_deployment
 from dotenv import load_dotenv
 
 
@@ -18,10 +18,8 @@ from prefect.futures import as_completed, PrefectFuture
 
 from saildrone.process import plot_and_upload_echograms, apply_denoising
 from saildrone.process.concat import concatenate_and_rechunk
-from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
-from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store, generate_container_name,
-                             ensure_container_exists, save_zarr_store, zip_and_save_netcdf_files,
-                             save_dataset_to_netcdf)
+from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs, apply_denoising_and_upload
+from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store
 
 input_cache_policy = Inputs()
 
@@ -71,6 +69,49 @@ def _nav_to_data_vars(ds):
 
 
 @task(
+    log_prints=True
+)
+def trigger_denoising_flow(
+    zarr_path_source: str,
+    zarr_path_output: str,
+    container_name: str,
+    file_base_name: str,
+    upload_path: str,
+    plot_echograms: bool = False,
+    title_template: str = '',
+    colormap: str = 'ocean_r',
+    mask_impulse_noise=None,
+    mask_attenuated_signal=None,
+    mask_transient_noise=None,
+    remove_background_noise=None,
+    apply_seabed_mask: bool = False,
+    chunks=None
+):
+    state = run_deployment(
+        name="apply-denoising-flow/apply-denoising-flow",
+        parameters={
+            'zarr_path_source': zarr_path_source,
+            'zarr_path_output': zarr_path_output,
+            'container_name': container_name,
+            'file_base_name': file_base_name,
+            'upload_path': upload_path,
+            'plot_echograms': plot_echograms,
+            'title_template': title_template,
+            'colormap': colormap,
+            'mask_impulse_noise': mask_impulse_noise,
+            'mask_attenuated_signal': mask_attenuated_signal,
+            'mask_transient_noise': mask_transient_noise,
+            'remove_background_noise': remove_background_noise,
+            'apply_seabed_mask': apply_seabed_mask,
+            'chunks': chunks,
+        },
+        timeout=0
+    )
+
+    return state
+
+
+@task(
     log_prints=True,
     task_run_name="compute_batch_nasc--{batch_key}"
 )
@@ -103,17 +144,6 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
             container_name=container_name,
         )
         results[pulse] = nasc
-
-        # if plot_echograms:
-        #     plot_and_upload_echograms(
-        #         nasc,
-        #         file_base_name=f"{tag}--nasc",
-        #         save_to_blobstorage=True,
-        #         upload_path=f"{batch_key}",
-        #         cmap=colormap,
-        #         plot_var='NASC_log',
-        #         container_name=container_name,
-        #     )
 
         if save_to_netcdf:
             save_dataset_to_netcdf(
@@ -218,88 +248,74 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         section = CATEGORY_CONFIG[cat]
         print('Concatenating files for category:', cat, f'with {len(paths)} paths:')
-        # ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
-        # print(f"Finished concatenating {cat} dataset:", ds)
+        ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
+        print(f"Finished concatenating {cat} dataset:", ds)
 
         # save Zarr
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
-        # save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
+        save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
         print(f"Finished saving zarr dataset to:", zarr_path)
 
         # optional NetCDF
-        # if save_to_netcdf:
-        #     nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-        #     save_dataset_to_netcdf(
-        #         ds,
-        #         container_name=container_name,
-        #         ds_path=nc_path,
-        #         base_local_temp_path=NETCDF_ROOT_DIR,
-        #         is_temp_dir=False,
-        #     )
-        #     print(f"Finished saving netcdf dataset to:", nc_path)
+        if save_to_netcdf:
+            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
+            save_dataset_to_netcdf(
+                ds,
+                container_name=container_name,
+                ds_path=nc_path,
+                base_local_temp_path=NETCDF_ROOT_DIR,
+                is_temp_dir=False,
+            )
+            print(f"Finished saving netcdf dataset to:", nc_path)
 
-        # optional echograms
-        # if plot_echograms:
-        #     plot_and_upload_echograms(
-        #         ds,
-        #         file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
-        #         save_to_blobstorage=True,
-        #         upload_path=batch_key,
-        #         cmap=colormap,
-        #         title_template=f"{batch_key} ({cat})" + " | {channel_label}",
-        #         container_name=container_name,
-        #     )
+        if plot_echograms:
+            plot_and_upload_echograms(
+                ds,
+                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
+                save_to_blobstorage=True,
+                upload_path=batch_key,
+                cmap=colormap,
+                title_template=f"{batch_key} ({cat})" + " | {channel_label}",
+                container_name=container_name,
+            )
 
         ##############################################################################################################
         print('5) Applying denoising')
-        try:
-            client = Client(address=DASK_CLUSTER_ADDRESS)
-            print('Client', client)
+        zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
 
-            with client:
-                print('opening dataset')
-                ds_Sv = open_zarr_store(zarr_path, container_name=container_name, chunks=CHUNKS, rechunk_after=True)
-                print('ds_Sv', ds_Sv)
-                sv_dataset_denoised, mask_dict = apply_denoising(ds_Sv, **kwargs)
-                print('sv_dataset_denoised', sv_dataset_denoised)
+        future = trigger_denoising_flow.submit(
+            zarr_path_source=zarr_path,
+            zarr_path_output=zarr_path_denoised,
+            container_name=container_name,
+            file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
+            upload_path=batch_key,
+            plot_echograms=plot_echograms,
+            title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+            colormap=colormap,
+            mask_impulse_noise=kwargs.get('mask_impulse_noise'),
+            mask_attenuated_signal=kwargs.get('mask_attenuated_signal'),
+            mask_transient_noise=kwargs.get('mask_transient_noise'),
+            remove_background_noise=kwargs.get('remove_background_noise'),
+            apply_seabed_mask=kwargs.get('apply_seabed_mask'),
+            chunks=chunks,
+        )
+        future.wait()
 
-                if sv_dataset_denoised is not None:
-                    zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
-                    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_denoised)
-                    print('6) Saved denoised dataset to Zarr store:', zarr_path)
-        except Exception as e:
-            print(f"Error applying denoising to {zarr_path}: {str(e)}")
-            traceback.print_exc()
-            sv_dataset_denoised = None
+        if save_to_netcdf:
+            nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
+            sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
+            print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
 
-        print('5) Denoising applied', sv_dataset_denoised)
+            save_dataset_to_netcdf(
+                sv_dataset_masked,
+                container_name=container_name,
+                ds_path=nc_file_path_denoised,
+                base_local_temp_path=NETCDF_ROOT_DIR,
+                is_temp_dir=False,
+            )
 
-        if sv_dataset_denoised is not None:
-            sv_dataset_denoised = sv_dataset_denoised.compute()
-
-            if plot_echograms:
-                plot_and_upload_echograms(
-                    sv_dataset_denoised,
-                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                    save_to_blobstorage=True,
-                    upload_path=batch_key,
-                    cmap=colormap,
-                    container_name=container_name,
-                    title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-                )
-
-            if save_to_netcdf:
-                nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
-                save_dataset_to_netcdf(
-                    sv_dataset_denoised,
-                    container_name=container_name,
-                    ds_path=nc_file_path_denoised,
-                    base_local_temp_path=NETCDF_ROOT_DIR,
-                    is_temp_dir=False,
-                )
-
-                print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
-        ###############################################################################################################
+            print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
+    ###############################################################################################################
 
     # 2) run through each category
     for category in CATEGORY_CONFIG:
@@ -312,7 +328,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
 
 @flow(log_prints=True)
-def concatenate_processed_files(files_list=None,
+def concatenate_processed_files(files_list,
                                 days_to_combine=1,
                                 cruise_id='',
                                 container_name='',
@@ -325,7 +341,7 @@ def concatenate_processed_files(files_list=None,
                                 mask_attenuated_signal=None,
                                 mask_transient_noise=None,
                                 remove_background_noise=None,
-                                apply_seabed_mask=None,
+                                apply_seabed_mask=False,
                                 chunks=None
                                 ):
     by_batch = defaultdict(list)
@@ -432,7 +448,7 @@ if __name__ == "__main__":
                 'mask_attenuated_signal': None,
                 'mask_transient_noise': None,
                 'remove_background_noise': None,
-                'apply_seabed_mask': None,
+                'apply_seabed_mask': False,
                 'chunks': None,
             }
         )

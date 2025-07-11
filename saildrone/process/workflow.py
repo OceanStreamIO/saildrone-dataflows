@@ -7,40 +7,43 @@ import traceback
 import numpy as np
 import pandas as pd
 import xarray as xr
+import dask.array as da
 from datetime import datetime
 
 from xarray import Dataset
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 from echopype.commongrid import compute_NASC, compute_MVBS
 from prefect.futures import as_completed
 
-from saildrone.store import PostgresDB, FileSegmentService, SurveyService
+from saildrone.store import PostgresDB, FileSegmentService, SurveyService, open_zarr_store, get_azure_blob_filesystem
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, list_zarr_files)
 from saildrone.azure_iot import serialize_location_data
 from saildrone.utils import load_local_files, get_metadata_for_files
-from saildrone.denoise import (attenuation_mask, background_noise_mask, impulsive_noise_mask,
-                               build_full_mask, apply_full_mask)
+from saildrone.denoise import (background_noise_mask, impulsive_noise_mask,
+                               build_full_mask, apply_full_mask, transient_noise_mask, attenuation_mask)
 
 from .seabed import mask_true_seabed
 from .echodata import open_echodata
 from .sv_dataset import compute_sv
-from .plot import plot_and_upload_echograms, ensure_channel_labels
+from .plot import plot_and_upload_echograms, ensure_channel_labels, plot_and_upload_masks
 from .process_gps import query_location_points_between_timestamps, extract_start_end_coordinates
 from .location import extract_location_data
 from ..store.nascpoint_service import NASCPointService
 
+PARAMETER_NAMES = ("upper_limit_sl", "lower_limit_sl", "num_side_pings", "threshold")
+
 
 def get_files_list(
-    source_directory: str = None,
-    cruise_id: str = None,
-    load_from_blobstorage: bool = True,
-    source_container: str = None,
-    get_list_from_db: bool = True,
-    start_datetime: Optional[datetime] = None,
-    end_datetime: Optional[datetime] = None,
-    reprocess: bool = True
+        source_directory: str = None,
+        cruise_id: str = None,
+        load_from_blobstorage: bool = True,
+        source_container: str = None,
+        get_list_from_db: bool = True,
+        start_datetime: Optional[datetime] = None,
+        end_datetime: Optional[datetime] = None,
+        reprocess: bool = True
 ):
     """Fetch the list of files to be processed."""
     files = None
@@ -232,10 +235,10 @@ def process_converted_file(source_path: Path, **kwargs) -> dict:
 
 
 def _process_file_workflow(
-    file_name=None,
-    source_path=None,
-    start_time=None,
-    **kwargs
+        file_name=None,
+        source_path=None,
+        start_time=None,
+        **kwargs
 ) -> dict:
     """Core processing logic, encapsulating the main workflow."""
     cruise_id = kwargs.get("cruise_id", None)
@@ -530,15 +533,15 @@ def _process_file_workflow(
 
 
 def compute_and_save_nasc(
-    sv_dataset,
-    compute_nasc_opts=None,
-    cruise_id=None,
-    file_name=None,
-    output_path=None,
-    zarr_path=None,
-    container_name=None,
-    save_to_blobstorage=True,
-    save_to_directory=False
+        sv_dataset,
+        compute_nasc_opts=None,
+        cruise_id=None,
+        file_name=None,
+        output_path=None,
+        zarr_path=None,
+        container_name=None,
+        save_to_blobstorage=True,
+        save_to_directory=False
 ):
     compute_nasc_opts = compute_nasc_opts or {}
     range_bin = compute_nasc_opts.get("range_bin", "10m")
@@ -573,15 +576,15 @@ def compute_and_save_nasc(
 
 
 def compute_and_save_mvbs(
-    sv_dataset,
-    compute_mvbs_opts=None,
-    cruise_id=None,
-    file_name=None,
-    output_path=None,
-    zarr_path=None,
-    container_name=None,
-    save_to_blobstorage=True,
-    save_to_directory=False
+        sv_dataset,
+        compute_mvbs_opts=None,
+        cruise_id=None,
+        file_name=None,
+        output_path=None,
+        zarr_path=None,
+        container_name=None,
+        save_to_blobstorage=True,
+        save_to_directory=False
 ):
     compute_mvbs_opts = compute_mvbs_opts or {}
     range_var = compute_mvbs_opts.get("range_var", "depth")
@@ -612,15 +615,15 @@ def compute_and_save_mvbs(
 
 
 def _save_processed_data(
-    sv_dataset: Dataset,
-    cruise_id: str = None,
-    file_name: str = None,
-    base_file_name: str = None,
-    processed_container_name: Optional[str] = None,
-    output_path: Optional[str] = None,
-    zarr_path: Optional[str] = None,
-    save_to_directory: Optional[bool] = None,
-    save_to_blobstorage: Optional[bool] = None
+        sv_dataset: Dataset,
+        cruise_id: str = None,
+        file_name: str = None,
+        base_file_name: str = None,
+        processed_container_name: Optional[str] = None,
+        output_path: Optional[str] = None,
+        zarr_path: Optional[str] = None,
+        save_to_directory: Optional[bool] = None,
+        save_to_blobstorage: Optional[bool] = None
 ) -> Tuple[Optional[str], Optional[str]]:
     """Save processed data to storage."""
     if processed_container_name and save_to_blobstorage:
@@ -691,12 +694,12 @@ def _load_location_data_from_geoparquet(ds_Sv: xr.Dataset, gps_container_name, c
 
 
 def _prepare_payload(
-    sv_dataset: Dataset,
-    file_name: str = None,
-    start_time: float = None,
-    echogram_files: Optional[list] = None,
-    survey_db_id: int = None,
-    cruise_id: str = None
+        sv_dataset: Dataset,
+        file_name: str = None,
+        start_time: float = None,
+        echogram_files: Optional[list] = None,
+        survey_db_id: int = None,
+        cruise_id: str = None
 ) -> dict:
     processing_time_ms = int((time.time() - start_time) * 1000)
     ping_times = sv_dataset.coords["ping_time"].values
@@ -758,6 +761,7 @@ def apply_denoising(sv_dataset, **kwargs):
     attenuated_signal_opts = kwargs.get("mask_attenuated_signal", None)
     transient_noise_opts = kwargs.get("mask_transient_noise", None)
     background_noise_opts = kwargs.get("remove_background_noise", None)
+    drop_pings = kwargs.get("drop_pings", False)
 
     if not any([impulse_noise_opts, attenuated_signal_opts, transient_noise_opts, background_noise_opts]):
         return sv_dataset
@@ -777,11 +781,11 @@ def apply_denoising(sv_dataset, **kwargs):
             "param_sets": impulse_noise_opts,
         }
 
-    # if transient_noise_opts:
-    #     stages["transient"] = {
-    #         "fn": transient_noise_mask,
-    #         "param_sets": transient_noise_opts,
-    #     }
+    if transient_noise_opts:
+        stages["transient"] = {
+            "fn": transient_noise_mask,
+            "param_sets": transient_noise_opts,
+        }
 
     if background_noise_opts:
         stages["background"] = {
@@ -790,7 +794,7 @@ def apply_denoising(sv_dataset, **kwargs):
         }
 
     full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
-    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=False)
+    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=drop_pings)
 
     mask_dict = {"full": full_mask, **dict(stage_cubes)}
 

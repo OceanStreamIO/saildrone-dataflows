@@ -1,9 +1,9 @@
 import xarray as xr
-from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence
+from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union
 
 
 def build_full_mask(
-    ds: xr.Dataset,
+    ds: Union[xr.Dataset, str],
     stages: Mapping[str, Dict[str, Any]],
     var_name: str = "Sv",
     return_stage_masks: bool = False,
@@ -73,11 +73,11 @@ def build_full_mask(
 
 
 def apply_full_mask(
-    ds: xr.Dataset,
-    full_mask: xr.DataArray,
-    *,
-    var_name: str = "Sv",
-    drop_pings: bool = False,
+        ds: xr.Dataset,
+        full_mask: xr.DataArray,
+        *,
+        var_name: str = "Sv",
+        drop_pings: bool = False,
 ) -> xr.Dataset:
     ds_out = ds.copy()
 
@@ -90,7 +90,7 @@ def apply_full_mask(
         return ds_out
 
     # option 2: drop pings
-    vertical_dim = full_mask.dims[-1]                     # depth | echo_range
+    vertical_dim = full_mask.dims[-1]  # depth | echo_range
     bad_ping = full_mask.all(dim=vertical_dim).all(dim="channel")
 
     # Dask arrays cannot index; materialise this tiny vector once
@@ -103,15 +103,13 @@ def apply_full_mask(
 def _params_for_channel(param_sets, ch_ds):
     """Return the parameter dictionary for this channel."""
     if not any(isinstance(v, Mapping) for v in param_sets.values()):
-        return param_sets                                    # single-dict case
+        return param_sets  # single-dict case
 
     freq = float(ch_ds["frequency_nominal"].compute().item())  # per-frequency case
     key_str = str(int(freq))
 
-    key_num = freq
-
-    if key_num in param_sets:
-        return param_sets[key_num]
+    if freq in param_sets:
+        return param_sets[freq]
 
     if key_str in param_sets:
         return param_sets[key_str]

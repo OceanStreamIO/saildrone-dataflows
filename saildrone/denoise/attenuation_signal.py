@@ -3,15 +3,6 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 
-
-DEFAULT_RYAN_PARAMS = {
-    "r0": 180,
-    "r1": 280,
-    "n": 30,
-    "thr": -6,
-    "start": 0,
-    "chunks": {"ping_time": 100, "range_sample": 100},
-}
 PARAMETER_NAMES = ("upper_limit_sl", "lower_limit_sl", "num_side_pings", "threshold")
 
 
@@ -71,11 +62,3 @@ def attenuation_mask(
     except Exception as e:
         traceback.print_exc()
         raise RuntimeError(f"Error computing attenuated signal mask: {e}")
-
-
-def _log2lin(data):
-    return 10 ** (data / 10)
-
-
-def _lin2log(data):
-    return 10 * np.log10(data)

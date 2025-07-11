@@ -302,6 +302,22 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
     return uploaded_files
 
 
+def plot_and_upload_masks(mask_dict, ds, file_base_name=None, upload_path=None, container_name=None,
+                          title_template="{channel_label} – {cube_name}"):
+
+    output_path = f'/tmp/osechograms/{file_base_name}'
+    os.makedirs(output_path, exist_ok=True)
+
+    paths = plot_masks_vertical(mask_dict, ds, file_base_name=file_base_name, output_path=output_path)
+
+    upload_folder_to_blob_storage(output_path, container_name, upload_path)
+    shutil.rmtree(output_path, ignore_errors=True)
+
+    uploaded_files = [f"{file_base_name}/{str(Path(e).name)}" for e in paths]
+
+    return uploaded_files
+
+
 def ensure_channel_labels(
     ds: xr.Dataset,
     *,
