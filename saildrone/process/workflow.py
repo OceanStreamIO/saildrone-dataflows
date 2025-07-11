@@ -20,7 +20,7 @@ from saildrone.store import PostgresDB, FileSegmentService, SurveyService
 from saildrone.store import (save_zarr_store as save_zarr_to_blobstorage, list_zarr_files)
 from saildrone.azure_iot import serialize_location_data
 from saildrone.utils import load_local_files, get_metadata_for_files
-from saildrone.denoise import (attenuation_mask, background_noise_mask, transient_noise_mask, impulsive_noise_mask,
+from saildrone.denoise import (attenuation_mask, background_noise_mask, impulsive_noise_mask,
                                build_full_mask, apply_full_mask)
 
 from .seabed import mask_true_seabed
@@ -777,11 +777,11 @@ def apply_denoising(sv_dataset, **kwargs):
             "param_sets": impulse_noise_opts,
         }
 
-    if transient_noise_opts:
-        stages["transient"] = {
-            "fn": transient_noise_mask,
-            "param_sets": transient_noise_opts,
-        }
+    # if transient_noise_opts:
+    #     stages["transient"] = {
+    #         "fn": transient_noise_mask,
+    #         "param_sets": transient_noise_opts,
+    #     }
 
     if background_noise_opts:
         stages["background"] = {
