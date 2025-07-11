@@ -11,8 +11,8 @@ def _nanpct_keepdims(block: np.ndarray, *, q: float, axis=None):
     NumPy helper: percentile over `axis`, but broadcast back so the result
     has the *same shape* as `block`.  This satisfies xarray.rolling.reduce.
     """
-    val = np.nanpercentile(block, q, axis=axis)
-    return np.broadcast_to(val, block.shape)          # keep dims!
+
+    return np.nanpercentile(block, q, axis=axis, keepdims=True)
 
 
 def rolling_nanpercentile(arr, *, q: float, axis=None):
@@ -25,7 +25,7 @@ def rolling_nanpercentile(arr, *, q: float, axis=None):
             _nanpct_keepdims,
             arr,
             dtype=arr.dtype,
-            chunks=arr.chunks,      # <- keep original chunk grid
+            chunks=arr.chunks,
             q=q,
             axis=axis,
         )
@@ -87,11 +87,6 @@ def transient_noise_mask(
 
     pct_func = partial(rolling_nanpercentile, q=perc)
     block_lin = rolled.reduce(pct_func, keep_attrs=True)
-
-    # block_lin = rolled.reduce(
-    #     lambda a, axis=None, q=perc: rolling_nanpercentile(a, q, axis=axis),
-    #     keep_attrs=True,
-    # )
 
     # back to dB
     block_db = 10.0 * np.log10(block_lin)
