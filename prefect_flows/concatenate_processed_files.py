@@ -18,7 +18,7 @@ from prefect.futures import as_completed, PrefectFuture
 
 from saildrone.process import plot_and_upload_echograms, apply_denoising
 from saildrone.process.concat import concatenate_and_rechunk
-from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs, apply_denoising_and_upload
+from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
 from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store
 
 input_cache_policy = Inputs()
