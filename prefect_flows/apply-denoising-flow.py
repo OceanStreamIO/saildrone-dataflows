@@ -16,15 +16,8 @@ from prefect import flow, task
 from prefect.futures import as_completed
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
-from prefect.states import Completed
-from prefect.artifacts import create_markdown_artifact
-from prefect.deployments import run_deployment
-
-from prefect_flows.pydantic_models import ReprocessingOptions, MaskImpulseNoise, \
-    MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise
 from saildrone.process import process_converted_file, plot_and_upload_echograms, get_files_list, apply_denoising
 from saildrone.process.plot import plot_and_upload_masks
-from saildrone.utils import load_local_files, get_metadata_for_files
 from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
                              save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
 
@@ -62,39 +55,41 @@ def apply_denoising_flow(
     apply_seabed_mask: bool = False,
     chunks=None
 ):
-    sv_dataset = open_zarr_store(zarr_path_source,
-                                 container_name=container_name, chunks=chunks, rechunk_after=True)
+    with get_dask_client() as c:
+        print('Dask client:', c)
+        sv_dataset = open_zarr_store(zarr_path_source,
+                                     container_name=container_name, chunks=chunks, rechunk_after=True)
 
-    print('Denoising started for dataset:', sv_dataset)
+        print('Denoising started for dataset:', sv_dataset)
 
-    sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
-                                                     mask_impulse_noise=mask_impulse_noise,
-                                                     mask_attenuated_signal=mask_attenuated_signal,
-                                                     mask_transient_noise=mask_transient_noise,
-                                                     remove_background_noise=remove_background_noise,
-                                                     drop_pings=False)
+        sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
+                                                         mask_impulse_noise=mask_impulse_noise,
+                                                         mask_attenuated_signal=mask_attenuated_signal,
+                                                         mask_transient_noise=mask_transient_noise,
+                                                         remove_background_noise=remove_background_noise,
+                                                         drop_pings=False)
 
-    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
-    print(f"Saved denoised dataset to {zarr_path_output}")
+        save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
+        print(f"Saved denoised dataset to {zarr_path_output}")
 
-    if plot_echograms:
-        plot_and_upload_echograms(
-            sv_dataset_denoised,
-            file_base_name=file_base_name,
-            save_to_blobstorage=True,
-            upload_path=upload_path,
-            cmap=colormap,
-            container_name=container_name,
-            title_template=title_template,
-        )
+        if plot_echograms:
+            plot_and_upload_echograms(
+                sv_dataset_denoised,
+                file_base_name=file_base_name,
+                save_to_blobstorage=True,
+                upload_path=upload_path,
+                cmap=colormap,
+                container_name=container_name,
+                title_template=title_template,
+            )
 
-        plot_and_upload_masks(
-            mask_dict,
-            sv_dataset_denoised,
-            file_base_name=file_base_name + '--mask',
-            upload_path=upload_path,
-            container_name=container_name,
-        )
+            plot_and_upload_masks(
+                mask_dict,
+                sv_dataset_denoised,
+                file_base_name=file_base_name + '--mask',
+                upload_path=upload_path,
+                container_name=container_name,
+            )
 
 
 if __name__ == "__main__":
