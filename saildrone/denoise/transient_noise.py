@@ -33,8 +33,8 @@ def rolling_nanpercentile(arr, *, q: float, axis=None):
 
 
 def transient_noise_mask(
-    channel_dataset: xr.Dataset,
-    params: Dict,
+        channel_dataset: xr.Dataset,
+        params: Dict,
 ) -> Tuple[xr.DataArray, xr.DataArray]:
     """
     Ryan et al. (2015) transient‑noise filter for a single channel.

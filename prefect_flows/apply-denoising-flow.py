@@ -65,6 +65,8 @@ def apply_denoising_flow(
     sv_dataset = open_zarr_store(zarr_path_source,
                                  container_name=container_name, chunks=chunks, rechunk_after=True)
 
+    print('Denoising started for dataset:', sv_dataset)
+
     sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
                                                      mask_impulse_noise=mask_impulse_noise,
                                                      mask_attenuated_signal=mask_attenuated_signal,
@@ -73,6 +75,7 @@ def apply_denoising_flow(
                                                      drop_pings=False)
 
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
+    print(f"Saved denoised dataset to {zarr_path_output}")
 
     if plot_echograms:
         plot_and_upload_echograms(
