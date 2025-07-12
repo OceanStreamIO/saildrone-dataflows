@@ -38,6 +38,39 @@ DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
 
+@task(log_prints=True)
+def denoise_task(
+    sv_dataset,
+    mask_impulse_noise,
+    mask_attenuated_signal,
+    mask_transient_noise,
+    remove_background_noise,
+    drop_pings: bool,
+):
+    """
+    Run the de/denoising pipeline entirely on the Dask cluster.
+    """
+    # 1) Build masks & apply
+    sv_den, mask_dict = apply_denoising(
+        sv_dataset,
+        mask_impulse_noise=mask_impulse_noise,
+        mask_attenuated_signal=mask_attenuated_signal,
+        mask_transient_noise=mask_transient_noise,
+        remove_background_noise=remove_background_noise,
+        drop_pings=drop_pings,
+    )
+
+    # 2) Materialize while you're still in the DaskTaskRunner context
+    #    so nothing lazy escapes to the driver.
+    sv_den = sv_den.compute()
+    mask_dict = {
+        k: v.compute() if hasattr(v, "compute") else v
+        for k, v in mask_dict.items()
+    }
+
+    return sv_den, mask_dict
+
+
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
 def apply_denoising_flow(
     zarr_path_source: str,
@@ -55,30 +88,19 @@ def apply_denoising_flow(
     apply_seabed_mask: bool = False,
     chunks=None
 ):
-    client = get_client()
-    print('Dask client:', client)
     sv_dataset = open_zarr_store(zarr_path_source,
-                                     container_name=container_name, chunks=chunks, rechunk_after=True)
+                                 container_name=container_name, chunks=chunks, rechunk_after=True)
 
-    ds_future = client.scatter(sv_dataset, broadcast=True)
-    params = dict(
-        mask_impulse_noise=mask_impulse_noise,
-        mask_attenuated_signal=mask_attenuated_signal,
-        mask_transient_noise=mask_transient_noise,
-        remove_background_noise=remove_background_noise,
-        drop_pings=False,
-    )
+    sv_dataset_denoised, mask_dict = denoise_task.submit(
+        sv_dataset,
+        mask_impulse_noise,
+        mask_attenuated_signal,
+        mask_transient_noise,
+        remove_background_noise,
+        False
+    ).result()
 
-    params_future = client.scatter(params, broadcast=True)
-
-    print('Denoising started for dataset:', sv_dataset)
-    denoise_future = client.submit(
-        apply_denoising, ds_future, **params_future.result(), pure=False
-    )
-
-    sv_dataset_denoised, mask_dict = client.gather(denoise_future)
-
-    print("Denoising complete; received result on the driver")
+    print("Denoising complete", sv_dataset_denoised)
 
     # sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
     #                                                  mask_impulse_noise=mask_impulse_noise,
