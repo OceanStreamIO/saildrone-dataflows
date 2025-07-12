@@ -6,7 +6,7 @@ import traceback
 import dask
 
 from datetime import datetime
-from dask.distributed import get_worker
+from dask.distributed import get_client
 
 from pathlib import Path
 from typing import List, Optional, Union
@@ -55,8 +55,7 @@ def apply_denoising_flow(
     apply_seabed_mask: bool = False,
     chunks=None
 ):
-    client = get_dask_client()
-
+    client = get_client()
     print('Dask client:', client)
     sv_dataset = open_zarr_store(zarr_path_source,
                                      container_name=container_name, chunks=chunks, rechunk_after=True)
