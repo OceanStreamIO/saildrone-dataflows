@@ -55,41 +55,60 @@ def apply_denoising_flow(
     apply_seabed_mask: bool = False,
     chunks=None
 ):
-    with get_dask_client() as c:
-        print('Dask client:', c)
-        sv_dataset = open_zarr_store(zarr_path_source,
+    client = get_dask_client()
+
+    print('Dask client:', client)
+    sv_dataset = open_zarr_store(zarr_path_source,
                                      container_name=container_name, chunks=chunks, rechunk_after=True)
 
-        print('Denoising started for dataset:', sv_dataset)
+    ds_future = client.scatter(sv_dataset, broadcast=True)
+    params = dict(
+        mask_impulse_noise=mask_impulse_noise,
+        mask_attenuated_signal=mask_attenuated_signal,
+        mask_transient_noise=mask_transient_noise,
+        remove_background_noise=remove_background_noise,
+        drop_pings=False,
+    )
 
-        sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
-                                                         mask_impulse_noise=mask_impulse_noise,
-                                                         mask_attenuated_signal=mask_attenuated_signal,
-                                                         mask_transient_noise=mask_transient_noise,
-                                                         remove_background_noise=remove_background_noise,
-                                                         drop_pings=False)
+    params_future = client.scatter(params, broadcast=True)
 
-        save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
-        print(f"Saved denoised dataset to {zarr_path_output}")
+    print('Denoising started for dataset:', sv_dataset)
+    denoise_future = client.submit(
+        apply_denoising, ds_future, **params_future.result(), pure=False
+    )
 
-        if plot_echograms:
-            plot_and_upload_echograms(
-                sv_dataset_denoised,
-                file_base_name=file_base_name,
-                save_to_blobstorage=True,
-                upload_path=upload_path,
-                cmap=colormap,
-                container_name=container_name,
-                title_template=title_template,
-            )
+    sv_dataset_denoised, mask_dict = client.gather(denoise_future)
 
-            plot_and_upload_masks(
-                mask_dict,
-                sv_dataset_denoised,
-                file_base_name=file_base_name + '--mask',
-                upload_path=upload_path,
-                container_name=container_name,
-            )
+    print("Denoising complete; received result on the driver")
+
+    # sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
+    #                                                  mask_impulse_noise=mask_impulse_noise,
+    #                                                  mask_attenuated_signal=mask_attenuated_signal,
+    #                                                  mask_transient_noise=mask_transient_noise,
+    #                                                  remove_background_noise=remove_background_noise,
+    #                                                  drop_pings=False)
+
+    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
+    print(f"Saved denoised dataset to {zarr_path_output}")
+
+    if plot_echograms:
+        plot_and_upload_echograms(
+            sv_dataset_denoised,
+            file_base_name=file_base_name,
+            save_to_blobstorage=True,
+            upload_path=upload_path,
+            cmap=colormap,
+            container_name=container_name,
+            title_template=title_template,
+        )
+
+        plot_and_upload_masks(
+            mask_dict,
+            sv_dataset_denoised,
+            file_base_name=file_base_name + '--mask',
+            upload_path=upload_path,
+            container_name=container_name,
+        )
 
 
 if __name__ == "__main__":
