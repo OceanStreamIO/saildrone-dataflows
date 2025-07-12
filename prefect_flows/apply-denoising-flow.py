@@ -53,8 +53,9 @@ def denoise_zarr(
     upload_path: str,
     title_template: str,
     colormap: str = 'ocean_r',
-    chunks = None,
+    chunks=None,
 ):
+
     ds = open_zarr_store(
         zarr_src,
         container_name=container_name,
@@ -73,27 +74,28 @@ def denoise_zarr(
     )
 
     print("Denoising complete", sv_dataset_denoised)
+    print("mask_dict", mask_dict)
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")
-    if plot_echograms:
-        plot_and_upload_echograms(
-            sv_dataset_denoised,
-            file_base_name=file_base_name,
-            save_to_blobstorage=True,
-            upload_path=upload_path,
-            cmap=colormap,
-            container_name=container_name,
-            title_template=title_template,
-        )
-
-        plot_and_upload_masks(
-            mask_dict,
-            sv_dataset_denoised,
-            file_base_name=file_base_name + '--mask',
-            upload_path=upload_path,
-            container_name=container_name,
-        )
+    # if plot_echograms:
+    #     plot_and_upload_echograms(
+    #         sv_dataset_denoised,
+    #         file_base_name=file_base_name,
+    #         save_to_blobstorage=True,
+    #         upload_path=upload_path,
+    #         cmap=colormap,
+    #         container_name=container_name,
+    #         title_template=title_template,
+    #     )
+    #
+    #     plot_and_upload_masks(
+    #         mask_dict,
+    #         sv_dataset_denoised,
+    #         file_base_name=file_base_name + '--mask',
+    #         upload_path=upload_path,
+    #         container_name=container_name,
+    #     )
 
     return zarr_dest
 

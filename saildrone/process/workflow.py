@@ -812,4 +812,11 @@ def apply_denoising(sv_dataset, **kwargs):
 
     sv_dataset_denoised = sv_dataset_denoised.merge(mask_vars, compat="no_conflicts")
 
+    rolling_dims = [d for d in sv_dataset_denoised.dims if d.startswith("_rolling_dim_")]
+
+    if rolling_dims:
+        indexer = {d: 0 for d in rolling_dims}
+
+        sv_dataset_denoised = sv_dataset_denoised.isel(indexer, drop=True)
+
     return sv_dataset_denoised, mask_dict
