@@ -39,36 +39,63 @@ MAX_RUNTIME_SECONDS = 3_300
 
 
 @task(log_prints=True)
-def denoise_task(
-    sv_dataset,
+def denoise_zarr(
+    zarr_src: str,
+    zarr_dest: str,
+    container_name: str,
     mask_impulse_noise,
     mask_attenuated_signal,
     mask_transient_noise,
     remove_background_noise,
-    drop_pings: bool,
+    apply_seabed_mask: bool,
+    plot_echograms: bool,
+    file_base_name: str,
+    upload_path: str,
+    title_template: str,
+    colormap: str = 'ocean_r',
+    chunks = None,
 ):
-    """
-    Run the de/denoising pipeline entirely on the Dask cluster.
-    """
-    # 1) Build masks & apply
-    sv_den, mask_dict = apply_denoising(
-        sv_dataset,
+    ds = open_zarr_store(
+        zarr_src,
+        container_name=container_name,
+        chunks=chunks,
+        rechunk_after=True,
+    )
+
+    print('Opened Zarr dataset:', ds)
+    sv_dataset_denoised, mask_dict = apply_denoising(
+        ds,
         mask_impulse_noise=mask_impulse_noise,
         mask_attenuated_signal=mask_attenuated_signal,
         mask_transient_noise=mask_transient_noise,
         remove_background_noise=remove_background_noise,
-        drop_pings=drop_pings,
+        drop_pings=False,
     )
 
-    # 2) Materialize while you're still in the DaskTaskRunner context
-    #    so nothing lazy escapes to the driver.
-    sv_den = sv_den.compute()
-    mask_dict = {
-        k: v.compute() if hasattr(v, "compute") else v
-        for k, v in mask_dict.items()
-    }
+    print("Denoising complete", sv_dataset_denoised)
+    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
-    return sv_den, mask_dict
+    print(f"Saved denoised dataset to {zarr_dest}")
+    if plot_echograms:
+        plot_and_upload_echograms(
+            sv_dataset_denoised,
+            file_base_name=file_base_name,
+            save_to_blobstorage=True,
+            upload_path=upload_path,
+            cmap=colormap,
+            container_name=container_name,
+            title_template=title_template,
+        )
+
+        plot_and_upload_masks(
+            mask_dict,
+            sv_dataset_denoised,
+            file_base_name=file_base_name + '--mask',
+            upload_path=upload_path,
+            container_name=container_name,
+        )
+
+    return zarr_dest
 
 
 @flow(task_runner=DaskTaskRunner(address=DASK_CLUSTER_ADDRESS))
@@ -88,48 +115,27 @@ def apply_denoising_flow(
     apply_seabed_mask: bool = False,
     chunks=None
 ):
-    sv_dataset = open_zarr_store(zarr_path_source,
-                                 container_name=container_name, chunks=chunks, rechunk_after=True)
+    future = denoise_zarr.submit(
+        zarr_src=zarr_path_source,
+        zarr_dest=zarr_path_output,
+        container_name=container_name,
+        mask_impulse_noise=mask_impulse_noise,
+        mask_attenuated_signal=mask_attenuated_signal,
+        mask_transient_noise=mask_transient_noise,
+        remove_background_noise=remove_background_noise,
+        apply_seabed_mask=apply_seabed_mask,
+        plot_echograms=plot_echograms,
+        file_base_name=file_base_name,
+        upload_path=upload_path,
+        title_template=title_template,
+        colormap=colormap,
+        chunks=chunks
+    )
 
-    sv_dataset_denoised, mask_dict = denoise_task.submit(
-        sv_dataset,
-        mask_impulse_noise,
-        mask_attenuated_signal,
-        mask_transient_noise,
-        remove_background_noise,
-        False
-    ).result()
+    output = future.result()
+    print(f"Completed denoising: wrote {output}")
 
-    print("Denoising complete", sv_dataset_denoised)
-
-    # sv_dataset_denoised, mask_dict = apply_denoising(sv_dataset,
-    #                                                  mask_impulse_noise=mask_impulse_noise,
-    #                                                  mask_attenuated_signal=mask_attenuated_signal,
-    #                                                  mask_transient_noise=mask_transient_noise,
-    #                                                  remove_background_noise=remove_background_noise,
-    #                                                  drop_pings=False)
-
-    save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_path_output)
-    print(f"Saved denoised dataset to {zarr_path_output}")
-
-    if plot_echograms:
-        plot_and_upload_echograms(
-            sv_dataset_denoised,
-            file_base_name=file_base_name,
-            save_to_blobstorage=True,
-            upload_path=upload_path,
-            cmap=colormap,
-            container_name=container_name,
-            title_template=title_template,
-        )
-
-        plot_and_upload_masks(
-            mask_dict,
-            sv_dataset_denoised,
-            file_base_name=file_base_name + '--mask',
-            upload_path=upload_path,
-            container_name=container_name,
-        )
+    return output
 
 
 if __name__ == "__main__":
