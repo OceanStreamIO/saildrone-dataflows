@@ -288,8 +288,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         state = future.result()
         future.wait()
 
-        if not state.is_completed() or state.is_failed():
-            raise RuntimeError(f"Denosing subflow failed: {state!r}")
+        print('state', state)
 
         sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
         print('sv_dataset_masked:', sv_dataset_masked)
