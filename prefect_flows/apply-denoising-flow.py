@@ -17,7 +17,6 @@ from prefect.futures import as_completed
 from prefect_dask import DaskTaskRunner, get_dask_client
 from prefect.cache_policies import Inputs
 from saildrone.process import process_converted_file, plot_and_upload_echograms, get_files_list, apply_denoising
-from saildrone.process.plot import plot_and_upload_masks
 from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store,
                              save_dataset_to_netcdf, ensure_container_exists, save_zarr_store, list_zarr_files)
 
@@ -48,11 +47,6 @@ def denoise_zarr(
     mask_transient_noise,
     remove_background_noise,
     apply_seabed_mask: bool,
-    plot_echograms: bool,
-    file_base_name: str,
-    upload_path: str,
-    title_template: str,
-    colormap: str = 'ocean_r',
     chunks=None,
 ):
 
@@ -78,24 +72,6 @@ def denoise_zarr(
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")
-    # if plot_echograms:
-    #     plot_and_upload_echograms(
-    #         sv_dataset_denoised,
-    #         file_base_name=file_base_name,
-    #         save_to_blobstorage=True,
-    #         upload_path=upload_path,
-    #         cmap=colormap,
-    #         container_name=container_name,
-    #         title_template=title_template,
-    #     )
-    #
-    #     plot_and_upload_masks(
-    #         mask_dict,
-    #         sv_dataset_denoised,
-    #         file_base_name=file_base_name + '--mask',
-    #         upload_path=upload_path,
-    #         container_name=container_name,
-    #     )
 
     return zarr_dest
 
@@ -105,11 +81,6 @@ def apply_denoising_flow(
     zarr_path_source: str,
     zarr_path_output: str,
     container_name: str,
-    file_base_name: str,
-    upload_path: str,
-    plot_echograms: bool = False,
-    title_template: str = '',
-    colormap: str = 'ocean_r',
     mask_impulse_noise=None,
     mask_attenuated_signal=None,
     mask_transient_noise=None,
@@ -126,11 +97,6 @@ def apply_denoising_flow(
         mask_transient_noise=mask_transient_noise,
         remove_background_noise=remove_background_noise,
         apply_seabed_mask=apply_seabed_mask,
-        plot_echograms=plot_echograms,
-        file_base_name=file_base_name,
-        upload_path=upload_path,
-        title_template=title_template,
-        colormap=colormap,
         chunks=chunks
     )
 
@@ -151,11 +117,6 @@ if __name__ == "__main__":
                 'zarr_path_source': '',
                 'zarr_path_output': '',
                 'container_name': '',
-                'file_base_name': '',
-                'upload_path': '',
-                'plot_echograms': False,
-                'title_template': '',
-                'colormap': 'ocean_r',
                 'mask_impulse_noise': None,
                 'mask_attenuated_signal': None,
                 'mask_transient_noise': None,

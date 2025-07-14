@@ -18,6 +18,7 @@ from prefect.futures import as_completed, PrefectFuture
 
 from saildrone.process import plot_and_upload_echograms, apply_denoising
 from saildrone.process.concat import concatenate_and_rechunk
+from saildrone.process.plot import plot_and_upload_masks
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
 from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store
 
@@ -288,10 +289,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             zarr_path_output=zarr_path_denoised,
             container_name=container_name,
             file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
-            upload_path=batch_key,
-            plot_echograms=plot_echograms,
-            title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-            colormap=colormap,
             mask_impulse_noise=kwargs.get('mask_impulse_noise'),
             mask_attenuated_signal=kwargs.get('mask_attenuated_signal'),
             mask_transient_noise=kwargs.get('mask_transient_noise'),
@@ -301,9 +298,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         )
         future.wait()
 
+        sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
+        print('sv_dataset_masked:', sv_dataset_masked)
+
         if save_to_netcdf:
             nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
-            sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
             print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
 
             save_dataset_to_netcdf(
@@ -315,6 +314,25 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             )
 
             print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
+
+        if plot_echograms:
+            plot_and_upload_echograms(
+                sv_dataset_masked,
+                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                save_to_blobstorage=True,
+                upload_path=batch_key,
+                cmap=colormap,
+                container_name=container_name,
+                title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+            )
+
+            # plot_and_upload_masks(
+            #     mask_dict,
+            #     sv_dataset_denoised,
+            #     file_base_name=file_base_name + '--mask',
+            #     upload_path=upload_path,
+            #     container_name=container_name,
+            # )
     ###############################################################################################################
 
     # 2) run through each category
