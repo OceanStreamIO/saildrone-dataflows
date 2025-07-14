@@ -96,7 +96,7 @@ def trigger_denoising_flow(
             'apply_seabed_mask': apply_seabed_mask,
             'chunks': chunks,
         },
-        timeout=0
+        timeout=None
     )
 
     return state
@@ -285,7 +285,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             apply_seabed_mask=kwargs.get('apply_seabed_mask'),
             chunks=chunks,
         )
+        state = future.result()
         future.wait()
+
+        if not state.is_completed() or state.is_failed():
+            raise RuntimeError(f"Denosing subflow failed: {state!r}")
 
         sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
         print('sv_dataset_masked:', sv_dataset_masked)
