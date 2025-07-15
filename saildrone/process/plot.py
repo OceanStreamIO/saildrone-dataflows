@@ -302,13 +302,13 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
     return uploaded_files
 
 
-def plot_and_upload_masks(mask_dict, ds, file_base_name=None, upload_path=None, container_name=None,
+def plot_and_upload_masks(ds, file_base_name=None, upload_path=None, container_name=None,
                           title_template="{channel_label} – {cube_name}"):
 
     output_path = f'/tmp/osechograms/{file_base_name}'
     os.makedirs(output_path, exist_ok=True)
 
-    paths = plot_masks_vertical(mask_dict, ds, file_base_name=file_base_name, output_path=output_path)
+    paths = plot_masks_vertical(ds, file_base_name=file_base_name, output_path=output_path)
 
     upload_folder_to_blob_storage(output_path, container_name, upload_path)
     shutil.rmtree(output_path, ignore_errors=True)
@@ -570,7 +570,6 @@ def plot_all_masks(
 
 
 def plot_masks_vertical(
-    mask_cubes: Union[xr.DataArray, Mapping[str, xr.DataArray]],
     ds_source: xr.Dataset,
     file_base_name: str,
     output_path: str = "./echograms",
@@ -588,9 +587,12 @@ def plot_masks_vertical(
     out_dir = Path(output_path)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # normalise input to a {name: cube} mapping
-    if isinstance(mask_cubes, xr.DataArray):
-        mask_cubes = {"mask": mask_cubes}
+    mask_cubes: dict[str, xr.DataArray] = {}
+
+    for var in ds_source.data_vars:
+        if var.startswith("mask_"):
+            cube_name = var[len("mask_"):]  # e.g. "impulsive"
+            mask_cubes[cube_name] = ds_source[var]
 
     paths = {}
     for name, cube in mask_cubes.items():

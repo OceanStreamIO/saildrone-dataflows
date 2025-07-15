@@ -104,21 +104,33 @@ def test_file_workflow_saildrone_full():
                  output_path=f'./test/processed/echograms',
                  )
 
-    ds_masked, mask_dict = apply_denoising(ds,
-                                           mask_impulse_noise=impulse_noise_opts,
-                                           mask_attenuated_signal=attenuated_signal_opts,
-                                           mask_transient_noise=transient_noise_opts,
-                                           remove_background_noise=background_noise_opts)
+    ds_masked = apply_denoising(ds,
+                                mask_impulse_noise=impulse_noise_opts,
+                                mask_attenuated_signal=attenuated_signal_opts,
+                                mask_transient_noise=None,
+                                remove_background_noise=None,
+                                drop_pings=True,
+                                drop_ping_thresholds={38000: 0.95, 200000: 0.9}
+                                )
 
+    stats = ds_masked.attrs.get("mask_stats", {})
+    print("Mask statistics per frequency:")
+    for freq, info in stats.items():
+        print(
+            f"  • {freq} Hz:\n"
+            f"      threshold           = {info['threshold']:.2f}\n"
+            f"      pct_masked          = {info['pct_masked']:.2f}%\n"
+            f"      n_droppable_pings   = {info['n_droppable_pings']}"
+        )
+
+    print('[ ds_masked ]: \n', ds_masked)
     plot_sv_data(ds_masked,
                  output_path=f'./test/processed/echograms',
                  title_template="{channel_label} / denoised",
                  file_base_name=file_name + '--denoised'
                  )
 
-    plot_masks_vertical(mask_dict, ds,
-                        file_base_name=file_name + '--noise',
-                        output_path=f'./test/processed/echograms')
+    plot_masks_vertical(ds_masked, file_base_name=file_name + '--noise', output_path=f'./test/processed/echograms')
 
     try:
         client.close()

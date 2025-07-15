@@ -173,9 +173,8 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
                              rechunk_after=True)
         ds = _nav_to_data_vars(ds)
 
-        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}.zarr')
-        print(ds.data_vars)
-        print(ds.dims)
+        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}{suffix}.zarr')
+        print(ds)
 
         ds_mvbs = compute_and_save_mvbs(
             ds,
@@ -288,10 +287,18 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         state = future.result()
         future.wait()
 
-        print('state', state)
-
         sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
         print('sv_dataset_masked:', sv_dataset_masked)
+
+        stats = sv_dataset_masked.attrs.get("mask_stats", {})
+        print("Mask statistics per frequency:")
+        for freq, info in stats.items():
+            print(
+                f"  • {freq} Hz:\n"
+                f"      threshold           = {info['threshold']:.2f}\n"
+                f"      pct_masked          = {info['pct_masked']:.2f}%\n"
+                f"      n_droppable_pings   = {info['n_droppable_pings']}"
+            )
 
         if save_to_netcdf:
             nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
@@ -318,13 +325,12 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
             )
 
-            # plot_and_upload_masks(
-            #     mask_dict,
-            #     sv_dataset_denoised,
-            #     file_base_name=file_base_name + '--mask',
-            #     upload_path=upload_path,
-            #     container_name=container_name,
-            # )
+            plot_and_upload_masks(
+                sv_dataset_masked,
+                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                upload_path=batch_key,
+                container_name=container_name,
+            )
     ###############################################################################################################
 
     # 2) run through each category
@@ -370,7 +376,7 @@ def concatenate_processed_files(files_list,
         key = _batch_key(ts, days_to_combine)
         by_batch[key].append(file_record)
 
-    batch_size = 4
+    batch_size = 3  # max number of concurrent tasks
     batches = by_batch.items()
     print(f"Total batches to process: {len(batches)}")
 

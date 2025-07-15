@@ -1,5 +1,6 @@
+import numpy as np
 import xarray as xr
-from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union
+from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union, Optional
 
 
 def build_full_mask(
@@ -78,24 +79,95 @@ def apply_full_mask(
         *,
         var_name: str = "Sv",
         drop_pings: bool = False,
+        drop_ping_thresholds: Optional[Dict[int, float]] = None
 ) -> xr.Dataset:
+    fm = full_mask.broadcast_like(ds[var_name])
+
     ds_out = ds.copy()
+    ds_out[var_name] = ds[var_name].where(~fm)
 
-    # sanity: broadcast mask to data shape if needed
-    full_mask = full_mask.broadcast_like(ds_out[var_name])
+    # dims & lengths
+    ch_dim, ping_dim, depth_dim = fm.dims
+    total_depth = fm.sizes[depth_dim]
+    total_pings = fm.sizes[ping_dim]
 
-    # option 1: NaN mask
-    if not drop_pings:
-        ds_out[var_name] = ds_out[var_name].where(~full_mask)
-        return ds_out
+    # default thresholds dict
+    if drop_ping_thresholds is None:
+        drop_ping_thresholds = {}
 
-    # option 2: drop pings
-    vertical_dim = full_mask.dims[-1]  # depth | echo_range
-    bad_ping = full_mask.all(dim=vertical_dim).all(dim="channel")
+    # 2) build per-(channel,ping) drop-mask if requested
+    if drop_pings:
+        # fraction masked per channel×ping → shape (channel, ping_time)
+        masked_per_chan = fm.sum(dim=depth_dim)  # DataArray dims (ch,ping)
+        valid = ~ds[var_name].isnull()
+        valid_per_chan = valid.sum(dim=depth_dim)
 
-    # Dask arrays cannot index; materialise this tiny vector once
-    good_idx = (~bad_ping).compute().values
-    ds_out = ds_out.isel(ping_time=good_idx)
+        frac_per_chan = masked_per_chan / valid_per_chan
+
+        # build a 1-D threshold array indexed by channel
+        freqs = ds["frequency_nominal"].astype(int).values
+        thr_list = []
+        for f in freqs:
+            # try both int and str key
+            thr = drop_ping_thresholds.get(int(f), None)
+            if thr is None:
+                thr = drop_ping_thresholds.get(str(int(f)), 1.0)
+            thr_list.append(thr)
+
+        thr_arr = xr.DataArray(
+            thr_list,
+            coords={ch_dim: ds[ch_dim]},
+            dims=[ch_dim],
+        )
+
+        # broadcast that threshold across ping_time
+        thr_b = thr_arr.broadcast_like(frac_per_chan)
+        drop_chanping = frac_per_chan >= thr_b
+
+        # expand to depth dimension and combine with sample-mask
+        drop3d = (
+            drop_chanping
+            .expand_dims({depth_dim: total_depth}, axis=-1)
+            .transpose(ch_dim, ping_dim, depth_dim)
+        )
+        combined = fm | drop3d
+
+        # re-apply the final mask
+        ds_out[var_name] = ds[var_name].where(~combined)
+    else:
+        combined = fm
+        # need these names later for stats
+        frac_per_chan = None
+        drop_chanping = None
+        thr_arr = None
+
+    # 3) compute & store stats per frequency
+    stats: Dict[int, Dict[str, Any]] = {}
+    for idx in range(ds.sizes[ch_dim]):
+        freq = int(ds["frequency_nominal"].isel(channel=idx).values.item())
+        # this channel’s mask
+        mask_ch = combined.isel(channel=idx)
+
+        # overall % of cells masked
+        masked_cells = int(mask_ch.sum().compute().item())
+        pct_masked = 100.0 * masked_cells / (total_pings * total_depth)
+
+        # how many ping-columns met the threshold?
+        if drop_pings and drop_chanping is not None:
+            n_drop = int(drop_chanping.isel(channel=idx).sum().compute().item())
+            threshold_used = float(thr_arr.isel(channel=idx).values.item())
+        else:
+            n_drop = 0
+            threshold_used = float(thr_arr.isel(channel=idx).values.item()) if thr_arr is not None else 1.0
+
+        stats[freq] = {
+            "threshold": threshold_used,
+            "pct_masked": pct_masked,
+            "n_droppable_pings": n_drop,
+        }
+
+    # 4) stash into attrs
+    ds_out.attrs["mask_stats"] = stats
 
     return ds_out
 

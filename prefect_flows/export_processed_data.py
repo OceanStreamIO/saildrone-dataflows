@@ -362,7 +362,7 @@ def trigger_concatenate_flow(
             'apply_seabed_mask': apply_seabed_mask,
             'chunks': chunks
         },
-        timeout=0
+        timeout=None
     )
 
     return state
