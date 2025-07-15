@@ -58,7 +58,7 @@ def denoise_zarr(
     )
 
     print('Opened Zarr dataset:', ds)
-    sv_dataset_denoised, mask_dict = apply_denoising(
+    sv_dataset_denoised = apply_denoising(
         ds,
         mask_impulse_noise=mask_impulse_noise,
         mask_attenuated_signal=mask_attenuated_signal,
@@ -68,7 +68,6 @@ def denoise_zarr(
     )
 
     print("Denoising complete", sv_dataset_denoised)
-    print("mask_dict", mask_dict)
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")
