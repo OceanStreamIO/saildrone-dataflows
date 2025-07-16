@@ -234,7 +234,8 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
     def _process_category(cat: str):
         paths = batch_results[cat]
-
+        return
+        
         if not paths:
             return
 
