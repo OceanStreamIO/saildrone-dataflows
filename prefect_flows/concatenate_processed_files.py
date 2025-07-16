@@ -251,6 +251,65 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
 
 @task(
     log_prints=True,
+    task_run_name="plot_and_upload_echograms--{batch_key}"
+)
+def plot_and_upload_echograms_task(batch_key, zarr_path, file_base_name, colormap, container_name, title_template):
+    """Task to plot and upload echograms."""
+    try:
+        sv_dataset = open_zarr_store(zarr_path, container_name=container_name)
+        _log_mem(f"Opened Zarr dataset for {zarr_path}")
+        plot_and_upload_echograms(
+            sv_dataset,
+            file_base_name=file_base_name,
+            save_to_blobstorage=True,
+            upload_path=batch_key,
+            cmap=colormap,
+            container_name=container_name,
+            title_template=title_template
+        )
+        print(f"Echograms for {file_base_name} uploaded successfully.")
+        _log_mem(f"Plotted and uploaded echograms for {file_base_name}")
+        del sv_dataset
+        gc.collect()
+    except Exception as e:
+        logging.error(f"Failed to plot and upload echograms for {file_base_name}: {e}")
+        traceback.print_exc()
+
+
+@task(
+    log_prints=True,
+    task_run_name="plot_and_upload_masks--{batch_key}"
+)
+def plot_and_upload_masks_task(
+    future_plot: PrefectFuture,
+    batch_key: str,
+    zarr_path: str,
+    file_base_name: str,
+    upload_path: str,
+    container_name: str
+):
+    """Task to plot and upload masks."""
+    try:
+        sv_dataset_masked = open_zarr_store(zarr_path, container_name=container_name)
+        _log_mem(f"Opened masked Zarr dataset for {zarr_path}")
+
+        plot_and_upload_masks(
+            sv_dataset_masked,
+            file_base_name=file_base_name,
+            upload_path=upload_path,
+            container_name=container_name
+        )
+        print(f"Masks for {file_base_name} uploaded successfully.")
+        _log_mem(f"Plotted and uploaded masks for {file_base_name}")
+        del sv_dataset_masked
+        gc.collect()
+    except Exception as e:
+        logging.error(f"Failed to plot and upload masks for {file_base_name}: {e}")
+        traceback.print_exc()
+
+
+@task(
+    log_prints=True,
     task_run_name="concatenate_batch_files--{batch_key}"
 )
 def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_echograms, save_to_netcdf,
@@ -356,22 +415,23 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         try:
             if plot_echograms:
-                plot_and_upload_echograms(
-                    sv_dataset_masked,
+                future_plot = plot_and_upload_echograms_task.submit(
+                    batch_key,
+                    zarr_path_denoised,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                    save_to_blobstorage=True,
-                    upload_path=batch_key,
-                    cmap=colormap,
+                    colormap=colormap,
                     container_name=container_name,
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-                )
+                ).result()
 
-                plot_and_upload_masks(
-                    sv_dataset_masked,
+                plot_and_upload_masks_task.submit(
+                    future_plot,
+                    batch_key,
+                    zarr_path_denoised,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
                     upload_path=batch_key,
-                    container_name=container_name,
-                )
+                    container_name=container_name
+                ).result()
                 _log_mem("10) Denoised echograms & masks plotted")
         except Exception as e:
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
