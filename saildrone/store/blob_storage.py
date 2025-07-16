@@ -1,4 +1,7 @@
+import ctypes
+import gc
 import os
+import platform
 import random
 import re
 import shutil
@@ -295,27 +298,44 @@ def save_dataset_to_netcdf(
 
     encoding = get_variable_encoding(ds, compression_level)
 
-    ds.to_netcdf(
-        local_path,
-        engine="netcdf4",
-        format="NETCDF4",
-        encoding=encoding,
-        compute=True,  # build + immediately compute the graph
-    )
-    for attempt in range(1, max_retries + 1):
+    try:
+        ds.to_netcdf(
+            local_path,
+            engine="netcdf4",
+            format="NETCDF4",
+            encoding=encoding,
+            compute=True,  # build + immediately compute the graph
+        )
+        for attempt in range(1, max_retries + 1):
+            try:
+                upload_file_to_blob(str(local_path), ds_path, container_name)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if attempt == max_retries:
+                    raise
+                sleep = backoff_sec * 2 ** (attempt - 1)
+                print(
+                    f"[save_dataset_to_netcdf] upload failed "
+                    f"(attempt {attempt}/{max_retries}): {exc!s}\n"
+                    f"… retrying in {sleep} s"
+                )
+                time.sleep(sleep)
+    finally:
+        # ---------- aggressive memory cleanup ----------
         try:
-            upload_file_to_blob(str(local_path), ds_path, container_name)
-            break
-        except Exception as exc:  # noqa: BLE001
-            if attempt == max_retries:
-                raise
-            sleep = backoff_sec * 2 ** (attempt - 1)
-            print(
-                f"[save_dataset_to_netcdf] upload failed "
-                f"(attempt {attempt}/{max_retries}): {exc!s}\n"
-                f"… retrying in {sleep} s"
-            )
-            time.sleep(sleep)
+            ds.close()  # xarray ≥ 0.21: closes any file-manager resources
+        except AttributeError:
+            pass
+
+        del ds  # drop the last Python reference
+        gc.collect()  # force immediate garbage collection
+
+        # ask glibc’s allocator to return freed pages to the OS (Linux only)
+        if platform.system() == "Linux":
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except OSError:
+                pass
 
     print("Saved and uploaded dataset:", local_path)
     return local_path
