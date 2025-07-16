@@ -233,6 +233,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
     def _process_category(cat: str):
         paths = batch_results[cat]
+
+        return
+        
         if not paths:
             return
 
@@ -290,16 +293,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
         print('sv_dataset_masked:', sv_dataset_masked)
 
-        stats = sv_dataset_masked.attrs.get("mask_stats", {})
-        print("Mask statistics per frequency:")
-        for freq, info in stats.items():
-            print(
-                f"  • {freq} Hz:\n"
-                f"      threshold           = {info['threshold']:.2f}\n"
-                f"      pct_masked          = {info['pct_masked']:.2f}%\n"
-                f"      n_droppable_pings   = {info['n_droppable_pings']}"
-            )
-
         if save_to_netcdf:
             nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
             print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
@@ -332,7 +325,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 container_name=container_name,
             )
     ###############################################################################################################
-
     # 2) run through each category
     for category in CATEGORY_CONFIG:
         _process_category(category)
