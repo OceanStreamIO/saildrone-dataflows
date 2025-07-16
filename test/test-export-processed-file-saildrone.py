@@ -104,6 +104,11 @@ def test_file_workflow_saildrone_full():
                  output_path=f'./test/processed/echograms',
                  )
 
+    print('--------------------------------')
+    print(ds.data_vars)
+    print('--------------------------------')
+    print(ds)
+
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
                                 mask_attenuated_signal=attenuated_signal_opts,

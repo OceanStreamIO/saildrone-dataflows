@@ -262,13 +262,13 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         # optional NetCDF
         if save_to_netcdf:
             nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            save_dataset_to_netcdf(
-                ds,
-                container_name=container_name,
-                ds_path=nc_path,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
+            # save_dataset_to_netcdf(
+            #     ds,
+            #     container_name=container_name,
+            #     ds_path=nc_path,
+            #     base_local_temp_path=NETCDF_ROOT_DIR,
+            #     is_temp_dir=False,
+            # )
             print(f"Finished saving netcdf dataset to:", nc_path)
 
         if plot_echograms:
@@ -307,33 +307,37 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
             print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
 
-            save_dataset_to_netcdf(
-                sv_dataset_masked,
-                container_name=container_name,
-                ds_path=nc_file_path_denoised,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
+            # save_dataset_to_netcdf(
+            #     sv_dataset_masked,
+            #     container_name=container_name,
+            #     ds_path=nc_file_path_denoised,
+            #     base_local_temp_path=NETCDF_ROOT_DIR,
+            #     is_temp_dir=False,
+            # )
 
             print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
 
-        if plot_echograms:
-            plot_and_upload_echograms(
-                sv_dataset_masked,
-                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                save_to_blobstorage=True,
-                upload_path=batch_key,
-                cmap=colormap,
-                container_name=container_name,
-                title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-            )
+        try:
+            if plot_echograms:
+                plot_and_upload_echograms(
+                    sv_dataset_masked,
+                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                    save_to_blobstorage=True,
+                    upload_path=batch_key,
+                    cmap=colormap,
+                    container_name=container_name,
+                    title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                )
 
-            plot_and_upload_masks(
-                sv_dataset_masked,
-                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                upload_path=batch_key,
-                container_name=container_name,
-            )
+                plot_and_upload_masks(
+                    sv_dataset_masked,
+                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                    upload_path=batch_key,
+                    container_name=container_name,
+                )
+        except Exception as e:
+            logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
+            traceback.print_exc()
     ###############################################################################################################
     # 2) run through each category
     for category in CATEGORY_CONFIG:
