@@ -169,11 +169,12 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
     def _run(pulse, tag):
         root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
+
+        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}{suffix}.zarr')
+
         ds = open_zarr_store(f"{root}{suffix}.zarr", container_name=container_name, chunks=chunks,
                              rechunk_after=True)
         ds = _nav_to_data_vars(ds)
-
-        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}{suffix}.zarr')
         print(ds)
 
         ds_mvbs = compute_and_save_mvbs(
@@ -235,7 +236,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         paths = batch_results[cat]
 
         return
-        
+
         if not paths:
             return
 
