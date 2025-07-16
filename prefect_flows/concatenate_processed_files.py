@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from prefect.deployments import run_deployment
 from dotenv import load_dotenv
 
-
 from prefect import flow, task
 from prefect.cache_policies import Inputs
 from prefect.futures import as_completed, PrefectFuture
@@ -21,6 +20,13 @@ from saildrone.process.concat import concatenate_and_rechunk
 from saildrone.process.plot import plot_and_upload_masks
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
 from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store
+from datetime import datetime
+import gc
+
+try:
+    import psutil  # lightweight; ships in most distros / containers
+except ImportError:
+    psutil = None
 
 input_cache_policy = Inputs()
 
@@ -60,6 +66,25 @@ DEFAULT_TASK_TIMEOUT = 7_200  # 2 hours
 MAX_RUNTIME_SECONDS = 3_300
 
 
+def _ram_usage_str() -> str:
+    """
+    Return human-readable RAM usage, e.g. '72.3% (45.7 / 63.1 GB)'.
+    Falls back gracefully if psutil is missing.
+    """
+    if psutil is None:  # psutil not installed → unknown
+        return "unknown"
+    vm = psutil.virtual_memory()
+    return f"{vm.percent:.1f}% ({vm.used / 1e9:.1f} / {vm.total / 1e9:.1f} GB)"
+
+
+def _log_mem(step: str) -> None:
+    """
+    Print a timestamped message that includes current RAM load.
+    """
+    print(f"[{datetime.now().isoformat(timespec='seconds')}] {step} "
+          f"| RAM: {_ram_usage_str()}")
+
+
 def _nav_to_data_vars(ds):
     nav = ["latitude", "longitude", "speed_knots"]
     coords = [v for v in nav if v in ds.coords]
@@ -73,15 +98,15 @@ def _nav_to_data_vars(ds):
     log_prints=True
 )
 def trigger_denoising_flow(
-    zarr_path_source: str,
-    zarr_path_output: str,
-    container_name: str,
-    mask_impulse_noise=None,
-    mask_attenuated_signal=None,
-    mask_transient_noise=None,
-    remove_background_noise=None,
-    apply_seabed_mask: bool = False,
-    chunks=None
+        zarr_path_source: str,
+        zarr_path_output: str,
+        container_name: str,
+        mask_impulse_noise=None,
+        mask_attenuated_signal=None,
+        mask_transient_noise=None,
+        remove_background_noise=None,
+        apply_seabed_mask: bool = False,
+        chunks=None
 ):
     state = run_deployment(
         name="apply-denoising-flow/apply-denoising-flow",
@@ -250,14 +275,17 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             return
 
         section = CATEGORY_CONFIG[cat]
+        _log_mem(f"1) Concatenating files for category {cat} ({len(paths)} paths)")
         print('Concatenating files for category:', cat, f'with {len(paths)} paths:')
         ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
         print(f"Finished concatenating {cat} dataset:", ds)
+        _log_mem(f"2) Finished concatenating {cat} dataset")
 
         # save Zarr
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
         save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
         print(f"Finished saving zarr dataset to:", zarr_path)
+        _log_mem("3) Zarr dataset saved")
 
         # optional NetCDF
         if save_to_netcdf:
@@ -270,6 +298,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             #     is_temp_dir=False,
             # )
             print(f"Finished saving netcdf dataset to:", nc_path)
+            _log_mem("4) NetCDF dataset saved")
 
         if plot_echograms:
             plot_and_upload_echograms(
@@ -281,9 +310,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 title_template=f"{batch_key} ({cat})" + " | {channel_label}",
                 container_name=container_name,
             )
+            _log_mem("5) Echograms plotted & uploaded")
 
         ##############################################################################################################
         print('5) Applying denoising')
+        _log_mem("6) Triggering denoising flow")
         zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
 
         future = trigger_denoising_flow.submit(
@@ -300,12 +331,18 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         state = future.result()
         future.wait()
 
+        del ds
+        gc.collect()
+        _log_mem("7) Source dataset freed from memory after denoising trigger")
+
         sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
         print('sv_dataset_masked:', sv_dataset_masked)
+        _log_mem("8) Denoised dataset opened")
 
         if save_to_netcdf:
             nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
             print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
+            _log_mem("9) Denoised NetCDF saved")
 
             # save_dataset_to_netcdf(
             #     sv_dataset_masked,
@@ -335,9 +372,11 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                     upload_path=batch_key,
                     container_name=container_name,
                 )
+                _log_mem("10) Denoised echograms & masks plotted")
         except Exception as e:
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
             traceback.print_exc()
+
     ###############################################################################################################
     # 2) run through each category
     for category in CATEGORY_CONFIG:
