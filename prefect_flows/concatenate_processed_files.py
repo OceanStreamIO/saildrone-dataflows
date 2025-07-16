@@ -175,15 +175,16 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
     def _run(pulse, tag):
         root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
+        zarr_path = f"{root}{suffix}.zarr"
 
-        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}{suffix}.zarr')
+        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {zarr_path}')
         try:
-            ds = open_zarr_store(f"{root}{suffix}.zarr", container_name=container_name, chunks=chunks,
+            ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks,
                                  rechunk_after=True)
             ds = _nav_to_data_vars(ds)
             print(ds.data_vars)
         except Exception as e:
-            logging.error(f"Failed to open Zarr during compute_batch_mvbs for {root}{suffix}.zarr: {e}")
+            logging.error(f"Failed to open Zarr during compute_batch_mvbs for {zarr_path}: {e}")
             traceback.print_exc()
             return
 
@@ -244,7 +245,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
     def _process_category(cat: str):
         paths = batch_results[cat]
-        return
 
         if not paths:
             return
