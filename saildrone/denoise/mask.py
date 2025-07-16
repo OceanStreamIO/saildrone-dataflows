@@ -1,4 +1,3 @@
-import numpy as np
 import xarray as xr
 from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union, Optional
 
@@ -74,16 +73,21 @@ def build_full_mask(
 
 
 def apply_full_mask(
-        ds: xr.Dataset,
-        full_mask: xr.DataArray,
-        *,
-        var_name: str = "Sv",
-        drop_pings: bool = False,
-        drop_ping_thresholds: Optional[Dict[int, float]] = None
+    ds: xr.Dataset,
+    full_mask: xr.DataArray,
+    *,
+    var_name: str = "Sv",
+    drop_pings: bool = False,
+    drop_ping_thresholds: Optional[Dict[int, float]] = None
 ) -> xr.Dataset:
     fm = full_mask.broadcast_like(ds[var_name])
-
     ds_out = ds.copy()
+
+    rolling_dims = [d for d in fm.dims if d.startswith("_rolling_dim_")]
+    if rolling_dims:
+        indexer = {d: 0 for d in rolling_dims}
+        fm = fm.isel(indexer, drop=True)
+
     ds_out[var_name] = ds[var_name].where(~fm)
 
     # dims & lengths
@@ -114,6 +118,8 @@ def apply_full_mask(
                 thr = drop_ping_thresholds.get(str(int(f)), 1.0)
             thr_list.append(thr)
 
+        print("Per-channel thresholds:", dict(zip(freqs, thr_list)))
+
         thr_arr = xr.DataArray(
             thr_list,
             coords={ch_dim: ds[ch_dim]},
@@ -134,40 +140,6 @@ def apply_full_mask(
 
         # re-apply the final mask
         ds_out[var_name] = ds[var_name].where(~combined)
-    else:
-        combined = fm
-        # need these names later for stats
-        frac_per_chan = None
-        drop_chanping = None
-        thr_arr = None
-
-    # 3) compute & store stats per frequency
-    stats: Dict[int, Dict[str, Any]] = {}
-    for idx in range(ds.sizes[ch_dim]):
-        freq = int(ds["frequency_nominal"].isel(channel=idx).values.item())
-        # this channel’s mask
-        mask_ch = combined.isel(channel=idx)
-
-        # overall % of cells masked
-        masked_cells = int(mask_ch.sum().compute().item())
-        pct_masked = 100.0 * masked_cells / (total_pings * total_depth)
-
-        # how many ping-columns met the threshold?
-        if drop_pings and drop_chanping is not None:
-            n_drop = int(drop_chanping.isel(channel=idx).sum().compute().item())
-            threshold_used = float(thr_arr.isel(channel=idx).values.item())
-        else:
-            n_drop = 0
-            threshold_used = float(thr_arr.isel(channel=idx).values.item()) if thr_arr is not None else 1.0
-
-        stats[freq] = {
-            "threshold": threshold_used,
-            "pct_masked": pct_masked,
-            "n_droppable_pings": n_drop,
-        }
-
-    # 4) stash into attrs
-    ds_out.attrs["mask_stats"] = stats
 
     return ds_out
 

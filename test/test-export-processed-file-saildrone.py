@@ -109,8 +109,7 @@ def test_file_workflow_saildrone_full():
                                 mask_attenuated_signal=attenuated_signal_opts,
                                 mask_transient_noise=None,
                                 remove_background_noise=None,
-                                drop_pings=True,
-                                drop_ping_thresholds={38000: 0.95, 200000: 0.9}
+                                drop_pings=False
                                 )
 
     stats = ds_masked.attrs.get("mask_stats", {})

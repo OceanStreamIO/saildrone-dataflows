@@ -767,8 +767,7 @@ def apply_denoising(sv_dataset, **kwargs):
     if not any([impulse_noise_opts, attenuated_signal_opts, transient_noise_opts, background_noise_opts]):
         return sv_dataset
 
-    stages = {
-    }
+    stages = {}
 
     if attenuated_signal_opts:
         stages["signal-attenuation"] = {
@@ -795,8 +794,7 @@ def apply_denoising(sv_dataset, **kwargs):
         }
 
     full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
-    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask, drop_pings=drop_pings,
-                                          drop_ping_thresholds=drop_ping_thresholds)
+    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)
 
     mask_dict = {"full": full_mask, **dict(stage_cubes)}
 
@@ -813,12 +811,5 @@ def apply_denoising(sv_dataset, **kwargs):
     }
 
     sv_dataset_denoised = sv_dataset_denoised.merge(mask_vars, compat="no_conflicts")
-
-    rolling_dims = [d for d in sv_dataset_denoised.dims if d.startswith("_rolling_dim_")]
-
-    if rolling_dims:
-        indexer = {d: 0 for d in rolling_dims}
-
-        sv_dataset_denoised = sv_dataset_denoised.isel(indexer, drop=True)
 
     return sv_dataset_denoised
