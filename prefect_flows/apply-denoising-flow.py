@@ -97,6 +97,7 @@ def apply_denoising_flow(
         remove_background_noise=remove_background_noise,
         apply_seabed_mask=apply_seabed_mask,
         chunks=chunks
+
     )
 
     output = future.result()
@@ -121,7 +122,7 @@ if __name__ == "__main__":
                 'mask_transient_noise': None,
                 'remove_background_noise': None,
                 'apply_seabed_mask': False,
-                'chunks': None,
+                'chunks': None
             }
         )
     except Exception as e:

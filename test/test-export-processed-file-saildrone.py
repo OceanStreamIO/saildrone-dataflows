@@ -5,6 +5,7 @@ from dask.distributed import Client, LocalCluster
 
 from saildrone.denoise.attenuation_signal import attenuation_mask
 from saildrone.denoise.background_noise import background_noise_mask
+from saildrone.denoise.mask import extract_channel_and_drop_pings
 from saildrone.denoise.transient_noise import transient_noise_mask
 from saildrone.denoise.impulse_noise import impulsive_noise_mask
 
@@ -104,37 +105,27 @@ def test_file_workflow_saildrone_full():
                  output_path=f'./test/processed/echograms',
                  )
 
-    print('--------------------------------')
-    print(ds.data_vars)
-    print('--------------------------------')
-    print(ds)
-
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
                                 mask_attenuated_signal=attenuated_signal_opts,
                                 mask_transient_noise=None,
-                                remove_background_noise=None,
-                                drop_pings=False
+                                remove_background_noise=None
                                 )
 
-    stats = ds_masked.attrs.get("mask_stats", {})
-    print("Mask statistics per frequency:")
-    for freq, info in stats.items():
-        print(
-            f"  • {freq} Hz:\n"
-            f"      threshold           = {info['threshold']:.2f}\n"
-            f"      pct_masked          = {info['pct_masked']:.2f}%\n"
-            f"      n_droppable_pings   = {info['n_droppable_pings']}"
-        )
-
-    print('[ ds_masked ]: \n', ds_masked)
-    plot_sv_data(ds_masked,
+    ds_38khz = extract_channel_and_drop_pings(ds_masked, channel=38000, drop_threshold=0.9)
+    plot_sv_data(ds_38khz,
                  output_path=f'./test/processed/echograms',
-                 title_template="{channel_label} / denoised",
-                 file_base_name=file_name + '--denoised'
+                 title_template="{channel_label} / denoised and pruned",
+                 file_base_name=file_name + '--denoised-pruned'
                  )
 
-    plot_masks_vertical(ds_masked, file_base_name=file_name + '--noise', output_path=f'./test/processed/echograms')
+    # plot_sv_data(ds_masked,
+    #              output_path=f'./test/processed/echograms',
+    #              title_template="{channel_label} / denoised and masked",
+    #              file_base_name=file_name + '--denoised'
+    #              )
+
+    # plot_masks_vertical(ds_masked, file_base_name=file_name + '--noise', output_path=f'./test/processed/echograms')
 
     try:
         client.close()

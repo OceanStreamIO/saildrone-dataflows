@@ -763,6 +763,7 @@ def apply_denoising(sv_dataset, **kwargs):
     background_noise_opts = kwargs.get("remove_background_noise", None)
     drop_pings = kwargs.get("drop_pings", False)
     drop_ping_thresholds = kwargs.get("drop_ping_thresholds", None)
+    merge_masks = kwargs.get("merge_masks", False)
 
     if not any([impulse_noise_opts, attenuated_signal_opts, transient_noise_opts, background_noise_opts]):
         return sv_dataset
@@ -794,22 +795,24 @@ def apply_denoising(sv_dataset, **kwargs):
         }
 
     full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
+
     sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)
 
-    mask_dict = {"full": full_mask, **dict(stage_cubes)}
+    if merge_masks:
+        mask_dict = {"full": full_mask, **dict(stage_cubes)}
 
-    mask_vars = {
-        f"mask_{key.replace(' ', '_').lower()}": arr.astype("bool")
-        for key, arr in mask_dict.items()
-    }
+        mask_vars = {
+            f"mask_{key.replace(' ', '_').lower()}": arr.astype("bool")
+            for key, arr in mask_dict.items()
+        }
 
-    mask_vars = {
-        name: arr.broadcast_like(sv_dataset["Sv"]).assign_attrs(
-            long_name=f"{key} quality-control mask (True = bad)"
-        )
-        for (name, arr), (key, _) in zip(mask_vars.items(), mask_dict.items())
-    }
+        mask_vars = {
+            name: arr.broadcast_like(sv_dataset["Sv"]).assign_attrs(
+                long_name=f"{key} quality-control mask (True = bad)"
+            )
+            for (name, arr), (key, _) in zip(mask_vars.items(), mask_dict.items())
+        }
 
-    sv_dataset_denoised = sv_dataset_denoised.merge(mask_vars, compat="no_conflicts")
+        sv_dataset_denoised = sv_dataset_denoised.merge(mask_vars, compat="no_conflicts")
 
     return sv_dataset_denoised

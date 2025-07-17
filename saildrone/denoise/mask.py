@@ -1,3 +1,4 @@
+import numpy as np
 import xarray as xr
 from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union, Optional
 
@@ -72,13 +73,72 @@ def build_full_mask(
     return full_mask, stage_cubes
 
 
+def extract_channel_and_drop_pings(
+    ds: xr.Dataset,
+    channel: Union[int, float],
+    *,
+    var_name: str = "Sv",
+    drop_threshold: float = 1.0,
+    freq_coord: str = "frequency_nominal",
+) -> xr.Dataset:
+    """
+    From a denoised multi‐channel Dataset (with mask already applied to `var_name`),
+    extract exactly one channel (by numeric frequency or positional index),
+    then drop any ping_time slices where the fraction of NaNs in that channel’s
+    `var_name` is ≥ drop_threshold.
+
+    Parameters
+    ----------
+    ds : xr.Dataset
+        Must have dims ('channel','ping_time','depth') and data_var `var_name`.
+        The mask has already been applied so bad samples are NaN.
+        Also must have coord `frequency_nominal(channel)`.
+    channel : int or float
+        If equal to a value in ds[freq_coord], selects by frequency (leaving
+        a length‐1 channel dim). Otherwise interpreted as a 0‐based index.
+    var_name : str
+        Name of the variable to inspect for NaNs (default "Sv").
+    drop_threshold : float
+        Fraction (0–1) of NaNs in a ping_time above which that ping is removed.
+        e.g. 1.0 removes only fully‐NaN pings; 0.5 removes any ping with ≥50% NaNs.
+    freq_coord : str
+        Name of the per‐channel frequency coordinate (default "frequency_nominal").
+
+    Returns
+    -------
+    xr.Dataset
+        A copy of `ds` containing only the selected channel (singleton dim)
+        with its `ping_time` axis pruned of pings that exceed the NaN threshold.
+    """
+    # --- 1) select the channel, preserving the 'channel' dim --------------
+    freqs = ds[freq_coord].values
+    if (freqs == channel).any():
+        ds_ch = ds.sel(channel=ds[freq_coord] == channel)
+    else:
+        ds_ch = ds.isel(channel=int(channel), drop=False)
+
+    # ------------------------------------------------------------------
+    # 2) Compute fraction-NaN per ping_time
+    depth_dim = ds_ch[var_name].dims[-1]  # "depth" or "echo_range"
+    n_nan = ds_ch[var_name].isnull().sum(dim=depth_dim)  # (ping_time,)
+    total = ds_ch[var_name].sizes[depth_dim]  # scalar
+    frac_nan = n_nan / total  # DataArray
+
+    # ------------------------------------------------------------------
+    if "channel" in frac_nan.dims:
+        frac_nan = frac_nan.squeeze("channel", drop=True)
+
+    keep_mask = (frac_nan < drop_threshold).compute().values
+    ds_ch_clean = ds_ch.isel(ping_time=keep_mask)
+
+    return ds_ch_clean
+
+
 def apply_full_mask(
     ds: xr.Dataset,
     full_mask: xr.DataArray,
     *,
-    var_name: str = "Sv",
-    drop_pings: bool = False,
-    drop_ping_thresholds: Optional[Dict[int, float]] = None
+    var_name: str = "Sv"
 ) -> xr.Dataset:
     fm = full_mask.broadcast_like(ds[var_name])
     ds_out = ds.copy()
@@ -89,57 +149,6 @@ def apply_full_mask(
         fm = fm.isel(indexer, drop=True)
 
     ds_out[var_name] = ds[var_name].where(~fm)
-
-    # dims & lengths
-    ch_dim, ping_dim, depth_dim = fm.dims
-    total_depth = fm.sizes[depth_dim]
-    total_pings = fm.sizes[ping_dim]
-
-    # default thresholds dict
-    if drop_ping_thresholds is None:
-        drop_ping_thresholds = {}
-
-    # 2) build per-(channel,ping) drop-mask if requested
-    if drop_pings:
-        # fraction masked per channel×ping → shape (channel, ping_time)
-        masked_per_chan = fm.sum(dim=depth_dim)  # DataArray dims (ch,ping)
-        valid = ~ds[var_name].isnull()
-        valid_per_chan = valid.sum(dim=depth_dim)
-
-        frac_per_chan = masked_per_chan / valid_per_chan
-
-        # build a 1-D threshold array indexed by channel
-        freqs = ds["frequency_nominal"].astype(int).values
-        thr_list = []
-        for f in freqs:
-            # try both int and str key
-            thr = drop_ping_thresholds.get(int(f), None)
-            if thr is None:
-                thr = drop_ping_thresholds.get(str(int(f)), 1.0)
-            thr_list.append(thr)
-
-        print("Per-channel thresholds:", dict(zip(freqs, thr_list)))
-
-        thr_arr = xr.DataArray(
-            thr_list,
-            coords={ch_dim: ds[ch_dim]},
-            dims=[ch_dim],
-        )
-
-        # broadcast that threshold across ping_time
-        thr_b = thr_arr.broadcast_like(frac_per_chan)
-        drop_chanping = frac_per_chan >= thr_b
-
-        # expand to depth dimension and combine with sample-mask
-        drop3d = (
-            drop_chanping
-            .expand_dims({depth_dim: total_depth}, axis=-1)
-            .transpose(ch_dim, ping_dim, depth_dim)
-        )
-        combined = fm | drop3d
-
-        # re-apply the final mask
-        ds_out[var_name] = ds[var_name].where(~combined)
 
     return ds_out
 

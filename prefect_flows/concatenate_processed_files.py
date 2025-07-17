@@ -15,7 +15,8 @@ from prefect import flow, task
 from prefect.cache_policies import Inputs
 from prefect.futures import as_completed, PrefectFuture
 
-from saildrone.process import plot_and_upload_echograms, apply_denoising
+from saildrone.denoise.mask import extract_channel_and_drop_pings
+from saildrone.process import plot_and_upload_echograms, apply_denoising, plot_sv_data
 from saildrone.process.concat import concatenate_and_rechunk
 from saildrone.process.plot import plot_and_upload_masks
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
@@ -318,6 +319,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
     # 1) bucket files by category
     batch_results = {cat: [] for cat in CATEGORY_CONFIG}
     chunks = kwargs.get('chunks', None)
+    plot_channels_masked = kwargs.get('plot_channels_masked', [])
 
     for file_info in files:
         freqs = file_info["file_freqs"]
@@ -415,14 +417,39 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         try:
             if plot_echograms:
-                future_plot = plot_and_upload_echograms_task.submit(
-                    batch_key,
-                    zarr_path_denoised,
+                # future_plot = plot_and_upload_echograms_task.submit(
+                #     batch_key,
+                #     zarr_path_denoised,
+                #     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                #     colormap=colormap,
+                #     container_name=container_name,
+                #     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                # ).result()
+
+                plot_and_upload_echograms(
+                    sv_dataset_masked,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                    colormap=colormap,
+                    save_to_blobstorage=True,
+                    upload_path=batch_key,
+                    cmap=colormap,
                     container_name=container_name,
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-                ).result()
+                )
+
+                for channel in plot_channels_masked:
+                    if channel in sv_dataset_masked:
+                        ds_channel = extract_channel_and_drop_pings(
+                            sv_dataset_masked, channel=channel, drop_threshold=0.9
+                        )
+                        plot_and_upload_echograms(
+                            ds_channel,
+                            file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                            save_to_blobstorage=True,
+                            upload_path=batch_key,
+                            cmap=colormap,
+                            container_name=container_name,
+                            title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                        )
 
                 # plot_and_upload_masks_task.submit(
                 #     future_plot,
@@ -463,7 +490,8 @@ def concatenate_processed_files(files_list,
                                 mask_transient_noise=None,
                                 remove_background_noise=None,
                                 apply_seabed_mask=False,
-                                chunks=None
+                                chunks=None,
+                                plot_channels_masked=None
                                 ):
     by_batch = defaultdict(list)
     in_flight = []
@@ -494,7 +522,8 @@ def concatenate_processed_files(files_list,
                                                 mask_transient_noise=mask_transient_noise,
                                                 remove_background_noise=remove_background_noise,
                                                 apply_seabed_mask=apply_seabed_mask,
-                                                chunks=chunks)
+                                                chunks=chunks,
+                                                plot_channels_masked=plot_channels_masked)
 
         in_flight.append(future)
 
@@ -571,6 +600,7 @@ if __name__ == "__main__":
                 'remove_background_noise': None,
                 'apply_seabed_mask': False,
                 'chunks': None,
+                'plot_channels_masked': []
             }
         )
     except Exception as e:

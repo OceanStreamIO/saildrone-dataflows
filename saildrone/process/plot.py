@@ -13,7 +13,7 @@ from pathlib import Path
 from saildrone.store import upload_folder_to_blob_storage
 
 
-def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
+def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r', channel: int = None,
                  colorbar_orientation: str = 'vertical', plot_var='Sv', title_template='{channel_label}') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
@@ -37,20 +37,31 @@ def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None
         plt.switch_backend('Agg')  # Use non-interactive backend for plotting
 
     echogram_files = []
-    for channel in range(ds_Sv.dims['channel']):
+
+    def plot_fn(ch):
+        return plot_sv_channel(ds_Sv,
+                               channel=ch,
+                               file_base_name=file_base_name,
+                               echogram_path=output_path,
+                               colorbar_orientation=colorbar_orientation,
+                               cmap=cmap,
+                               plot_var=plot_var,
+                               title_template=title_template)
+
+    if channel is not None:
+        # If a specific channel is provided, plot only that channel
         try:
-            echogram_file_path = plot_sv_channel(ds_Sv,
-                                                 channel=channel,
-                                                 file_base_name=file_base_name,
-                                                 echogram_path=output_path,
-                                                 colorbar_orientation=colorbar_orientation,
-                                                 cmap=cmap,
-                                                 plot_var=plot_var,
-                                                 title_template=title_template)
-            echogram_files.append(echogram_file_path)
+            echogram_files.append(plot_fn(channel))
         except Exception as e:
-            print(f"Error plotting echogram for {file_base_name}: {e}")
+            print(f"Error plotting echogram for channel {channel}: {e}")
             traceback.print_exc()
+    else:
+        for ch in range(ds_Sv.dims['channel']):
+            try:
+                echogram_files.append(plot_fn(ch))
+            except Exception as e:
+                print(f"Error plotting echogram for {file_base_name}: {e}")
+                traceback.print_exc()
 
     return echogram_files
 
@@ -67,7 +78,15 @@ def plot_sv_channel(
     vmin: float = -80,
     vmax: float = -50,
 ):
-    da_Sv, meta = prepare_channel_da(ds_Sv, channel, var_name=plot_var)
+    if isinstance(ds_Sv, xr.Dataset):
+        channel_idx = channel
+    else:
+        if channel not in ds_Sv:
+            raise KeyError(f"{channel} not found among frequencies {list(ds_Sv)}")
+        ds_Sv = ds_Sv[channel]
+        channel_idx = None
+
+    da_Sv, meta = prepare_channel_da(ds_Sv, channel_idx, var_name=plot_var)
     fig, ax = plt.subplots(figsize=(20, 12))
 
     da_Sv.T.plot(
@@ -273,7 +292,7 @@ def __plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_b
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
                               file_name=None, output_path=None, upload_path=None, container_name=None,
-                              cmap='ocean_r', plot_var='Sv', title_template='{channel_label}'):
+                              channel=None, cmap='ocean_r', plot_var='Sv', title_template='{channel_label}'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
     else:
@@ -289,6 +308,7 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
                                   output_path=echograms_output_path,
                                   plot_var=plot_var,
                                   cmap=cmap,
+                                  channel=channel,
                                   title_template=title_template)
 
     if save_to_blobstorage:
@@ -420,8 +440,18 @@ def prepare_channel_da(
     )
 
     # limits
-    top = float(da_clean[ydim].isel({ydim: 0}).item())
-    bot = float(da_clean[ydim].isel({ydim: -1}).item())
+    try:
+        top = float(da_clean[ydim].isel({ydim: 0}).item())
+        bot = float(da_clean[ydim].isel({ydim: -1}).item())
+    except Exception as e:
+        print(f"Error determining depth limits for {ch_label}: {e}")
+        traceback.print_exc()
+
+        raise ValueError(
+            f"Failed to determine depth limits for channel {ch_label}. "
+            "Ensure that the data contains valid depth information."
+        )
+
 
     plotting_metadata = dict(
         ch_label=ch_label,
