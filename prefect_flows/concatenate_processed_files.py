@@ -441,7 +441,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                         ds_channel = extract_channel_and_drop_pings(
                             sv_dataset_masked, channel=channel, drop_threshold=0.9
                         )
-
+                        print(f"Plotting pruned channel {channel} for {batch_key} ({cat})")
                         plot_and_upload_echograms(
                             ds_channel,
                             file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised-pruned')}",
@@ -451,6 +451,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                             container_name=container_name,
                             title_template=f"{batch_key} ({cat}, denoised and pruned)" + " | {channel_label}",
                         )
+                        _log_mem(f"10) Plotted pruned channel {channel} for {batch_key} ({cat})")
 
                 # plot_and_upload_masks_task.submit(
                 #     future_plot,
