@@ -441,14 +441,15 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                         ds_channel = extract_channel_and_drop_pings(
                             sv_dataset_masked, channel=channel, drop_threshold=0.9
                         )
+
                         plot_and_upload_echograms(
                             ds_channel,
-                            file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                            file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised-pruned')}",
                             save_to_blobstorage=True,
                             upload_path=batch_key,
                             cmap=colormap,
                             container_name=container_name,
-                            title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                            title_template=f"{batch_key} ({cat}, denoised and pruned)" + " | {channel_label}",
                         )
 
                 # plot_and_upload_masks_task.submit(
