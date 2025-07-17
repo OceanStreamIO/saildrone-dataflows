@@ -792,8 +792,14 @@ def apply_denoising(sv_dataset, **kwargs):
             "param_sets": background_noise_opts,
         }
 
-    full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
-    sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)
+    try:
+        full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
+        sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)
+    except Exception as e:
+        error_message = f"Error applying denoising masks: {e}"
+        logging.error(error_message)
+        traceback.print_exc()
+        raise RuntimeError(error_message)
 
     if merge_masks:
         mask_dict = {"full": full_mask, **dict(stage_cubes)}
