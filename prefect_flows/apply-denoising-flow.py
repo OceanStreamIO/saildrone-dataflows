@@ -63,8 +63,7 @@ def denoise_zarr(
         mask_impulse_noise=mask_impulse_noise,
         mask_attenuated_signal=mask_attenuated_signal,
         mask_transient_noise=mask_transient_noise,
-        remove_background_noise=remove_background_noise,
-        drop_pings=False,
+        remove_background_noise=remove_background_noise
     )
 
     print("Denoising complete", sv_dataset_denoised)

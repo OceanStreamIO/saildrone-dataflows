@@ -110,21 +110,19 @@ def extract_channel_and_drop_pings(
         A copy of `ds` containing only the selected channel (singleton dim)
         with its `ping_time` axis pruned of pings that exceed the NaN threshold.
     """
-    # --- 1) select the channel, preserving the 'channel' dim --------------
+    # --- 1) select the channel, preserving the 'channel' dim
     freqs = ds[freq_coord].values
     if (freqs == channel).any():
         ds_ch = ds.sel(channel=ds[freq_coord] == channel)
     else:
         ds_ch = ds.isel(channel=int(channel), drop=False)
 
-    # ------------------------------------------------------------------
     # 2) Compute fraction-NaN per ping_time
     depth_dim = ds_ch[var_name].dims[-1]  # "depth" or "echo_range"
     n_nan = ds_ch[var_name].isnull().sum(dim=depth_dim)  # (ping_time,)
     total = ds_ch[var_name].sizes[depth_dim]  # scalar
     frac_nan = n_nan / total  # DataArray
 
-    # ------------------------------------------------------------------
     if "channel" in frac_nan.dims:
         frac_nan = frac_nan.squeeze("channel", drop=True)
 

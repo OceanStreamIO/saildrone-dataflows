@@ -435,7 +435,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                     container_name=container_name,
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 )
-
+                print('Plotting masked channels', plot_channels_masked)
                 for channel in plot_channels_masked:
                     if channel in sv_dataset_masked:
                         ds_channel = extract_channel_and_drop_pings(
