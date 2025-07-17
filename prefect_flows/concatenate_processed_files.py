@@ -424,14 +424,14 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 ).result()
 
-                plot_and_upload_masks_task.submit(
-                    future_plot,
-                    batch_key,
-                    zarr_path_denoised,
-                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                    upload_path=batch_key,
-                    container_name=container_name
-                ).result()
+                # plot_and_upload_masks_task.submit(
+                #     future_plot,
+                #     batch_key,
+                #     zarr_path_denoised,
+                #     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                #     upload_path=batch_key,
+                #     container_name=container_name
+                # ).result()
                 _log_mem("10) Denoised echograms & masks plotted")
         except Exception as e:
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
