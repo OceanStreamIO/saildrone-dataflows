@@ -437,7 +437,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 )
                 print('Plotting masked channels', plot_channels_masked)
                 for channel in plot_channels_masked:
-                    if channel in sv_dataset_masked:
+                    try:
                         ds_channel = extract_channel_and_drop_pings(
                             sv_dataset_masked, channel=channel, drop_threshold=0.9
                         )
@@ -452,6 +452,9 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                             title_template=f"{batch_key} ({cat}, denoised and pruned)" + " | {channel_label}",
                         )
                         _log_mem(f"10) Plotted pruned channel {channel} for {batch_key} ({cat})")
+                    except Exception as e:
+                        logging.error(f"Failed to plot pruned channel {channel} for {batch_key} ({cat}): {e}")
+                        traceback.print_exc()
 
                 # plot_and_upload_masks_task.submit(
                 #     future_plot,
