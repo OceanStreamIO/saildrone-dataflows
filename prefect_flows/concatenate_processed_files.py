@@ -6,7 +6,6 @@ import traceback
 import dask
 
 from collections import defaultdict
-from dask.distributed import Client
 from datetime import datetime, timedelta
 from prefect.deployments import run_deployment
 from dotenv import load_dotenv
@@ -417,15 +416,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         try:
             if plot_echograms:
-                # future_plot = plot_and_upload_echograms_task.submit(
-                #     batch_key,
-                #     zarr_path_denoised,
-                #     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                #     colormap=colormap,
-                #     container_name=container_name,
-                #     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
-                # ).result()
-
                 plot_and_upload_echograms(
                     sv_dataset_masked,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
@@ -456,14 +446,6 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                         logging.error(f"Failed to plot pruned channel {channel} for {batch_key} ({cat}): {e}")
                         traceback.print_exc()
 
-                # plot_and_upload_masks_task.submit(
-                #     future_plot,
-                #     batch_key,
-                #     zarr_path_denoised,
-                #     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
-                #     upload_path=batch_key,
-                #     container_name=container_name
-                # ).result()
                 _log_mem("10) Denoised echograms & masks plotted")
         except Exception as e:
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")

@@ -337,7 +337,8 @@ def trigger_concatenate_flow(
     mask_transient_noise=None,
     remove_background_noise=None,
     apply_seabed_mask=None,
-    chunks=None
+    chunks=None,
+    plot_channels_masked=None
 ):
     files = files_list.copy() if files_list else []
     for source_path, file_record in files:
@@ -360,7 +361,8 @@ def trigger_concatenate_flow(
             'mask_transient_noise': mask_transient_noise,
             'remove_background_noise': remove_background_noise,
             'apply_seabed_mask': apply_seabed_mask,
-            'chunks': chunks
+            'chunks': chunks,
+            'plot_channels_masked': plot_channels_masked
         },
         timeout=None
     )
@@ -397,7 +399,8 @@ def export_processed_data(cruise_id: str,
                           chunks_ping_time: Optional[int] = CHUNKS['ping_time'],
                           chunks_depth: Optional[int] = CHUNKS['depth'],
                           save_to_netcdf: bool = False,
-                          batch_size: int = BATCH_SIZE
+                          batch_size: int = BATCH_SIZE,
+                          plot_channels_masked: Optional[Union[str, List[str]]] = None
                           ):
 
     if mask_impulse_noise not in (None, False):
@@ -532,7 +535,8 @@ def export_processed_data(cruise_id: str,
         mask_transient_noise=mask_transient_noise,
         remove_background_noise=remove_background_noise,
         apply_seabed_mask=apply_seabed_mask,
-        chunks=chunks
+        chunks=chunks,
+        plot_channels_masked=plot_channels_masked
     )
     future_zip.wait()
 
@@ -566,7 +570,8 @@ if __name__ == "__main__":
                 'chunks_ping_time': 1000,
                 'chunks_depth': 1000,
                 'save_to_netcdf': False,
-                'batch_size': 4
+                'batch_size': 4,
+                'plot_channels_masked': None
             }
         )
     except Exception as e:
