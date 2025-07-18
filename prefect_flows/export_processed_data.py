@@ -400,7 +400,7 @@ def export_processed_data(cruise_id: str,
                           chunks_depth: Optional[int] = CHUNKS['depth'],
                           save_to_netcdf: bool = False,
                           batch_size: int = BATCH_SIZE,
-                          plot_channels_masked: Optional[Union[str, List[str]]] = None
+                          plot_channels_masked=None
                           ):
 
     if mask_impulse_noise not in (None, False):
@@ -571,7 +571,7 @@ if __name__ == "__main__":
                 'chunks_depth': 1000,
                 'save_to_netcdf': False,
                 'batch_size': 4,
-                'plot_channels_masked': None
+                'plot_channels_masked': []
             }
         )
     except Exception as e:
