@@ -1,4 +1,5 @@
 import pytest
+import xarray as xr
 
 from dotenv import load_dotenv
 from dask.distributed import Client, LocalCluster
@@ -16,9 +17,22 @@ from saildrone.process.workflow import apply_denoising
 from saildrone.denoise import build_full_mask, apply_full_mask
 from saildrone.store import open_zarr_store, save_zarr_store
 
+from echopype.clean import remove_background_noise
+
+
 load_dotenv()
 
 GPS_OUTPUT_FOLDER = "./test/gps-processed"
+
+
+def depth_to_range_sample(ds: xr.Dataset):
+    ds = ds.set_coords("range_sample")
+    return ds.swap_dims({"depth": "range_sample"})
+
+
+# switch back so depth is the dimension
+def range_sample_to_depth(ds: xr.Dataset):
+    return ds.swap_dims({"range_sample": "depth"})
 
 
 def test_file_workflow_saildrone_full():
@@ -84,19 +98,19 @@ def test_file_workflow_saildrone_full():
     background_noise_opts = {
         38000: dict(
             range_coord="depth",
-            range_window=5,
-            ping_window=20,
-            background_noise_max=-125.0,
-            SNR_threshold=3.0,
-            sound_absorption=9e-6,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
+            range_window=15,
+            ping_window=50,
+            background_noise_max=-130.0,
+            SNR_threshold=6.0,
+            sound_absorption=0.0022,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
         ),
         200000: dict(
             range_coord="depth",
-            range_window=5,
-            ping_window=20,
-            background_noise_max=-125.0,
-            SNR_threshold=3.0,
-            sound_absorption=3.8e-4,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
+            range_window=10,
+            ping_window=30,
+            background_noise_max=-120.0,
+            SNR_threshold=8.0,
+            sound_absorption=0.055,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
     }
 
@@ -106,24 +120,33 @@ def test_file_workflow_saildrone_full():
                  )
 
     ds_masked = apply_denoising(ds,
-                                mask_impulse_noise=impulse_noise_opts,
-                                mask_attenuated_signal=attenuated_signal_opts,
+                                mask_impulse_noise=None,
+                                mask_attenuated_signal=None,
                                 mask_transient_noise=None,
-                                remove_background_noise=None
+                                remove_background_noise=background_noise_opts
                                 )
+    # ds = ds.assign(sound_absorption=3.8e-4)
+    # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
+    #
+    # Run noise removal
+    # ds_masked = remove_background_noise(
+    #     ds, ping_num=2, range_sample_num=5, SNR_threshold="4dB"
+    # )
 
-    ds_38khz = extract_channel_and_drop_pings(ds_masked, channel=38000, drop_threshold=0.9)
-    plot_sv_data(ds_38khz,
-                 output_path=f'./test/processed/echograms',
-                 title_template="{channel_label} / denoised and pruned",
-                 file_base_name=file_name + '--denoised-pruned'
-                 )
+    # ds_masked = ds_masked.set_coords("depth").swap_dims({"range_sample": "depth"})
 
-    # plot_sv_data(ds_masked,
+    # ds_38khz = extract_channel_and_drop_pings(ds_masked, channel=38000, drop_threshold=0.9)
+    # plot_sv_data(ds_38khz,
     #              output_path=f'./test/processed/echograms',
-    #              title_template="{channel_label} / denoised and masked",
-    #              file_base_name=file_name + '--denoised'
+    #              title_template="{channel_label} / denoised and pruned",
+    #              file_base_name=file_name + '--denoised-pruned'
     #              )
+
+    plot_sv_data(ds_masked,
+                 output_path=f'./test/processed/echograms',
+                 title_template="{channel_label} / denoised and masked",
+                 file_base_name=file_name + '--denoised'
+                 )
 
     # plot_masks_vertical(ds_masked, file_base_name=file_name + '--noise', output_path=f'./test/processed/echograms')
 
@@ -239,7 +262,7 @@ def test_file_workflow_saildrone():
     }
 
     full_mask, stage_cubes = build_full_mask(ds, stages=stages, return_stage_masks=True)
-    ds_masked = apply_full_mask(ds, full_mask, drop_pings=False)
+    ds_masked = apply_full_mask(ds, full_mask)
     # ds_pruned = apply_full_mask(ds, full_mask, drop_pings=True)
 
     plot_sv_data(ds_masked,

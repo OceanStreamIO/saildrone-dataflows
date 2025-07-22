@@ -794,6 +794,8 @@ def apply_denoising(sv_dataset, **kwargs):
 
     try:
         full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
+        print('Full mask shape:', full_mask)
+        print('Stage cubes:', stage_cubes)
         sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)
     except Exception as e:
         error_message = f"Error applying denoising masks: {e}"
