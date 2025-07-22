@@ -10,6 +10,7 @@ from dask.distributed import get_client
 
 from pathlib import Path
 from typing import List, Optional, Union
+from echopype.clean import remove_background_noise as ep_remove_background_noise
 from dotenv import load_dotenv
 from dask.distributed import Client
 from prefect import flow, task
@@ -64,6 +65,11 @@ def denoise_zarr(
         mask_attenuated_signal=mask_attenuated_signal,
         mask_transient_noise=mask_transient_noise,
         remove_background_noise=remove_background_noise
+    )
+
+    sv_dataset_denoised = sv_dataset_denoised.assign(sound_absorption=0.001)
+    sv_dataset_denoised = ep_remove_background_noise(
+        sv_dataset_denoised, ping_num=2, range_sample_num=5, SNR_threshold="4dB"
     )
 
     print("Denoising complete", sv_dataset_denoised)
