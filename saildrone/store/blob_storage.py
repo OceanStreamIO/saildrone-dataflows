@@ -148,6 +148,7 @@ def save_zarr_store(echodata_or_sv_ds, zarr_path, survey_id=None, container_name
     else:
         zarr_path_full = zarr_path
 
+    print('Saving Zarr store to:', zarr_path_full)
     azfs = get_azure_blob_filesystem(storage_account_type=storage_account_type)
     zarr_store = azfs.get_mapper(zarr_path_full)
 
