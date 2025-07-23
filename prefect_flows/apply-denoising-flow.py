@@ -67,12 +67,15 @@ def denoise_zarr(
         remove_background_noise=remove_background_noise
     )
 
+    print("Denoising complete", sv_dataset_denoised)
+    print('Running background noise removal...')
     sv_dataset_denoised = sv_dataset_denoised.assign(sound_absorption=0.001)
     sv_dataset_denoised = ep_remove_background_noise(
         sv_dataset_denoised, ping_num=10, range_sample_num=30, SNR_threshold="6dB"
     )
 
-    print("Denoising complete", sv_dataset_denoised)
+    print("Background noise removal complete.")
+
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")
