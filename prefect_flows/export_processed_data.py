@@ -399,6 +399,8 @@ def export_processed_data(cruise_id: str,
                           chunks_ping_time: Optional[int] = CHUNKS['ping_time'],
                           chunks_depth: Optional[int] = CHUNKS['depth'],
                           save_to_netcdf: bool = False,
+                          save_nasc_to_netcdf: bool = True,
+                          save_mvbs_to_netcdf: bool = True,
                           batch_size: int = BATCH_SIZE,
                           plot_channels_masked=None
                           ):
@@ -466,60 +468,6 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight:
         remaining.result()
 
-    # future_con = concatenate_batches.submit(cruise_id, denoised=denoised,
-    #                                         container_name=export_container_name,
-    #                                         compute_nasc_options=compute_nasc_options,
-    #                                         plot_echograms=compute_nasc_options,
-    #                                         save_to_netcdf=save_to_netcdf,
-    #                                         colormap=colormap,
-    #                                         chunks=chunks)
-    # future_con.wait()
-    #
-    # # Aggregate results by batch
-    # by_batch = defaultdict(list)
-    # agg_in_flight = []
-    # agg_side_tasks = []
-    #
-    # for key, files in batches:
-    #     print('Processing batch:', key, 'with', len(files), 'files.')
-    #     future = concatenate_batch_files.submit(key, cruise_id, files, export_container_name, plot_echograms,
-    #                                             save_to_netcdf, colormap,
-    #                                             mask_impulse_noise=mask_impulse_noise,
-    #                                             mask_attenuated_signal=mask_attenuated_signal,
-    #                                             mask_transient_noise=mask_transient_noise,
-    #                                             remove_background_noise=remove_background_noise,
-    #                                             apply_seabed_mask=apply_seabed_mask,
-    #                                             chunks=chunks)
-    #
-    #     agg_in_flight.append(future)
-    #
-    #     if compute_nasc_options:
-    #         future_nasc_task = compute_batch_nasc.submit(future, key, cruise_id, export_container_name,
-    #                                                      compute_nasc_options=compute_nasc_options,
-    #                                                      plot_echograms=plot_echograms,
-    #                                                      save_to_netcdf=save_to_netcdf,
-    #                                                      colormap=colormap,
-    #                                                      chunks=chunks)
-    #         agg_side_tasks.append(future_nasc_task)
-    #
-    #     if compute_mvbs_options:
-    #         future_mvbs_task = compute_batch_mvbs.submit(future, key, cruise_id, export_container_name,
-    #                                                      compute_mvbs_options=compute_mvbs_options,
-    #                                                      plot_echograms=plot_echograms,
-    #                                                      save_to_netcdf=save_to_netcdf,
-    #                                                      colormap=colormap,
-    #                                                      chunks=chunks)
-    #         agg_side_tasks.append(future_mvbs_task)
-    #
-    #     if len(agg_in_flight) >= batch_size:
-    #         finished = next(as_completed(agg_in_flight))
-    #         agg_in_flight.remove(finished)
-    #
-    # all_futures = agg_in_flight + agg_side_tasks
-    #
-    # for remaining in all_futures:
-    #     remaining.result()
-
     future_zip = trigger_concatenate_flow.submit(
         files_list=files_list,
         days_to_combine=days_to_combine,
@@ -527,6 +475,8 @@ def export_processed_data(cruise_id: str,
         container_name=export_container_name,
         plot_echograms=plot_echograms,
         save_to_netcdf=save_to_netcdf,
+        save_nasc_to_netcdf=save_nasc_to_netcdf,
+        save_mvbs_to_netcdf=save_mvbs_to_netcdf,
         colormap=colormap,
         compute_nasc_options=compute_nasc_options,
         compute_mvbs_options=compute_mvbs_options,
@@ -570,6 +520,8 @@ if __name__ == "__main__":
                 'chunks_ping_time': 1000,
                 'chunks_depth': 1000,
                 'save_to_netcdf': False,
+                'save_nasc_to_netcdf': True,
+                'save_mvbs_to_netcdf': True,
                 'batch_size': 4,
                 'plot_channels_masked': []
             }
