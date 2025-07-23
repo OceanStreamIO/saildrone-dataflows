@@ -119,19 +119,19 @@ def test_file_workflow_saildrone_full():
                  output_path=f'./test/processed/echograms',
                  )
 
-    ds_masked = apply_denoising(ds,
-                                mask_impulse_noise=None,
-                                mask_attenuated_signal=None,
-                                mask_transient_noise=None,
-                                remove_background_noise=background_noise_opts
-                                )
-    # ds = ds.assign(sound_absorption=3.8e-4)
+    # ds_masked = apply_denoising(ds,
+    #                             mask_impulse_noise=None,
+    #                             mask_attenuated_signal=None,
+    #                             mask_transient_noise=None,
+    #                             remove_background_noise=background_noise_opts
+    #                             )
+    ds = ds.assign(sound_absorption=0.055)
     # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
     #
     # Run noise removal
-    # ds_masked = remove_background_noise(
-    #     ds, ping_num=2, range_sample_num=5, SNR_threshold="4dB"
-    # )
+    ds_masked = remove_background_noise(
+        ds, ping_num=2, range_sample_num=5, SNR_threshold="4dB"
+    )
 
     # ds_masked = ds_masked.set_coords("depth").swap_dims({"range_sample": "depth"})
 
