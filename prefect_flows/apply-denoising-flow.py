@@ -69,10 +69,10 @@ def denoise_zarr(
 
     print("Denoising complete", sv_dataset_denoised)
     print('Running background noise removal...')
-    sv_dataset_denoised = sv_dataset_denoised.assign(sound_absorption=0.001)
-    sv_dataset_denoised = ep_remove_background_noise(
-        sv_dataset_denoised, ping_num=10, range_sample_num=30, SNR_threshold="6dB"
-    )
+    # sv_dataset_denoised = sv_dataset_denoised.assign(sound_absorption=0.001)
+    # sv_dataset_denoised = ep_remove_background_noise(
+    #     sv_dataset_denoised, ping_num=10, range_sample_num=30, SNR_threshold="8dB"
+    # )
 
     print("Background noise removal complete.")
 
