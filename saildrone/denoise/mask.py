@@ -8,7 +8,7 @@ def build_full_mask(
     stages: Mapping[str, Dict[str, Any]],
     var_name: str = "Sv",
     return_stage_masks: bool = False,
-    mask_unfeasible: bool = False,
+    mask_unfeasible: bool = True,
 ) -> xr.DataArray:
     n_ch = ds.dims["channel"]
 

@@ -100,16 +100,16 @@ def test_file_workflow_saildrone_full():
             range_coord="depth",
             range_window=15,
             ping_window=50,
-            background_noise_max=-130.0,
-            SNR_threshold=6.0,
+            background_noise_max="-130.0dB",
+            SNR_threshold="6.0dB",
             sound_absorption=0.0022,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
         ),
         200000: dict(
             range_coord="depth",
-            range_window=10,
+            range_window=30,
             ping_window=30,
-            background_noise_max=-120.0,
-            SNR_threshold=8.0,
+            background_noise_max="-120.0dB",
+            SNR_threshold="10.0dB",
             sound_absorption=0.055,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
     }
@@ -119,19 +119,57 @@ def test_file_workflow_saildrone_full():
                  output_path=f'./test/processed/echograms',
                  )
 
-    # ds_masked = apply_denoising(ds,
-    #                             mask_impulse_noise=None,
-    #                             mask_attenuated_signal=None,
-    #                             mask_transient_noise=None,
-    #                             remove_background_noise=background_noise_opts
-    #                             )
-    ds = ds.assign(sound_absorption=0.055)
+    ds_masked = apply_denoising(ds,
+                                mask_impulse_noise=impulse_noise_opts,
+                                mask_attenuated_signal=attenuated_signal_opts,
+                                mask_transient_noise=None,
+                                remove_background_noise=None
+                                )
+
     # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
     #
+    def _mask_one(ch_ds):
+        opts = background_noise_opts[int(ch_ds.frequency_nominal)]
+        return remove_background_noise(
+            ch_ds,
+            ping_num=opts["ping_window"],
+            range_sample_num=opts["range_window"],
+            SNR_threshold=opts["SNR_threshold"],
+            background_noise_max=opts["background_noise_max"],
+        )["Sv"]
+
+    # this returns a DataArray with dims ("channel","ping_time",...)
+    sv_clean = ds_masked.groupby("channel").map(_mask_one)
+    sv_clean.name = "Sv"
+
+    # overwrite in-place
+    ds_masked["Sv"] = sv_clean
+
     # Run noise removal
-    ds_masked = remove_background_noise(
-        ds, ping_num=2, range_sample_num=5, SNR_threshold="4dB"
-    )
+    # n_ch = ds.dims["channel"]
+    # for ch in range(n_ch):
+    #     ch_ds = ds.isel(channel=ch)
+    #     freq = int(ch_ds["frequency_nominal"].values.item())
+    #     opts = background_noise_opts.get(freq, None)
+    #     sound_absorption = opts.get("sound_absorption", 0.001)
+    #     SNR_threshold = opts.get("SNR_threshold", "4dB")
+    #     ping_num = opts.get("ping_window", 10)
+    #     range_sample_num = opts.get("range_window", 30)
+    #     background_noise_max = opts.get("background_noise_max", -120.0)
+    #
+    #     print('freq:', opts)
+    #
+    #     ch_ds = ch_ds.assign(sound_absorption=sound_absorption)
+    #     ds_masked = remove_background_noise(
+    #         ch_ds, ping_num=ping_num, range_sample_num=range_sample_num, SNR_threshold=SNR_threshold, \
+    #         background_noise_max=background_noise_max
+    #     )
+    #     plot_sv_data(ds_masked,
+    #                  channel=ch,
+    #                  output_path=f'./test/processed/echograms',
+    #                  title_template="{channel_label} / denoised and pruned",
+    #                  file_base_name=file_name + '--denoised-pruned'
+    #                  )
 
     # ds_masked = ds_masked.set_coords("depth").swap_dims({"range_sample": "depth"})
 

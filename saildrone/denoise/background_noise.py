@@ -2,6 +2,7 @@ import dask.array as da
 import numpy as np
 import xarray as xr
 from typing import Tuple
+from echopype.clean.utils import extract_dB
 
 
 def background_noise_mask(
@@ -39,12 +40,13 @@ def background_noise_mask(
     sound_absorption = params.get("sound_absorption", 0.001)
     rng_win = params.get("range_window", 20)
     ping_win = params.get("ping_window", 50)
-    background_noise_max = params.get("background_noise_max", -125.0)
-    SNR_threshold = params.get("SNR_threshold", 3.0)
+    background_noise_max = params.get("background_noise_max", "-125.0dB")
+    SNR_threshold = params.get("SNR_threshold", "3.0dB")
     minimal_linear = params.get("minimal_linear", 1e-30)
+    background_noise_max = extract_dB(background_noise_max)
+    SNR_threshold = extract_dB(SNR_threshold)
 
     # 2. extract Sv & range
-    print('1. Extracting Sv and range variable from dataset...')
     if rng_win == 'auto' and rng_var == 'depth':
         # auto-detect range window based on ping window
         dz = float(ds_channel.depth.diff('depth').median())
@@ -56,13 +58,11 @@ def background_noise_mask(
     range_values = ds_channel[rng_var]
 
     # 3. remove TVG: 20 log10(r) + 2 α r
-    print('2. Calculating TVG and removing it from Sv...')
     r_safe = xr.where(range_values > 0, range_values, np.nan)
     tvg = 20.0 * np.log10(r_safe) + 2.0 * sound_absorption * r_safe
     Sv_flat_db = Sv - tvg
 
     # 4. linear domain for block‐min
-    print('3. Converting Sv to linear domain for block minimum calculation...')
     Sv_lin = 10.0 ** (Sv_flat_db / 10.0)
     block_min_lin = (
         Sv_lin
@@ -76,16 +76,13 @@ def background_noise_mask(
     )
 
     # 5. back to dB ‐ cap floor
-    print('4. Converting block minimum back to dB and applying background noise max...')
     bgn_flat_db = 10.0 * np.log10(np.maximum(block_min_lin, minimal_linear))
     bgn_flat_db = bgn_flat_db.where(bgn_flat_db > background_noise_max, background_noise_max)
 
     # 6. restore TVG
-    print('5. Restoring TVG to the background noise...')
     background_db = bgn_flat_db + tvg
 
     # 7. compute masks
-    print('6. Computing masks for low SNR and non-positive values...')
     Sv_lin_tot = 10.0 ** (Sv / 10.0)
     bgn_lin_tot = 10.0 ** (background_db / 10.0)
     lin_diff = Sv_lin_tot - bgn_lin_tot
@@ -100,6 +97,5 @@ def background_noise_mask(
 
     snr_db = Sv_clean_db - background_db
     mask_low_snr = snr_db < SNR_threshold
-    print('7. Masks computed successfully.')
 
     return mask_low_snr, mask_non_positive
