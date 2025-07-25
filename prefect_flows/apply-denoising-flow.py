@@ -71,7 +71,8 @@ def denoise_zarr(
     print('Running background noise removal...')
 
     def _mask_one(ch_ds):
-        opts = remove_background_noise[str(ch_ds.frequency_nominal)]
+        freq = str(int(ch_ds["frequency_nominal"]))
+        opts = remove_background_noise.get(freq)
 
         return ep_remove_background_noise(
             ch_ds,

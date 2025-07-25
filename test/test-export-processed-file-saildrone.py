@@ -96,7 +96,7 @@ def test_file_workflow_saildrone_full():
     }
 
     background_noise_opts = {
-        38000: dict(
+        "38000": dict(
             range_coord="depth",
             range_window=15,
             ping_window=50,
@@ -104,7 +104,7 @@ def test_file_workflow_saildrone_full():
             SNR_threshold="6.0dB",
             sound_absorption=0.0022,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
         ),
-        200000: dict(
+        "200000": dict(
             range_coord="depth",
             range_window=30,
             ping_window=30,
@@ -129,7 +129,9 @@ def test_file_workflow_saildrone_full():
     # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
     #
     def _mask_one(ch_ds):
-        opts = background_noise_opts[int(ch_ds.frequency_nominal)]
+        freq = str(int(ch_ds["frequency_nominal"]))
+        opts = background_noise_opts.get(freq)
+
         return remove_background_noise(
             ch_ds,
             ping_num=opts["ping_window"],
