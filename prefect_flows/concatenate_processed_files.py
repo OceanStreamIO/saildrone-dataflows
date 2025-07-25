@@ -372,7 +372,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 for channel in plot_channels_masked:
                     try:
                         ds_channel = extract_channel_and_drop_pings(
-                            sv_dataset_masked, channel=channel, drop_threshold=0.9
+                            sv_dataset_masked, channel=channel, drop_threshold=1.0
                         )
                         print(f"Plotting pruned channel {channel} for {batch_key} ({cat})")
                         plot_and_upload_echograms(

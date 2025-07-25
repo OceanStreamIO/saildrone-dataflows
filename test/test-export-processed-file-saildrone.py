@@ -108,7 +108,7 @@ def test_file_workflow_saildrone_full():
             range_coord="depth",
             range_window=30,
             ping_window=30,
-            background_noise_max="-120.0dB",
+            background_noise_max="50.0dB",
             SNR_threshold="10.0dB",
             sound_absorption=0.055,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
@@ -146,6 +146,22 @@ def test_file_workflow_saildrone_full():
 
     # overwrite in-place
     ds_masked["Sv"] = sv_clean
+
+    n_ch = ds_masked.dims["channel"]
+    for ch in range(n_ch):
+        ch_ds = extract_channel_and_drop_pings(
+            ds_masked,
+            channel=ch,
+            drop_threshold=1.0,
+            freq_coord="frequency_nominal"
+        )
+
+        plot_sv_data(ch_ds,
+                     channel=ch,
+                     output_path=f'./test/processed/echograms',
+                     title_template="{channel_label} / denoised and pruned",
+                     file_base_name=file_name + '--denoised-pruned'
+                     )
 
     # Run noise removal
     # n_ch = ds.dims["channel"]
