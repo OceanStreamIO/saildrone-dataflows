@@ -158,6 +158,7 @@ def test_file_workflow_saildrone_full():
 
         plot_sv_data(ch_ds,
                      channel=ch,
+                     cmap='viridis',
                      output_path=f'./test/processed/echograms',
                      title_template="{channel_label} / denoised and pruned",
                      file_base_name=file_name + '--denoised-pruned'

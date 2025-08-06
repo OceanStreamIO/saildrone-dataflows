@@ -24,7 +24,7 @@ from prefect_flows.pydantic_models import NASC_Compute_Options, MVBS_Compute_Opt
 from saildrone.process import apply_denoising, plot_and_upload_echograms, get_files_list
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
 from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
-from saildrone.store import (FileSegmentService, PostgresDB, SurveyService, open_zarr_store, generate_container_name,
+from saildrone.store import (PostgresDB, ExportService, open_zarr_store, generate_container_name,
                              ensure_container_exists, save_zarr_store, zip_and_save_netcdf_files,
                              save_dataset_to_netcdf)
 
@@ -273,9 +273,10 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
         print('3) Saved to Zarr store:', file_path)
+        echogram_files = None
 
         if plot_echograms:
-            plot_and_upload_echograms(
+            echogram_files = plot_and_upload_echograms(
                 ds,
                 file_base_name=file_name,
                 save_to_blobstorage=True,
@@ -293,7 +294,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
             print('4) Saved to NetCDF:', nc_file_path)
 
-        return category, nc_file_output_path, nc_file_output_path_denoised
+        return category, nc_file_output_path, nc_file_output_path_denoised, echogram_files
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
@@ -405,9 +406,21 @@ def export_processed_data(cruise_id: str,
                           save_to_netcdf: bool = False,
                           save_nasc_to_netcdf: bool = True,
                           save_mvbs_to_netcdf: bool = True,
+                          base_url: str = '',
                           batch_size: int = BATCH_SIZE,
                           plot_channels_masked=None
                           ):
+    denoise_params = {
+        'impulse_noise': mask_impulse_noise,
+        'attenuated_signal': mask_attenuated_signal,
+        'transient_noise': mask_transient_noise,
+        'background_noise': remove_background_noise,
+    }
+
+    agg_params = {
+        'nasc': compute_nasc_options,
+        'mvbs': compute_mvbs_options
+    }
 
     if mask_impulse_noise not in (None, False):
         mask_impulse_noise = fill_missing_frequency_params(mask_impulse_noise)
@@ -440,13 +453,29 @@ def export_processed_data(cruise_id: str,
     export_container_name = output_container if output_container != '' else generate_container_name(cruise_id)
     ensure_container_exists(export_container_name, public_access='container')
 
+    if base_url and not base_url.endswith('/'):
+        base_url += '/'
+
     in_flight = []
-    # workers = get_worker_addresses(scheduler=DASK_CLUSTER_ADDRESS)
-    # n_workers = len(workers)
+    with PostgresDB() as db_connection:
+        export_service = ExportService(db_connection)
+
+        export_id, export_key = export_service.create_export(
+            container_name=export_container_name,
+            cruise_id=cruise_id,
+            start_date=start_datetime,
+            end_date=end_datetime,
+            num_files=total_files,
+            denoise_params=denoise_params,
+            agg_params=agg_params,
+            base_url=f"{base_url}{export_container_name}/",
+        )
+
+        print(f"Export created with ID: {export_id}, Key: {export_key}")
+
+    processed_files = defaultdict(list)
 
     for idx, (source_path, file) in enumerate(files_list):
-        # target_worker = workers[idx % n_workers]
-        # with dask.annotate(workers=[target_worker], allow_other_workers=False):
         future = process_single_file.submit(file,
                                             file_name=file['file_name'],
                                             source_container_name=source_container,
@@ -463,6 +492,8 @@ def export_processed_data(cruise_id: str,
                                             )
         in_flight.append(future)
 
+        processed_files[file['id']].append(future)
+
         # Throttle when max concurrent tasks reached
         if len(in_flight) >= batch_size:
             finished = next(as_completed(in_flight))
@@ -472,27 +503,38 @@ def export_processed_data(cruise_id: str,
     for remaining in in_flight:
         remaining.result()
 
-    future_zip = trigger_concatenate_flow.submit(
-        files_list=files_list,
-        days_to_combine=days_to_combine,
-        cruise_id=cruise_id,
-        container_name=export_container_name,
-        plot_echograms=plot_echograms,
-        save_to_netcdf=save_to_netcdf,
-        save_nasc_to_netcdf=save_nasc_to_netcdf,
-        save_mvbs_to_netcdf=save_mvbs_to_netcdf,
-        colormap=colormap,
-        compute_nasc_options=compute_nasc_options,
-        compute_mvbs_options=compute_mvbs_options,
-        mask_impulse_noise=mask_impulse_noise,
-        mask_attenuated_signal=mask_attenuated_signal,
-        mask_transient_noise=mask_transient_noise,
-        remove_background_noise=remove_background_noise,
-        apply_seabed_mask=apply_seabed_mask,
-        chunks=chunks,
-        plot_channels_masked=plot_channels_masked
-    )
-    future_zip.wait()
+    with PostgresDB() as db_connection:
+        export_service = ExportService(db_connection)
+
+        for idx, (source_path, file) in enumerate(files_list):
+            file_id = file['id']
+            processed_data = processed_files[file_id]
+            print('Processed data for file ID:', file_id, 'with futures:', processed_data)
+            echogram_files = []
+
+            # export_service.add_file(export_id, file_id, echogram_files)
+
+    # future_zip = trigger_concatenate_flow.submit(
+    #     files_list=files_list,
+    #     days_to_combine=days_to_combine,
+    #     cruise_id=cruise_id,
+    #     container_name=export_container_name,
+    #     plot_echograms=plot_echograms,
+    #     save_to_netcdf=save_to_netcdf,
+    #     save_nasc_to_netcdf=save_nasc_to_netcdf,
+    #     save_mvbs_to_netcdf=save_mvbs_to_netcdf,
+    #     colormap=colormap,
+    #     compute_nasc_options=compute_nasc_options,
+    #     compute_mvbs_options=compute_mvbs_options,
+    #     mask_impulse_noise=mask_impulse_noise,
+    #     mask_attenuated_signal=mask_attenuated_signal,
+    #     mask_transient_noise=mask_transient_noise,
+    #     remove_background_noise=remove_background_noise,
+    #     apply_seabed_mask=apply_seabed_mask,
+    #     chunks=chunks,
+    #     plot_channels_masked=plot_channels_masked
+    # )
+    # future_zip.wait()
 
 
 if __name__ == "__main__":
@@ -526,6 +568,7 @@ if __name__ == "__main__":
                 'save_to_netcdf': False,
                 'save_nasc_to_netcdf': True,
                 'save_mvbs_to_netcdf': True,
+                'base_url': '',
                 'batch_size': 4,
                 'plot_channels_masked': []
             }

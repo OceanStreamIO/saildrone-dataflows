@@ -182,34 +182,50 @@ class PostgresDB:
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_survey_id ON nasc_points_2d (survey_id);")
         self.cursor.execute("CREATE INDEX IF NOT EXISTS idx_geom ON nasc_points_2d USING GIST (geom);")
 
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS exports (
-                id SERIAL PRIMARY KEY,
-                container_name TEXT NOT NULL,
-                export_key TEXT NOT NULL UNIQUE,
-                base_url TEXT NOT NULL,
-                start_date TIMESTAMP,
-                end_date TIMESTAMP,
-                num_files INTEGER,
-                denoise_params JSONB,
-                combined_netcdf_path TEXT,
-                combined_netcdf_size BIGINT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        ''')
+        self.cursor.execute(
+            """
+            CREATE TYPE IF NOT EXISTS agg_interval_enum AS ENUM
+              ('day', 'week');
 
-        self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS exports_files (
-                id SERIAL PRIMARY KEY,
-                export_id INTEGER REFERENCES exports(id) ON DELETE CASCADE,
-                file_id INTEGER REFERENCES files(id) ON DELETE CASCADE,
-                echogram_files TEXT[],
-                sv_zarr_path TEXT,
-                denoised_zarr_path TEXT,
-                netcdf_path TEXT,
-                netcdf_size BIGINT
+            CREATE TABLE IF NOT EXISTS exports (
+                id                SERIAL PRIMARY KEY,
+                container_name    TEXT                      NOT NULL,
+                export_key        TEXT UNIQUE               NOT NULL,
+                base_url          TEXT                      NOT NULL,
+                start_date        TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                end_date          TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                num_files         INTEGER                   NOT NULL,
+                denoise_params    JSONB,
+                agg_params        JSONB,
+                created_at        TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
             );
-        ''')
+
+            CREATE INDEX IF NOT EXISTS idx_exports_export_key ON exports(export_key);
+
+            CREATE TABLE IF NOT EXISTS exports_agg_files (
+                id               SERIAL PRIMARY KEY,
+                created_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+                file_name        VARCHAR                   NOT NULL,
+                export_id        INTEGER REFERENCES exports(id) ON DELETE CASCADE,
+                type             VARCHAR                   NOT NULL,
+                file_start_time  TIMESTAMP WITHOUT TIME ZONE,
+                file_end_time    TIMESTAMP WITHOUT TIME ZONE,
+                agg_interval     agg_interval_enum,
+                echogram_files   TEXT[]
+            );
+
+            CREATE TABLE IF NOT EXISTS exports_files (
+                id                SERIAL PRIMARY KEY,
+                export_id         INTEGER REFERENCES exports(id) ON DELETE CASCADE,
+                file_id           INTEGER                   NOT NULL,
+                echogram_files    TEXT[],
+                sv_zarr_path      TEXT,
+                denoised_zarr_path TEXT,
+                netcdf_path       TEXT,
+                netcdf_size       BIGINT
+            );
+            """
+        )
 
         self.conn.commit()
 

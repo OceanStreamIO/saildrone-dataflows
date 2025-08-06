@@ -36,14 +36,14 @@ PARAMETER_NAMES = ("upper_limit_sl", "lower_limit_sl", "num_side_pings", "thresh
 
 
 def get_files_list(
-        source_directory: str = None,
-        cruise_id: str = None,
-        load_from_blobstorage: bool = True,
-        source_container: str = None,
-        get_list_from_db: bool = True,
-        start_datetime: Optional[datetime] = None,
-        end_datetime: Optional[datetime] = None,
-        reprocess: bool = True
+    source_directory: str = None,
+    cruise_id: str = None,
+    load_from_blobstorage: bool = True,
+    source_container: str = None,
+    get_list_from_db: bool = True,
+    start_datetime: Optional[datetime] = None,
+    end_datetime: Optional[datetime] = None,
+    reprocess: bool = True
 ):
     """Fetch the list of files to be processed."""
     files = None
