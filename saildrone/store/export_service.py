@@ -1,7 +1,8 @@
 from typing import Optional, List
 import json
 import uuid
-
+from psycopg2.extras import Json
+from pydantic import BaseModel
 from saildrone.store import PostgresDB
 
 
@@ -30,6 +31,9 @@ class ExportService:
         if export_key is None:
             export_key = self._generate_key(container_name)
 
+        denoise_params_json = _to_jsonb(denoise_params)
+        agg_params_json = _to_jsonb(agg_params)
+
         self.db.cursor.execute(
             f"""
             INSERT INTO {self.table_exports}
@@ -47,8 +51,8 @@ class ExportService:
                 end_date,
                 num_files,
                 cruise_id,
-                json.dumps(denoise_params) if denoise_params else None,
-                json.dumps(agg_params) if agg_params else None,
+                denoise_params_json,
+                agg_params_json
             ),
         )
         export_id = self.db.cursor.fetchone()[0]
@@ -146,3 +150,12 @@ class ExportService:
         self.db.conn.commit()
         return agg_file_id
 
+
+def _to_jsonb(params):
+    if params is None:
+        return None
+
+    if isinstance(params, BaseModel):
+        params = params.model_dump()      # or params.dict() for v1
+
+    return Json(params)
