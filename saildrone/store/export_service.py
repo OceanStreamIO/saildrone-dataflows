@@ -153,11 +153,18 @@ class ExportService:
         return agg_file_id
 
 
-def _to_jsonb(params):
-    if params is None:
+def _to_jsonb(payload):
+    """
+    Convert plain dict / list / pydantic model (possibly nested) → Json wrapper
+    so psycopg2 stores it in a JSONB column.
+    """
+    if payload is None:
         return None
 
-    if isinstance(params, BaseModel):
-        params = params.model_dump()      # or params.dict() for v1
+    def _default(o):
+        if isinstance(o, BaseModel):
+            return o.model_dump()
 
-    return Json(params)
+        raise TypeError
+
+    return Json(payload, dumps=lambda obj: json.dumps(obj, default=_default))
