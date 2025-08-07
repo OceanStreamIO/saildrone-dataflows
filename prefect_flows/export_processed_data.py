@@ -508,7 +508,8 @@ def export_processed_data(cruise_id: str,
 
         for idx, (source_path, file) in enumerate(files_list):
             file_id = file['id']
-            processed_data = processed_files[file_id]
+            processed_data = processed_files[file_id][0].result()
+
             print('Processed data for file ID:', file_id, 'with futures:', processed_data)
             echogram_files = []
 
