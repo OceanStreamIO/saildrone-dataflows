@@ -82,14 +82,14 @@ def denoise_zarr(
             background_noise_max=opts["background_noise_max"],
         )["Sv"]
 
-    # this returns a DataArray with dims ("channel","ping_time",...)
-    sv_clean = sv_dataset_denoised.groupby("channel").map(_mask_one)
-    sv_clean.name = "Sv"
+    if remove_background_noise is not None:
+        sv_clean = sv_dataset_denoised.groupby("channel").map(_mask_one)
+        sv_clean.name = "Sv"
 
-    # overwrite in-place
-    sv_dataset_denoised["Sv"] = sv_clean
-
-    print("Background noise removal complete.")
+        # overwrite in-place
+        sv_dataset_denoised["Sv"] = sv_clean
+        print("Background noise removal complete.")
+        
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")
