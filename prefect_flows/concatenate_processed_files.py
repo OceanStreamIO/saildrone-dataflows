@@ -19,7 +19,7 @@ from saildrone.process import plot_and_upload_echograms, apply_denoising, plot_s
 from saildrone.process.concat import concatenate_and_rechunk
 from saildrone.process.plot import plot_and_upload_masks
 from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
-from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store
+from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store, PostgresDB, ExportService
 from datetime import datetime
 import gc
 
@@ -131,7 +131,7 @@ def trigger_denoising_flow(
     log_prints=True,
     task_run_name="compute_batch_nasc--{batch_key}"
 )
-def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, denoised, compute_nasc_options,
+def compute_batch_nasc(batch_results, batch_key, export_id, cruise_id, container_name, denoised, compute_nasc_options,
                        plot_echograms=False, save_to_netcdf=False, colormap='ocean_r', chunks=None):
     results = {}
 
@@ -144,15 +144,18 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
     def _run(pulse, tag):
         root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
+        zarr_path = f"{root}{suffix}.zarr"
+        nasc_zarr_path = f"{root}--nasc.zarr"
+        nasc_nc_path = f"{root}--nasc.nc"
+        nc_file_size = 0
 
         print('Computing NASC for pulse:', pulse, 'with tag:', tag, f'and root: {root}{suffix}.zarr')
         try:
-            ds = open_zarr_store(f"{root}{suffix}.zarr",
+            ds = open_zarr_store(zarr_path,
                                  container_name=container_name,
                                  rechunk_after=True,
                                  chunks=chunks)
             ds = _nav_to_data_vars(ds)
-            print(ds.data_vars)
         except Exception as e:
             logging.error(f"Failed to open Zarr store during compute_batch_nasc for {root}{suffix}.zarr: {e}")
             traceback.print_exc()
@@ -160,7 +163,7 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
 
         nasc = compute_and_save_nasc(
             ds,
-            zarr_path=f"{root}--nasc.zarr",
+            zarr_path=nasc_zarr_path,
             compute_nasc_opts=compute_nasc_options,
             cruise_id=cruise_id,
             container_name=container_name,
@@ -168,17 +171,24 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
         results[pulse] = nasc
 
         if save_to_netcdf:
-            save_dataset_to_netcdf(
+            _, nc_file_size = save_dataset_to_netcdf(
                 nasc,
                 container_name=container_name,
-                ds_path=f"{root}--nasc.nc",
+                ds_path=nasc_nc_path,
                 base_local_temp_path=NETCDF_ROOT_DIR,
                 is_temp_dir=False,
             )
 
-    for pulse, tag in tag_for.items():
-        if batch_results.get(pulse):
-            _run(pulse, tag)
+        return nasc_zarr_path, nasc_nc_path, nc_file_size
+
+    with PostgresDB() as db_connection:
+        export_service = ExportService(db_connection)
+
+        for pulse, tag in tag_for.items():
+            if batch_results.get(pulse):
+                nasc_zarr_path, nc_path, nc_file_size = _run(pulse, tag)
+                export_service.add_agg_file(export_id, batch_key, 'nasc', None, None, 'day', None,
+                                            None, nc_path, nasc_zarr_path, None, nc_file_size, None)
 
     return results
 
@@ -187,7 +197,7 @@ def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, deno
     log_prints=True,
     task_run_name="compute_batch_mvbs--{batch_key}"
 )
-def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, denoised, compute_mvbs_options,
+def compute_batch_mvbs(batch_results, batch_key, export_id, cruise_id, container_name, denoised, compute_mvbs_options,
                        plot_echograms=False, save_to_netcdf=False, colormap='ocean_r', chunks=None):
     results = {}
 
@@ -201,6 +211,10 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
         root = f"{batch_key}/{batch_key}--{tag}"
         suffix = "--denoised" if denoised else ""
         zarr_path = f"{root}{suffix}.zarr"
+        zarr_mvbs_path = f"{root}--mvbs.zarr"
+        nc_mvbs_path = f"{root}--mvbs.nc"
+        echogram_files = []
+        nc_file_size = 0
 
         print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {zarr_path}')
         try:
@@ -216,15 +230,16 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
         ds_mvbs = compute_and_save_mvbs(
             ds,
             cruise_id=cruise_id,
-            zarr_path=f"{root}--mvbs.zarr",
+            zarr_path=zarr_mvbs_path,
             compute_mvbs_opts=compute_mvbs_options,
             container_name=container_name,
         )
         results[pulse] = ds_mvbs
 
         if plot_echograms:
-            plot_and_upload_echograms(
+            echogram_files = plot_and_upload_echograms(
                 ds_mvbs,
+                cruise_id=cruise_id,
                 file_base_name=f"{tag}--mvbs",
                 save_to_blobstorage=True,
                 upload_path=f"{batch_key}",
@@ -234,17 +249,24 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
             )
 
         if save_to_netcdf:
-            save_dataset_to_netcdf(
+            _, nc_file_size = save_dataset_to_netcdf(
                 ds_mvbs,
                 container_name=container_name,
-                ds_path=f"{root}--mvbs.nc",
+                ds_path=nc_mvbs_path,
                 base_local_temp_path=NETCDF_ROOT_DIR,
                 is_temp_dir=False,
             )
 
-    for pulse, tag in tag_for.items():
-        if batch_results.get(pulse):
-            _run(pulse, tag)
+        return zarr_mvbs_path, nc_mvbs_path, nc_file_size, echogram_files
+
+    with PostgresDB() as db_connection:
+        export_service = ExportService(db_connection)
+
+        for pulse, tag in tag_for.items():
+            if batch_results.get(pulse):
+                nasc_zarr_path, nc_path, nc_file_size, echogram_files = _run(pulse, tag)
+                export_service.add_agg_file(export_id, batch_key, 'mvbs', None, None, 'day', echogram_files,
+                                            None, nc_path, nasc_zarr_path, None, nc_file_size, None)
 
     return results
 
@@ -253,12 +275,13 @@ def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, deno
     log_prints=True,
     task_run_name="concatenate_batch_files--{batch_key}"
 )
-def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_echograms, save_to_netcdf,
+def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_name, plot_echograms, save_to_netcdf,
                             skip_concatenate_batches, colormap, **kwargs):
     """Run NASC, MVBS, … for one calendar batch."""
     # 1) bucket files by category
     batch_results = {cat: [] for cat in CATEGORY_CONFIG}
     chunks = kwargs.get('chunks', None)
+    echogram_files = []
     plot_channels_masked = kwargs.get('plot_channels_masked', [])
 
     for file_info in files:
@@ -276,6 +299,10 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             return
 
         section = CATEGORY_CONFIG[cat]
+        nc_file_size = 0
+        nc_denoised_file_size = 0
+        nc_path = None
+        nc_file_path_denoised = None
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
 
         if skip_concatenate_batches is not True:
@@ -293,7 +320,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
         # optional NetCDF
         if save_to_netcdf:
             nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            save_dataset_to_netcdf(
+            _, nc_denoised_file_size = save_dataset_to_netcdf(
                 ds,
                 container_name=container_name,
                 ds_path=nc_path,
@@ -304,7 +331,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             _log_mem("4) NetCDF dataset saved")
 
         if plot_echograms:
-            plot_and_upload_echograms(
+            uploaded_files = plot_and_upload_echograms(
                 ds,
                 file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
                 save_to_blobstorage=True,
@@ -313,6 +340,8 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                 title_template=f"{batch_key} ({cat})" + " | {channel_label}",
                 container_name=container_name,
             )
+
+            echogram_files.extend(uploaded_files)
             _log_mem("5) Echograms plotted & uploaded")
 
         ##############################################################################################################
@@ -347,7 +376,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
             _log_mem("9) Denoised NetCDF saved")
 
-            save_dataset_to_netcdf(
+            _, nc_denoised_file_size = save_dataset_to_netcdf(
                 sv_dataset_masked,
                 container_name=container_name,
                 ds_path=nc_file_path_denoised,
@@ -359,7 +388,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 
         try:
             if plot_echograms:
-                plot_and_upload_echograms(
+                uploaded_files = plot_and_upload_echograms(
                     sv_dataset_masked,
                     file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
                     save_to_blobstorage=True,
@@ -368,6 +397,8 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
                     container_name=container_name,
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 )
+                echogram_files.extend(uploaded_files)
+
                 print('Plotting masked channels', plot_channels_masked)
                 for channel in plot_channels_masked:
                     try:
@@ -394,6 +425,12 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
             traceback.print_exc()
 
+        with PostgresDB() as db_connection:
+            export_service = ExportService(db_connection)
+            export_service.add_agg_file(export_id, batch_key, 'day', None, None, 'day', echogram_files,
+                                        nc_file_path_denoised, nc_path, zarr_path, zarr_path_denoised, nc_file_size,
+                                        nc_denoised_file_size)
+
     ###############################################################################################################
     # 2) run through each category
     for category in CATEGORY_CONFIG:
@@ -408,6 +445,7 @@ def concatenate_batch_files(batch_key, cruise_id, files, container_name, plot_ec
 @flow(log_prints=True)
 def concatenate_processed_files(files_list,
                                 days_to_combine=1,
+                                export_id=0,
                                 cruise_id='',
                                 container_name='',
                                 plot_echograms=False,
@@ -448,7 +486,8 @@ def concatenate_processed_files(files_list,
 
     for key, files in batches:
         print('Processing batch:', key, 'with', len(files), 'files.')
-        future = concatenate_batch_files.submit(key, cruise_id, files, container_name, plot_echograms,
+
+        future = concatenate_batch_files.submit(key, export_id, cruise_id, files, container_name, plot_echograms,
                                                 save_to_netcdf, skip_concatenate_batches, colormap,
                                                 mask_impulse_noise=mask_impulse_noise,
                                                 mask_attenuated_signal=mask_attenuated_signal,
@@ -457,11 +496,10 @@ def concatenate_processed_files(files_list,
                                                 apply_seabed_mask=apply_seabed_mask,
                                                 chunks=chunks,
                                                 plot_channels_masked=plot_channels_masked)
-
         in_flight.append(future)
 
         if compute_nasc_options:
-            future_nasc_task = compute_batch_nasc.submit(future, key, cruise_id, container_name,
+            future_nasc_task = compute_batch_nasc.submit(future, key, export_id, cruise_id, container_name,
                                                          denoised=denoised,
                                                          compute_nasc_options=compute_nasc_options,
                                                          plot_echograms=plot_echograms,
@@ -471,7 +509,7 @@ def concatenate_processed_files(files_list,
             side_tasks.append(future_nasc_task)
 
         if compute_mvbs_options:
-            future_mvbs_task = compute_batch_mvbs.submit(future, key, cruise_id, container_name,
+            future_mvbs_task = compute_batch_mvbs.submit(future, key, export_id, cruise_id, container_name,
                                                          denoised=denoised,
                                                          compute_mvbs_options=compute_mvbs_options,
                                                          plot_echograms=plot_echograms,
@@ -520,6 +558,7 @@ if __name__ == "__main__":
             parameters={
                 'files_list': [],
                 'days_to_combine': 1,
+                'export_id': 0,
                 'cruise_id': '',
                 'container_name': '',
                 'plot_echograms': True,

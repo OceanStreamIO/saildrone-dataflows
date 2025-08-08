@@ -118,13 +118,19 @@ class ExportService:
 
     def add_agg_file(
         self,
-        export_id: int,
-        file_name: str,
-        file_type: str,
+        export_id,
+        file_name,
+        file_type,
         file_start_time=None,
         file_end_time=None,
-        agg_interval: Optional[str] = None,
-        echogram_files: Optional[List[str]] = None,
+        agg_interval=None,
+        echogram_files=None,
+        nc_path_denoised=None,
+        nc_path=None,
+        zarr_path=None,
+        zarr_path_denoised=None,
+        nc_file_size=0,
+        nc_denoised_file_size=0
     ) -> int:
         """
         Insert one record into `exports_agg_files` and return its id.
@@ -134,8 +140,9 @@ class ExportService:
             INSERT INTO {self.table_exports_agg_files}
                 (file_name, export_id, type,
                  file_start_time, file_end_time,
-                 agg_interval, echogram_files)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                 agg_interval, echogram_files, nc_path_denoised, nc_path,
+                 zarr_path, zarr_path_denoised, nc_file_size, nc_denoised_file_size)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -146,6 +153,12 @@ class ExportService:
                 file_end_time,
                 agg_interval,
                 echogram_files,
+                nc_path_denoised,
+                nc_path,
+                zarr_path,
+                zarr_path_denoised,
+                nc_file_size,
+                nc_denoised_file_size
             ),
         )
         agg_file_id = self.db.cursor.fetchone()[0]

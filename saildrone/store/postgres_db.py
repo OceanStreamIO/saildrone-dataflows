@@ -203,15 +203,21 @@ class PostgresDB:
             CREATE INDEX IF NOT EXISTS idx_exports_export_key ON exports(export_key);
 
             CREATE TABLE IF NOT EXISTS exports_agg_files (
-                id               SERIAL PRIMARY KEY,
-                created_at       TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
-                file_name        VARCHAR                   NOT NULL,
-                export_id        INTEGER REFERENCES exports(id) ON DELETE CASCADE,
-                type             VARCHAR                   NOT NULL,
-                file_start_time  TIMESTAMP WITHOUT TIME ZONE,
-                file_end_time    TIMESTAMP WITHOUT TIME ZONE,
-                agg_interval     agg_interval_enum,
-                echogram_files   TEXT[]
+                id                      SERIAL PRIMARY KEY,
+                created_at              TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW(),
+                file_name               VARCHAR                   NOT NULL,
+                export_id               INTEGER REFERENCES exports(id) ON DELETE CASCADE,
+                type                    VARCHAR                   NOT NULL,
+                file_start_time         TIMESTAMP WITHOUT TIME ZONE,
+                file_end_time           TIMESTAMP WITHOUT TIME ZONE,
+                agg_interval            agg_interval_enum,
+                echogram_files          TEXT[]
+                nc_path_denoised        TEXT,
+                nc_path                 TEXT,
+                zarr_path               TEXT,
+                zarr_path_denoised      TEXT,
+                nc_file_size            BIGINT,
+                nc_denoised_file_size   BIGINT
             );
 
             CREATE TABLE IF NOT EXISTS exports_files (

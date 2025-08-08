@@ -269,7 +269,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         print('2) Merged location data')
         nc_file_output_path = None
-        nc_file_output_path_denoised = None
+        nc_file_size = 0
         file_path = f"{cruise_id}/{file_name}/{file_name}.zarr"
         zarr_path = save_zarr_store(ds, container_name=export_container_name, zarr_path=file_path, chunks=chunks)
         print('3) Saved to Zarr store:', file_path)
@@ -282,19 +282,20 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                 save_to_blobstorage=True,
                 upload_path=f"{cruise_id}/{file_name}",
                 cmap=colormap,
+                cruise_id=cruise_id,
                 plot_var='Sv',
                 container_name=export_container_name,
             )
 
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
-            nc_file_output_path = save_dataset_to_netcdf(ds, container_name=export_container_name,
+            nc_file_output_path, nc_file_size = save_dataset_to_netcdf(ds, container_name=export_container_name,
                                                          ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
                                                          is_temp_dir=False)
 
             print('4) Saved to NetCDF:', nc_file_path)
 
-        return category, nc_file_output_path, nc_file_output_path_denoised, echogram_files
+        return category, zarr_path, nc_file_output_path, nc_file_size, echogram_files
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
@@ -326,6 +327,7 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 def trigger_concatenate_flow(
     files_list=None,
     days_to_combine=1,
+    export_id=0,
     cruise_id='',
     container_name='',
     plot_echograms=False,
@@ -352,6 +354,7 @@ def trigger_concatenate_flow(
         parameters={
             "files_list": files,
             "days_to_combine": days_to_combine,
+            'export_id': export_id,
             'cruise_id': cruise_id,
             'container_name': container_name,
             'plot_echograms': plot_echograms,
@@ -508,34 +511,33 @@ def export_processed_data(cruise_id: str,
 
         for idx, (source_path, file) in enumerate(files_list):
             file_id = file['id']
-            processed_data = processed_files[file_id][0].result()
+            category, zarr_path, nc_file, nc_file_size, echogram_files = processed_files[file_id][0].result()
 
-            print('Processed data for file ID:', file_id, 'with futures:', processed_data)
-            echogram_files = []
+            print('Processed data for file ID:', file_id, 'with futures:')
+            export_service.add_file(export_id, file_id, echogram_files, zarr_path, None, nc_file, nc_file_size)
 
-            # export_service.add_file(export_id, file_id, echogram_files)
-
-    # future_zip = trigger_concatenate_flow.submit(
-    #     files_list=files_list,
-    #     days_to_combine=days_to_combine,
-    #     cruise_id=cruise_id,
-    #     container_name=export_container_name,
-    #     plot_echograms=plot_echograms,
-    #     save_to_netcdf=save_to_netcdf,
-    #     save_nasc_to_netcdf=save_nasc_to_netcdf,
-    #     save_mvbs_to_netcdf=save_mvbs_to_netcdf,
-    #     colormap=colormap,
-    #     compute_nasc_options=compute_nasc_options,
-    #     compute_mvbs_options=compute_mvbs_options,
-    #     mask_impulse_noise=mask_impulse_noise,
-    #     mask_attenuated_signal=mask_attenuated_signal,
-    #     mask_transient_noise=mask_transient_noise,
-    #     remove_background_noise=remove_background_noise,
-    #     apply_seabed_mask=apply_seabed_mask,
-    #     chunks=chunks,
-    #     plot_channels_masked=plot_channels_masked
-    # )
-    # future_zip.wait()
+    future_zip = trigger_concatenate_flow.submit(
+        files_list=files_list,
+        days_to_combine=days_to_combine,
+        export_id=export_id,
+        cruise_id=cruise_id,
+        container_name=export_container_name,
+        plot_echograms=plot_echograms,
+        save_to_netcdf=save_to_netcdf,
+        save_nasc_to_netcdf=save_nasc_to_netcdf,
+        save_mvbs_to_netcdf=save_mvbs_to_netcdf,
+        colormap=colormap,
+        compute_nasc_options=compute_nasc_options,
+        compute_mvbs_options=compute_mvbs_options,
+        mask_impulse_noise=mask_impulse_noise,
+        mask_attenuated_signal=mask_attenuated_signal,
+        mask_transient_noise=mask_transient_noise,
+        remove_background_noise=remove_background_noise,
+        apply_seabed_mask=apply_seabed_mask,
+        chunks=chunks,
+        plot_channels_masked=plot_channels_masked
+    )
+    future_zip.wait()
 
 
 if __name__ == "__main__":

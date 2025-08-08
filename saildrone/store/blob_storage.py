@@ -299,6 +299,7 @@ def save_dataset_to_netcdf(
 
     encoding = get_variable_encoding(ds, compression_level)
 
+    netcdf_size = 0
     try:
         ds.to_netcdf(
             local_path,
@@ -307,6 +308,8 @@ def save_dataset_to_netcdf(
             encoding=encoding,
             compute=True,  # build + immediately compute the graph
         )
+        netcdf_size = Path(local_path).stat().st_size
+
         for attempt in range(1, max_retries + 1):
             try:
                 upload_file_to_blob(str(local_path), ds_path, container_name)
@@ -339,7 +342,7 @@ def save_dataset_to_netcdf(
                 pass
 
     print("Saved and uploaded dataset:", local_path)
-    return local_path
+    return local_path, netcdf_size
 
 
 def save_datasets_to_netcdf(
