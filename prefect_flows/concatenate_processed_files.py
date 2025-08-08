@@ -187,6 +187,9 @@ def compute_batch_nasc(batch_results, batch_key, export_id, cruise_id, container
         for pulse, tag in tag_for.items():
             if batch_results.get(pulse):
                 nasc_zarr_path, nc_path, nc_file_size = _run(pulse, tag)
+                nasc_zarr_path = str(nasc_zarr_path)
+                nc_path = str(nc_path) if nc_path else None
+
                 export_service.add_agg_file(export_id, batch_key, 'nasc', None, None, 'day', None,
                                             None, nc_path, nasc_zarr_path, None, nc_file_size, None)
 
@@ -265,6 +268,8 @@ def compute_batch_mvbs(batch_results, batch_key, export_id, cruise_id, container
         for pulse, tag in tag_for.items():
             if batch_results.get(pulse):
                 nasc_zarr_path, nc_path, nc_file_size, echogram_files = _run(pulse, tag)
+                nasc_zarr_path = str(nasc_zarr_path)
+                nc_path = str(nc_path) if nc_path else None
                 export_service.add_agg_file(export_id, batch_key, 'mvbs', None, None, 'day', echogram_files,
                                             None, nc_path, nasc_zarr_path, None, nc_file_size, None)
 
@@ -427,6 +432,11 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
 
         with PostgresDB() as db_connection:
             export_service = ExportService(db_connection)
+            nc_file_path_denoised = str(nc_file_path_denoised) if nc_file_path_denoised else None
+            nc_path = str(nc_path) if nc_path else None
+            zarr_path = str(zarr_path)
+            zarr_path_denoised = str(zarr_path_denoised) if zarr_path_denoised else None
+
             export_service.add_agg_file(export_id, batch_key, 'day', None, None, 'day', echogram_files,
                                         nc_file_path_denoised, nc_path, zarr_path, zarr_path_denoised, nc_file_size,
                                         nc_denoised_file_size)

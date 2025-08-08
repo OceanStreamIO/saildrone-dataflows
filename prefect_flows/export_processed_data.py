@@ -513,6 +513,9 @@ def export_processed_data(cruise_id: str,
             file_id = file['id']
             category, zarr_path, nc_file, nc_file_size, echogram_files = processed_files[file_id][0].result()
 
+            zarr_path = str(zarr_path) if zarr_path else None
+            nc_file = str(nc_file) if nc_file else None
+
             print('Processed data for file ID:', file_id, 'with futures:')
             export_service.add_file(export_id, file_id, echogram_files, zarr_path, None, nc_file, nc_file_size)
 
