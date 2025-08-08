@@ -89,7 +89,7 @@ def denoise_zarr(
         # overwrite in-place
         sv_dataset_denoised["Sv"] = sv_clean
         print("Background noise removal complete.")
-        
+
     save_zarr_store(sv_dataset_denoised, container_name=container_name, zarr_path=zarr_dest)
 
     print(f"Saved denoised dataset to {zarr_dest}")

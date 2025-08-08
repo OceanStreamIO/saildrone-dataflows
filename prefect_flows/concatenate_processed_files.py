@@ -340,6 +340,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
                 ds,
                 file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
                 save_to_blobstorage=True,
+                cruise_id=cruise_id,
                 upload_path=batch_key,
                 cmap=colormap,
                 title_template=f"{batch_key} ({cat})" + " | {channel_label}",
@@ -393,13 +394,15 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
 
         try:
             if plot_echograms:
+                file_base_name = f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}"
                 uploaded_files = plot_and_upload_echograms(
                     sv_dataset_masked,
-                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}",
+                    file_base_name=file_base_name,
                     save_to_blobstorage=True,
                     upload_path=batch_key,
                     cmap=colormap,
                     container_name=container_name,
+                    export_filename=lambda e: f"{batch_key}/{str(Path(e).name)}",
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 )
                 echogram_files.extend(uploaded_files)

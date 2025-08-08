@@ -292,7 +292,8 @@ def __plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_b
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
                               file_name=None, output_path=None, upload_path=None, container_name=None,
-                              channel=None, cmap='ocean_r', plot_var='Sv', title_template='{channel_label}'):
+                              export_filename=None, channel=None, cmap='ocean_r', plot_var='Sv',
+                              title_template='{channel_label}'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
     else:
@@ -315,7 +316,11 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
         upload_path = upload_path or f'{cruise_id}/{file_base_name}'
         upload_folder_to_blob_storage(echograms_output_path, container_name, upload_path)
         shutil.rmtree(echograms_output_path, ignore_errors=True)
-        uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
+
+        if export_filename is not None:
+            uploaded_files = [export_filename(e) for e in echogram_files]
+        else:
+            uploaded_files = [f"{cruise_id}/{file_base_name}/{str(Path(e).name)}" for e in echogram_files]
     else:
         uploaded_files = [str(Path(e).name) for e in echogram_files]
 

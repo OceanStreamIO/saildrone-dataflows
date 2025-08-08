@@ -287,15 +287,16 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
                 container_name=export_container_name,
             )
 
+        nc_file_path = None
         if save_to_netcdf:
             nc_file_path = f"{cruise_id}/{file_name}/{file_name}.nc"
-            nc_file_output_path, nc_file_size = save_dataset_to_netcdf(ds, container_name=export_container_name,
-                                                         ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
-                                                         is_temp_dir=False)
+            _, nc_file_size = save_dataset_to_netcdf(ds, container_name=export_container_name,
+                                                     ds_path=nc_file_path, base_local_temp_path=NETCDF_ROOT_DIR,
+                                                     is_temp_dir=False)
 
             print('4) Saved to NetCDF:', nc_file_path)
 
-        return category, zarr_path, nc_file_output_path, nc_file_size, echogram_files
+        return category, zarr_path, nc_file_path, nc_file_size, echogram_files
     except Exception as e:
         print(f"Error processing file: {zarr_path}: ${str(e)}")
         traceback.print_exc()
