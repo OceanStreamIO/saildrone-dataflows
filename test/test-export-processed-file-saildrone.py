@@ -11,7 +11,7 @@ from saildrone.denoise.transient_noise import transient_noise_mask
 from saildrone.denoise.impulse_noise import impulsive_noise_mask
 
 from saildrone.process.plot import ensure_channel_labels, plot_and_upload_echograms, plot_sv_data, plot_sv_channel, \
-    plot_mask_channel, plot_all_masks, plot_masks_vertical
+    plot_mask_channel, plot_all_masks, plot_masks_vertical, export_interactive_echogram
 
 from saildrone.process.workflow import apply_denoising
 from saildrone.denoise import build_full_mask, apply_full_mask
@@ -106,11 +106,11 @@ def test_file_workflow_saildrone_full():
         ),
         "200000": dict(
             range_coord="depth",
-            range_window=30,
-            ping_window=30,
-            background_noise_max="50.0dB",
-            SNR_threshold="10.0dB",
-            sound_absorption=0.055,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
+            range_window=50,
+            ping_window=50,
+            background_noise_max="-120.0dB",
+            SNR_threshold="6.0dB",
+            sound_absorption=0.001,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
     }
 
@@ -118,6 +118,11 @@ def test_file_workflow_saildrone_full():
                  file_base_name=file_name,
                  output_path=f'./test/processed/echograms',
                  )
+
+    n_ch = ds.dims["channel"]
+    for ch in range(n_ch):
+        html_path = f"echogram_{ch}.html"
+        export_interactive_echogram(ds, ch, out_html=f"./test/processed/{html_path}")
 
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
@@ -158,7 +163,7 @@ def test_file_workflow_saildrone_full():
 
         plot_sv_data(ch_ds,
                      channel=ch,
-                     cmap='viridis',
+                     cmap='ocean_r',
                      output_path=f'./test/processed/echograms',
                      title_template="{channel_label} / denoised and pruned",
                      file_base_name=file_name + '--denoised-pruned'

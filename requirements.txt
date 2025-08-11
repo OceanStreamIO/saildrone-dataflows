@@ -30,3 +30,7 @@ netCDF4
 fsspec==2025.3.2
 xarray==2024.11.0
 xarray-datatree==0.0.6
+holoviews
+panel
+hvplot
+datashader

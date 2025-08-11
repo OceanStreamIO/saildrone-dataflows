@@ -3,7 +3,7 @@ import os
 import shutil
 import sys
 import traceback
-import dask
+from pathlib import Path
 
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -244,6 +244,7 @@ def compute_batch_mvbs(batch_results, batch_key, export_id, cruise_id, container
                 ds_mvbs,
                 cruise_id=cruise_id,
                 file_base_name=f"{tag}--mvbs",
+                create_interactive_pages=True,
                 save_to_blobstorage=True,
                 upload_path=f"{batch_key}",
                 cmap=colormap,
@@ -325,7 +326,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
         # optional NetCDF
         if save_to_netcdf:
             nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            _, nc_denoised_file_size = save_dataset_to_netcdf(
+            _, nc_file_size = save_dataset_to_netcdf(
                 ds,
                 container_name=container_name,
                 ds_path=nc_path,
@@ -342,6 +343,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
                 save_to_blobstorage=True,
                 cruise_id=cruise_id,
                 upload_path=batch_key,
+                create_interactive_pages=True,
                 cmap=colormap,
                 title_template=f"{batch_key} ({cat})" + " | {channel_label}",
                 container_name=container_name,
@@ -402,6 +404,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
                     upload_path=batch_key,
                     cmap=colormap,
                     container_name=container_name,
+                    create_interactive_pages=True,
                     export_filename=lambda e: f"{batch_key}/{str(Path(e).name)}",
                     title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
                 )

@@ -22,8 +22,7 @@ from prefect_flows.pydantic_models import NASC_Compute_Options, MVBS_Compute_Opt
     MaskAttenuatedSignal, TransientNoiseMask, RemoveBackgroundNoise, fill_missing_frequency_params
 
 from saildrone.process import apply_denoising, plot_and_upload_echograms, get_files_list
-from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_mvbs
-from saildrone.process.concat import merge_location_data, concatenate_and_rechunk
+from saildrone.process.concat import merge_location_data
 from saildrone.store import (PostgresDB, ExportService, open_zarr_store, generate_container_name,
                              ensure_container_exists, save_zarr_store, zip_and_save_netcdf_files,
                              save_dataset_to_netcdf)
@@ -85,148 +84,6 @@ def get_worker_addresses(scheduler: str) -> list[str]:
     """
     with Client(scheduler, name="discover-workers", timeout="5s") as c:
         return list(c.scheduler_info()["workers"])
-
-
-
-"""
-################################################### NASC ###################################################
-"""
-
-@task(
-    log_prints=True,
-    retry_delay_seconds=60,
-    cache_policy=input_cache_policy,
-    refresh_cache=True,
-    result_storage=None,
-    task_run_name="compute_batch_nasc--{batch_key}"
-)
-def compute_batch_nasc(batch_results, batch_key, cruise_id, container_name, compute_nasc_options, plot_echograms=False,
-                       save_to_netcdf=False, colormap='ocean_r', chunks=None):
-    results = {}
-
-    tag_for = {
-        "short_pulse": "short_pulse",
-        "long_pulse": "long_pulse",
-        "exported_ds": batch_key,
-    }
-
-    def _run(pulse, tag):
-        root = f"{batch_key}/{tag}"
-        ds = open_zarr_store(f"{root}.zarr",
-                             container_name=container_name,
-                             rechunk_after=True,
-                             chunks=chunks)
-        ds = _nav_to_data_vars(ds)
-        print('Computing NASC for pulse:', pulse, 'with tag:', tag, f'and root: {root}.zarr')
-        print(ds.data_vars)
-
-        nasc = compute_and_save_nasc(
-            ds,
-            zarr_path=f"{root}--nasc.zarr",
-            compute_nasc_opts=compute_nasc_options,
-            cruise_id=cruise_id,
-            container_name=container_name,
-        )
-        results[pulse] = nasc
-
-        if plot_echograms:
-            plot_and_upload_echograms(
-                nasc,
-                file_base_name=f"{tag}--nasc",
-                save_to_blobstorage=True,
-                upload_path=f"{batch_key}",
-                cmap=colormap,
-                plot_var='NASC_log',
-                container_name=container_name,
-            )
-
-        if save_to_netcdf:
-            save_dataset_to_netcdf(
-                nasc,
-                container_name=container_name,
-                ds_path=f"{root}--nasc.nc",
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
-
-    for pulse, tag in tag_for.items():
-        if batch_results.get(pulse):
-            _run(pulse, tag)
-
-    return results
-
-
-"""
-################################################### MVBS ###################################################
-"""
-
-
-@task(
-    log_prints=True,
-    retry_delay_seconds=60,
-    cache_policy=input_cache_policy,
-    refresh_cache=True,
-    result_storage=None,
-    task_run_name="compute_batch_mvbs--{batch_key}"
-)
-def compute_batch_mvbs(batch_results, batch_key, cruise_id, container_name, compute_mvbs_options, plot_echograms=False,
-                       save_to_netcdf=False, colormap='ocean_r', chunks=None):
-    """
-    Compute / plot / save MVBS for every pulse type present in *batch_results*.
-    Returns {pulse_name: mvbs_dataset}.
-    """
-    results = {}
-
-    tag_for = {
-        "short_pulse": "short_pulse",
-        "long_pulse": "long_pulse",
-        "exported_ds": batch_key
-    }
-
-    def _run(pulse, tag):
-        root = f"{batch_key}/{tag}"
-
-        ds = open_zarr_store(f"{root}.zarr", container_name=container_name, chunks=chunks,
-                             rechunk_after=True)
-        ds = _nav_to_data_vars(ds)
-
-        print('Computing MVBS for pulse:', pulse, 'with tag:', tag, f'and root: {root}.zarr')
-        print(ds.data_vars)
-        print(ds.dims)
-
-        ds_mvbs = compute_and_save_mvbs(
-            ds,
-            cruise_id=cruise_id,
-            zarr_path=f"{root}--mvbs.zarr",
-            compute_mvbs_opts=compute_mvbs_options,
-            container_name=container_name,
-        )
-        results[pulse] = ds_mvbs
-
-        if plot_echograms:
-            plot_and_upload_echograms(
-                ds_mvbs,
-                file_base_name=f"{tag}--mvbs",
-                save_to_blobstorage=True,
-                upload_path=f"{batch_key}",
-                cmap=colormap,
-                container_name=container_name,
-            )
-
-        if save_to_netcdf:
-            save_dataset_to_netcdf(
-                ds_mvbs,
-                container_name=container_name,
-                ds_path=f"{root}--mvbs.nc",
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
-
-    for pulse, tag in tag_for.items():
-        if batch_results.get(pulse):
-            _run(pulse, tag)
-
-    return results
 
 
 @task(
@@ -377,14 +234,6 @@ def trigger_concatenate_flow(
     )
 
     return state
-
-
-@task(
-    log_prints=True,
-    task_run_name="concatenate_batches--{cruise_id}"
-)
-def concatenate_batches(cruise_id, **kwargs):
-    print("Concatenating batches with files:", cruise_id)
 
 
 @flow(

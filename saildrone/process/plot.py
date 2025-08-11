@@ -1,20 +1,29 @@
 import os
 from typing import Union, Mapping
 
-import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
+import holoviews as hv
+import numpy as np
+import pandas as pd
+import panel as pn
+from bokeh.models import HoverTool
 import matplotlib.dates as mdates
 import xarray as xr
 import shutil
 import traceback
 import re
+
+from bokeh.resources import INLINE
 from pathlib import Path
 from saildrone.store import upload_folder_to_blob_storage
 
+hv.extension("bokeh")
+pn.extension(design="material", notifications=False)
 
-def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r', channel: int = None,
-                 colorbar_orientation: str = 'vertical', plot_var='Sv', title_template='{channel_label}') -> list:
+
+def plot_sv_data(ds_Sv: xr.Dataset, file_base_name: str, output_path: str = None, cmap: str = 'ocean_r',
+                 channel: int = None, colorbar_orientation: str = 'vertical', plot_var='Sv', title_template='{channel_label}') -> list:
     """
     Plot Sv data for each channel and save the echogram plots.
 
@@ -71,13 +80,21 @@ def plot_sv_channel(
     channel: int,
     file_base_name,
     echogram_path: str = ".",
-    cmap: str = "viridis",
+    cmap: str = "ocean_r",                # better default for Sv
     colorbar_orientation: str = "vertical",
     plot_var: str = "Sv",
     title_template: str = "{channel_label}",
     vmin: float = -80,
     vmax: float = -50,
+    hour_grid: bool = True,
+    inches_per_hour: float = 1.0,
+    min_width: float = 14.0,
+    max_width: float = 34.0,
+    dpi: int = 180,
+    min_aspect: float = 1.8,
+    height_in: float = 12.0
 ):
+    # --- pick channel (unchanged) ---
     if isinstance(ds_Sv, xr.Dataset):
         channel_idx = channel
     else:
@@ -87,11 +104,24 @@ def plot_sv_channel(
         channel_idx = None
 
     da_Sv, meta = prepare_channel_da(ds_Sv, channel_idx, var_name=plot_var)
-    fig, ax = plt.subplots(figsize=(20, 12))
 
-    da_Sv.T.plot(
+    t = pd.to_datetime(da_Sv[meta["xdim"]].values)
+    hours = max(1.0, (t[-1] - t[0]).total_seconds() / 3600.0)
+    base_width = float(np.clip(hours * inches_per_hour, min_width, max_width))
+    width_in = max(base_width, min_aspect * height_in)
+
+    if width_in > max_width:
+        width_in = max_width
+        target_height = width_in / min_aspect
+        if target_height < height_in:
+            height_in = target_height
+
+    fig, ax = plt.subplots(figsize=(width_in, height_in))
+
+    da_Sv.T.plot.pcolormesh(
         x=meta["xdim"],
         y=meta["ydim"],
+        shading="auto",
         yincrease=False,
         vmin=vmin,
         vmax=vmax,
@@ -99,18 +129,25 @@ def plot_sv_channel(
         add_colorbar=False,
         ylim=(meta["bot"], meta["top"]),
         ax=ax,
+        rasterized=True,
     )
 
-    # cosmetic tweaks
+    # --- hour separators (nice for up to 24 h) ---
+    if hour_grid and meta["xdim"] == "ping_time":
+        start = t[0].floor("1H")
+        end = t[-1].ceil("1H")
+        for dt in pd.date_range(start, end, freq="1H"):
+            ax.axvline(dt, color="k", lw=0.6, alpha=0.18, zorder=3)
+
+    # --- cosmetics (mostly yours, with a few tweaks) ---
     ax.set_facecolor("#f9f9f9")
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_linewidth(1.0)
 
-    locator = mdates.AutoDateLocator(maxticks=12)
-    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=6, maxticks=18))
     ax.xaxis.set_major_formatter(meta["x_formatter"])
 
-    # colour-bar
+    # colorbar
     cbar_kw = dict(pad=0.08, shrink=0.8)
     if colorbar_orientation == "horizontal":
         cbar_kw.update(orientation="horizontal", aspect=40)
@@ -131,9 +168,9 @@ def plot_sv_channel(
 
     fig.tight_layout(pad=2)
 
-    # save the figure
+    # save the figure (higher DPI = better detail at same pixel size)
     out_path = Path(echogram_path) / f"{file_base_name}_{meta['safe_label']}.png"
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=dpi)
     plt.close(fig)
 
     return out_path
@@ -292,7 +329,8 @@ def __plot_individual_channel_simplified(ds_Sv: xr.Dataset, channel: int, file_b
 
 def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, save_to_blobstorage=False,
                               file_name=None, output_path=None, upload_path=None, container_name=None,
-                              export_filename=None, channel=None, cmap='ocean_r', plot_var='Sv',
+                              export_filename=None, create_interactive_pages=False,
+                              channel=None, cmap='ocean_r', plot_var='Sv',
                               title_template='{channel_label}'):
     if save_to_blobstorage:
         echograms_output_path = f'/tmp/osechograms/{cruise_id}/{file_base_name}'
@@ -311,6 +349,12 @@ def plot_and_upload_echograms(sv_dataset, cruise_id=None, file_base_name=None, s
                                   cmap=cmap,
                                   channel=channel,
                                   title_template=title_template)
+
+    if create_interactive_pages:
+        n_ch = sv_dataset.dims["channel"]
+        for ch in range(n_ch):
+            html_path = f"{file_base_name}_{ch}.html"
+            export_interactive_echogram(sv_dataset, ch, out_html=f"{echograms_output_path}/{html_path}")
 
     if save_to_blobstorage:
         upload_path = upload_path or f'{cruise_id}/{file_base_name}'
@@ -456,7 +500,6 @@ def prepare_channel_da(
             f"Failed to determine depth limits for channel {ch_label}. "
             "Ensure that the data contains valid depth information."
         )
-
 
     plotting_metadata = dict(
         ch_label=ch_label,
@@ -708,3 +751,226 @@ def _plot_single_mask_cube(
     plt.close(fig)
     return out_path
 
+
+def export_interactive_echogram(
+    ds_Sv,
+    channel,
+    out_html: str,
+    *,
+    var: str = "Sv",
+    y: str = "depth",
+    vmin: float = -80,
+    vmax: float = -50,
+    width: int = 1200,                 # not used directly; canvas is derived from data
+    height: int = 600,                 # (kept for API compatibility)
+    time_split: str | None = None,
+    title: str | None = None,
+    cmap: str = "ocean_r",
+    page_bg_color: str = "#ffffff",
+    plot_bg_color: str | None = None,
+    engine: str = "rasterize",              # keep 'rasterize' for irregular ping_time
+    tools: str = "xwheel_zoom,box_zoom,reset,hover",
+    lock_zoom_out: bool = True,
+    constrain_pan: bool = True,
+    px_per_second: float = 0.40,      # 1 hour → ~1440 px width
+    px_per_meter: float = 1.5,        # 350 m → ~525 px height
+    min_width: int = 900, max_width: int = 2600,
+    min_height: int = 300, max_height: int = 900,
+    auto_clip_shallow: bool = True,         # auto-detect shallow channels
+    auto_clip_margin: float = 0.0,          # meters of padding when auto-clipping
+    bokeh_resources: str = "cdn",           # use CDN to shrink file size
+):
+    """
+    Export an interactive echogram HTML:
+      - crisp rendering via QuadMesh + rasterize + upsample (works with irregular ping_time)
+      - auto-clip shallow channels (based on where data actually exists)
+      - minimal tooltips: 'Sv' only
+      - prevents zooming/panning beyond initial view if requested
+    """
+    pn.extension(design="material", raw_css=[f"body {{ background-color: {page_bg_color}; }}"])
+
+    xdim, ydim = "ping_time", y
+
+    # ----- helpers -----
+    def _canvas_size(chunk) -> tuple[int, int]:
+        x = chunk["ping_time"].values
+        is_dt = np.issubdtype(x.dtype, np.datetime64)
+        if is_dt:
+            t0 = pd.to_datetime(x.min());
+            t1 = pd.to_datetime(x.max())
+            dt_s = max((t1 - t0).total_seconds(), 1.0)
+            w = int(np.clip(dt_s * px_per_second, min_width, max_width))
+        else:
+            n_x = int(chunk.sizes.get("ping_time", chunk["ping_time"].size))
+            w = int(np.clip(n_x, min_width, max_width))
+
+        yy = chunk[y].values
+        y0, y1 = float(np.nanmin(yy)), float(np.nanmax(yy))
+        span_m = max(abs(y1 - y0), 1.0)
+        h = int(np.clip(span_m * px_per_meter, min_height, max_height))
+        return w, h
+
+    def _sanitize_attrs(da):
+        # Keep the original long_name but strip the "Volume backscattering..." prefix
+        # so HoloViews/Colorbar/hover show just "Sv re …".
+        import re
+        da = da.copy()
+        da.name = "Sv"
+        ln = str(da.attrs.get("long_name", "") or "")
+        # Pull the "(Sv ...)" part if present, else keep "Sv"
+        m = re.search(r"\((\s*Sv[^)]*)\)", ln, flags=re.IGNORECASE)
+        sv_label = m.group(1).strip() if m else "Sv"
+        # Use ASCII "m-1" etc. to avoid font glyph issues that can render as "???"
+        sv_label = (sv_label
+                    .replace("m^-1", "m-1")
+                    .replace("m⁻¹", "m-1"))
+        # Set the cleaned label as long_name; keep/ensure units
+        attrs = dict(getattr(da, "attrs", {}))
+        attrs["long_name"] = sv_label
+        attrs.setdefault("units", "dB")
+        da.attrs = attrs
+        return da
+
+    def _sv_label_and_units(da):
+        label = str(da.attrs.get("long_name", "Sv") or "Sv")
+        units = (da.attrs.get("units", "") or "").strip()
+        return label, units
+
+    def _auto_clip_depth(da):
+        # Auto-detect shallow channel by scanning for finite data along time
+        if ydim != "depth":
+            return da
+        valid_by_depth = np.isfinite(da).any(dim=xdim)
+        if not bool(valid_by_depth.any()):
+            return da
+        depth_with_data = da[ydim].where(valid_by_depth, drop=True)
+        dmin = float(depth_with_data.min().values)
+        dmax_data = float(depth_with_data.max().values)
+        dmax_full = float(da[ydim].max().values)
+        if dmax_data < dmax_full - 1e-6:
+            upper = dmax_data + float(auto_clip_margin)
+            return da.sel({ydim: slice(dmin, upper)})
+        return da
+
+    def _plot(chunk, label: str):
+        import hvplot.xarray  # noqa: F401
+
+        w, h = _canvas_size(chunk)
+        sv_label, sv_units = _sv_label_and_units(chunk)
+
+        p = chunk.hvplot.quadmesh(
+            x=xdim, y=ydim,
+            rasterize=True, upsample=True, aggregator="max",
+            width=w, height=h,
+            cmap=cmap, clim=(vmin, vmax), cnorm="linear",
+            flip_yaxis=(ydim == "depth"),
+            clabel=f"{sv_label}" + (f" ({sv_units})" if sv_units else ""),
+            colorbar=True, title=label,
+        )
+
+        # Ranges for bounds + zoom-out lock
+        xvals = chunk[xdim].values
+        yvals = chunk[ydim].values
+        is_dt = np.issubdtype(xvals.dtype, np.datetime64)
+        x0, x1 = (pd.to_datetime(xvals.min()), pd.to_datetime(xvals.max())) if is_dt else (float(np.nanmin(xvals)), float(np.nanmax(xvals)))
+        y0, y1 = float(np.nanmin(yvals)), float(np.nanmax(yvals))
+        x_span = (x1 - x0).total_seconds() * 1000.0 if is_dt else (x1 - x0)
+        y_span = (y1 - y0)
+
+        def _lock_ranges(hv_plot, _):
+            xr = hv_plot.handles.get("x_range")
+            yr = hv_plot.handles.get("y_range")
+            if xr is not None:
+                if constrain_pan:
+                    xr.bounds = (x0, x1)
+                if lock_zoom_out:
+                    xr.max_interval = x_span
+            if yr is not None:
+                lo, hi = (min(y0, y1), max(y0, y1))
+                if constrain_pan:
+                    yr.bounds = (lo, hi)
+                if lock_zoom_out:
+                    yr.max_interval = abs(y_span)
+
+        def _fix_hover(hv_plot, _):
+            # Replace default tooltips; keep only Sv and tidy formatting
+            hover = None
+            for t in hv_plot.state.tools:
+                if isinstance(t, HoverTool):
+                    hover = t
+                    break
+            if hover is None:
+                return
+            tt = []
+            # x as datetime or numeric
+            if is_dt:
+                tt.append(("time", "@x{%F %T}"))
+            else:
+                tt.append((xdim, "@x{0.###}"))
+            # y depth/range
+            if ydim == "depth":
+                tt.append(("depth", "@y{0.} m"))
+            else:
+                tt.append((ydim, "@y{0.###}"))
+            # z value
+            tt.append(("Sv", "@z{0.0} dB"))
+            hover.tooltips = tt
+            if is_dt:
+                hover.formatters = {"@x": "datetime"}
+
+        p = p.opts(
+            active_tools=['xwheel_zoom'],
+            tools=tools.split(",") if isinstance(tools, str) else tools,
+            hooks=[_lock_ranges],
+            bgcolor=plot_bg_color if plot_bg_color is not None else None,
+        )
+        return p
+
+    # ----- prep data (pick channel, order dims, clip) -----
+    da = ds_Sv[var].isel(channel=channel)
+    if da.dims != (xdim, ydim):
+        da = da.transpose(xdim, ydim)
+
+    # sort depth ascending; we’ll flip visually
+    if ydim == "depth" and np.any(np.diff(da[ydim].values) < 0):
+        da = da.sortby(ydim)
+
+    # compute to stabilize datashader chunking
+    try:
+        da = da.compute()
+    except Exception:
+        pass
+
+    da = _sanitize_attrs(da)
+
+    # auto-clip shallow channels if requested
+    if auto_clip_shallow:
+        da = _auto_clip_depth(da)
+
+    # ----- build panel -----
+    if time_split:
+        t0 = pd.to_datetime(da[xdim].values[0]).floor(time_split)
+        t1 = pd.to_datetime(da[xdim].values[-1]).ceil(time_split)
+        edges = pd.date_range(t0, t1, freq=time_split)
+
+        tabs = []
+        for start, end in zip(edges[:-1], edges[1:]):
+            sl = da.sel({xdim: slice(start, end)})
+            if sl.size == 0:
+                continue
+            try:
+                sl = sl.compute()
+            except Exception:
+                pass
+            sl = _sanitize_attrs(sl)
+            if auto_clip_shallow:
+                sl = _auto_clip_depth(sl)
+            tabs.append((f"{start:%Y-%m-%d %H:%M} – {end:%H:%M}", _plot(sl, "")))
+
+        panel_obj = pn.Tabs(*tabs) if len(tabs) > 1 else (pn.panel(tabs[0][1]) if tabs else pn.pane.Markdown("No data"))
+    else:
+        panel_obj = pn.panel(_plot(da, title or ""))
+
+    out = Path(out_html)
+    panel_obj.save(str(out), embed=True, resources=bokeh_resources, title=(title or "Echogram"))
+    return out

@@ -34,8 +34,6 @@ class ExportService:
         denoise_params_json = _to_jsonb(denoise_params)
         agg_params_json = _to_jsonb(agg_params)
 
-        print('denoise_params_json', denoise_params_json)
-
         self.db.cursor.execute(
             f"""
             INSERT INTO {self.table_exports}
