@@ -4,10 +4,12 @@ from typing import Union, Mapping
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 import holoviews as hv
+import hvplot.xarray
 import numpy as np
 import pandas as pd
 import panel as pn
 from bokeh.models import HoverTool
+import dask.array as dsa
 import matplotlib.dates as mdates
 import xarray as xr
 import shutil
@@ -80,7 +82,7 @@ def plot_sv_channel(
     channel: int,
     file_base_name,
     echogram_path: str = ".",
-    cmap: str = "ocean_r",                # better default for Sv
+    cmap: str = "ocean_r",
     colorbar_orientation: str = "vertical",
     plot_var: str = "Sv",
     title_template: str = "{channel_label}",
@@ -91,10 +93,10 @@ def plot_sv_channel(
     min_width: float = 14.0,
     max_width: float = 34.0,
     dpi: int = 180,
-    min_aspect: float = 1.8,
-    height_in: float = 12.0
+    height_in: float = 12.0,  # base figure height (inches)
+    min_aspect_short: float = 1.8,  # width/height at ~1h
+    target_aspect_24h: float = 3.2,
 ):
-    # --- pick channel (unchanged) ---
     if isinstance(ds_Sv, xr.Dataset):
         channel_idx = channel
     else:
@@ -107,15 +109,17 @@ def plot_sv_channel(
 
     t = pd.to_datetime(da_Sv[meta["xdim"]].values)
     hours = max(1.0, (t[-1] - t[0]).total_seconds() / 3600.0)
-    base_width = float(np.clip(hours * inches_per_hour, min_width, max_width))
-    width_in = max(base_width, min_aspect * height_in)
 
-    if width_in > max_width:
-        width_in = max_width
-        target_height = width_in / min_aspect
-        if target_height < height_in:
-            height_in = target_height
+    time_width = hours * inches_per_hour
+    if hours <= 1.0:
+        aspect_target = min_aspect_short
+    elif hours >= 24.0:
+        aspect_target = target_aspect_24h
+    else:
+        w0, w1 = min_aspect_short, target_aspect_24h
+        aspect_target = w0 + (w1 - w0) * ((hours - 1.0) / (24.0 - 1.0))
 
+    width_in = max(time_width, min_width, aspect_target * height_in)
     fig, ax = plt.subplots(figsize=(width_in, height_in))
 
     da_Sv.T.plot.pcolormesh(
@@ -752,6 +756,7 @@ def _plot_single_mask_cube(
     return out_path
 
 
+
 def export_interactive_echogram(
     ds_Sv,
     channel,
@@ -761,24 +766,21 @@ def export_interactive_echogram(
     y: str = "depth",
     vmin: float = -80,
     vmax: float = -50,
-    width: int = 1200,                 # not used directly; canvas is derived from data
-    height: int = 600,                 # (kept for API compatibility)
     time_split: str | None = None,
     title: str | None = None,
     cmap: str = "ocean_r",
     page_bg_color: str = "#ffffff",
     plot_bg_color: str | None = None,
-    engine: str = "rasterize",              # keep 'rasterize' for irregular ping_time
     tools: str = "xwheel_zoom,box_zoom,reset,hover",
     lock_zoom_out: bool = True,
     constrain_pan: bool = True,
-    px_per_second: float = 0.40,      # 1 hour → ~1440 px width
-    px_per_meter: float = 1.5,        # 350 m → ~525 px height
+    px_per_second: float = 0.40,
+    px_per_meter: float = 1.5,
     min_width: int = 900, max_width: int = 2600,
     min_height: int = 300, max_height: int = 900,
-    auto_clip_shallow: bool = True,         # auto-detect shallow channels
-    auto_clip_margin: float = 0.0,          # meters of padding when auto-clipping
-    bokeh_resources: str = "cdn",           # use CDN to shrink file size
+    auto_clip_shallow: bool = True,
+    auto_clip_margin: float = 0.0,
+    bokeh_resources: str = "cdn",
 ):
     """
     Export an interactive echogram HTML:
@@ -791,7 +793,6 @@ def export_interactive_echogram(
 
     xdim, ydim = "ping_time", y
 
-    # ----- helpers -----
     def _canvas_size(chunk) -> tuple[int, int]:
         x = chunk["ping_time"].values
         is_dt = np.issubdtype(x.dtype, np.datetime64)
@@ -811,9 +812,6 @@ def export_interactive_echogram(
         return w, h
 
     def _sanitize_attrs(da):
-        # Keep the original long_name but strip the "Volume backscattering..." prefix
-        # so HoloViews/Colorbar/hover show just "Sv re …".
-        import re
         da = da.copy()
         da.name = "Sv"
         ln = str(da.attrs.get("long_name", "") or "")
@@ -837,7 +835,6 @@ def export_interactive_echogram(
         return label, units
 
     def _auto_clip_depth(da):
-        # Auto-detect shallow channel by scanning for finite data along time
         if ydim != "depth":
             return da
         valid_by_depth = np.isfinite(da).any(dim=xdim)
@@ -853,14 +850,12 @@ def export_interactive_echogram(
         return da
 
     def _plot(chunk, label: str):
-        import hvplot.xarray  # noqa: F401
-
         w, h = _canvas_size(chunk)
         sv_label, sv_units = _sv_label_and_units(chunk)
 
         p = chunk.hvplot.quadmesh(
             x=xdim, y=ydim,
-            rasterize=True, upsample=True, aggregator="max",
+            rasterize=True, upsample=True, aggregator="mean",
             width=w, height=h,
             cmap=cmap, clim=(vmin, vmax), cnorm="linear",
             flip_yaxis=(ydim == "depth"),
@@ -892,32 +887,6 @@ def export_interactive_echogram(
                 if lock_zoom_out:
                     yr.max_interval = abs(y_span)
 
-        def _fix_hover(hv_plot, _):
-            # Replace default tooltips; keep only Sv and tidy formatting
-            hover = None
-            for t in hv_plot.state.tools:
-                if isinstance(t, HoverTool):
-                    hover = t
-                    break
-            if hover is None:
-                return
-            tt = []
-            # x as datetime or numeric
-            if is_dt:
-                tt.append(("time", "@x{%F %T}"))
-            else:
-                tt.append((xdim, "@x{0.###}"))
-            # y depth/range
-            if ydim == "depth":
-                tt.append(("depth", "@y{0.} m"))
-            else:
-                tt.append((ydim, "@y{0.###}"))
-            # z value
-            tt.append(("Sv", "@z{0.0} dB"))
-            hover.tooltips = tt
-            if is_dt:
-                hover.formatters = {"@x": "datetime"}
-
         p = p.opts(
             active_tools=['xwheel_zoom'],
             tools=tools.split(",") if isinstance(tools, str) else tools,
@@ -926,16 +895,13 @@ def export_interactive_echogram(
         )
         return p
 
-    # ----- prep data (pick channel, order dims, clip) -----
     da = ds_Sv[var].isel(channel=channel)
     if da.dims != (xdim, ydim):
         da = da.transpose(xdim, ydim)
 
-    # sort depth ascending; we’ll flip visually
     if ydim == "depth" and np.any(np.diff(da[ydim].values) < 0):
         da = da.sortby(ydim)
 
-    # compute to stabilize datashader chunking
     try:
         da = da.compute()
     except Exception:
