@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import timedelta, datetime
 from typing import List, Union, TypedDict
 from adlfs import AzureBlobFileSystem
-from azure.storage.blob import BlobServiceClient, generate_container_sas, ContainerSasPermissions
+from azure.storage.blob import BlobServiceClient, generate_container_sas, ContainerSasPermissions, ContentSettings
 
 from .utils import fix_chunking, get_variable_encoding
 
@@ -325,7 +325,6 @@ def save_dataset_to_netcdf(
                 )
                 time.sleep(sleep)
     finally:
-        # ---------- aggressive memory cleanup ----------
         try:
             ds.close()  # xarray ≥ 0.21: closes any file-manager resources
         except AttributeError:
@@ -334,7 +333,6 @@ def save_dataset_to_netcdf(
         del ds  # drop the last Python reference
         gc.collect()  # force immediate garbage collection
 
-        # ask glibc’s allocator to return freed pages to the OS (Linux only)
         if platform.system() == "Linux":
             try:
                 ctypes.CDLL("libc.so.6").malloc_trim(0)
@@ -459,5 +457,9 @@ def upload_folder_to_blob_storage(folder_path, container_name, target_path):
             blob_path = os.path.join(target_path, relative_path).replace(os.sep, '/')
             blob_client = container_client.get_blob_client(blob_path)
 
+            content_settings = None
+            if file.lower().endswith(".html"):
+                content_settings = ContentSettings(content_type="text/html")
+
             with open(file_path, "rb") as data:
-                blob_client.upload_blob(data, overwrite=True)
+                blob_client.upload_blob(data, overwrite=True, content_settings=content_settings)
