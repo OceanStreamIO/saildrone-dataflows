@@ -855,7 +855,7 @@ def export_interactive_echogram(
 
         p = chunk.hvplot.quadmesh(
             x=xdim, y=ydim,
-            rasterize=True, upsample=True, aggregator="mean",
+            rasterize=True, upsample=True, aggregator="max",
             width=w, height=h,
             cmap=cmap, clim=(vmin, vmax), cnorm="linear",
             flip_yaxis=(ydim == "depth"),
