@@ -220,7 +220,7 @@ def test_file_workflow_saildrone():
         colormap='ocean_r',
         mask_transient_noise=None,
         mask_impulse_noise=None,
-        mask_attenuated_signal=attenuated_signal_opts,
+        mask_attenuated_signal=None,
         remove_background_noise=None,
         chunks_denoising=chunks_denoising,
         apply_seabed_mask=False,

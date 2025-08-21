@@ -359,7 +359,6 @@ def _process_file_workflow(
                                                    file_base_name=file_name,
                                                    output_path=output_path,
                                                    save_to_blobstorage=save_to_blobstorage,
-                                                   depth_var="depth",
                                                    cmap=colormap,
                                                    container_name=echograms_container)
 
@@ -370,7 +369,6 @@ def _process_file_workflow(
                                                             file_name=f"{file_name}_denoised",
                                                             output_path=output_path,
                                                             save_to_blobstorage=save_to_blobstorage,
-                                                            depth_var="depth",
                                                             cmap=colormap,
                                                             container_name=echograms_container)
         echogram_files.extend(echogram_files_denoised)
@@ -382,7 +380,6 @@ def _process_file_workflow(
                                                           file_name=f"{file_name}_seabed",
                                                           output_path=output_path,
                                                           save_to_blobstorage=save_to_blobstorage,
-                                                          depth_var="depth",
                                                           cmap=colormap,
                                                           container_name=echograms_container)
         echogram_files.extend(echogram_files_seabed)
@@ -415,7 +412,6 @@ def _process_file_workflow(
                                                             file_name=f"{file_name}_mvbs",
                                                             output_path=output_path,
                                                             save_to_blobstorage=save_to_blobstorage,
-                                                            depth_var="depth",
                                                             cmap=colormap,
                                                             container_name=echograms_container)
             echogram_files.extend(echogram_files_mvbs)

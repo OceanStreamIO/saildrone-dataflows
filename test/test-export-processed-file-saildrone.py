@@ -4,6 +4,7 @@ import xarray as xr
 from dotenv import load_dotenv
 from dask.distributed import Client, LocalCluster
 
+from echopype.mask import apply_mask
 from saildrone.denoise.attenuation_signal import attenuation_mask
 from saildrone.denoise.background_noise import background_noise_mask
 from saildrone.denoise.mask import extract_channel_and_drop_pings
@@ -17,7 +18,7 @@ from saildrone.process.workflow import apply_denoising
 from saildrone.denoise import build_full_mask, apply_full_mask
 from saildrone.store import open_zarr_store, save_zarr_store
 
-from echopype.clean import remove_background_noise
+from echopype.clean import remove_background_noise, mask_transient_noise
 
 
 load_dotenv()
@@ -76,22 +77,48 @@ def test_file_workflow_saildrone_full():
         ),
     }
 
+    # transient_noise_opts = {
+    #     "38000": dict(
+    #         range_coord="depth",
+    #         num_side_pings=25,
+    #         depth_bin="10m",
+    #         ping_window=10,
+    #         range_window=4,
+    #         percentile=15,
+    #         threshold="12.0dB",
+    #         exclude_above="20.0m",
+    #     ),
+    #     "200000": dict(
+    #         range_coord="depth",
+    #         ping_window=5,
+    #         range_window=3,
+    #         percentile=15,
+    #         depth_bin="10m",
+    #         threshold="12.0dB",
+    #         exclude_above="12.0m",
+    #     ),
+    # }
+
     transient_noise_opts = {
-        38000: dict(
+        "38000": dict(
             range_coord="depth",
-            ping_window=5,
-            range_window=3,
-            threshold=12.0,
-            percentile=15,
-            exclude_above=2.0,
+            jumps=5.0,
+            maxts=-35.0,
+            ping_window=8, # n (pings on each side) -> block = 17
+            threshold=(10.0, 7.0),
+            exclude_above=20.0,
+            ref_min=250.0,
+            ref_max=450.0,
         ),
-        200000: dict(
+        "200000": dict(
             range_coord="depth",
-            ping_window=5,
-            range_window=3,
-            threshold=12.0,
-            percentile=15,
-            exclude_above=2.0,
+            ping_window=6,  # block = 13
+            threshold=(12.0, 8.0),
+            exclude_above=12.0,
+            ref_min=150.0,
+            ref_max=320.0,
+            jumps=3.0,
+            maxts=-35.0
         ),
     }
 
@@ -102,7 +129,7 @@ def test_file_workflow_saildrone_full():
             ping_window=50,
             background_noise_max="-130.0dB",
             SNR_threshold="6.0dB",
-            sound_absorption=0.0022,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
+            sound_absorption=0.009,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
         ),
         "200000": dict(
             range_coord="depth",
@@ -118,22 +145,25 @@ def test_file_workflow_saildrone_full():
                  file_base_name=file_name,
                  output_path=f'./test/processed/echograms',
                  )
+    #
+    # n_ch = ds.dims["channel"]
+    # for ch in range(n_ch):
+    #     html_path = f"echogram_{ch}.html"
+    #     export_interactive_echogram(ds, ch, out_html=f"./test/processed/{html_path}")
 
-    n_ch = ds.dims["channel"]
-    for ch in range(n_ch):
-        html_path = f"echogram_{ch}.html"
-        export_interactive_echogram(ds, ch, out_html=f"./test/processed/{html_path}")
+    ds["Sv"] = ds["Sv"].chunk({"ping_time": 2048, "depth": 1024})
+    ds["Sv"] = ds["Sv"].astype("float32")
 
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
                                 mask_attenuated_signal=attenuated_signal_opts,
-                                mask_transient_noise=None,
+                                mask_transient_noise=transient_noise_opts,
                                 remove_background_noise=None
                                 )
 
     # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
     #
-    def _mask_one(ch_ds):
+    def _mask_bg_noise(ch_ds):
         freq = str(int(ch_ds["frequency_nominal"]))
         opts = background_noise_opts.get(freq)
 
@@ -145,11 +175,11 @@ def test_file_workflow_saildrone_full():
             background_noise_max=opts["background_noise_max"],
         )["Sv"]
 
-    # this returns a DataArray with dims ("channel","ping_time",...)
-    sv_clean = ds_masked.groupby("channel").map(_mask_one)
-    sv_clean.name = "Sv"
 
-    # overwrite in-place
+    sv_clean = ds_masked.groupby("channel").map(_mask_bg_noise)
+    sv_clean.name = "Sv"
+    #
+    # # overwrite in-place
     ds_masked["Sv"] = sv_clean
 
     n_ch = ds_masked.dims["channel"]

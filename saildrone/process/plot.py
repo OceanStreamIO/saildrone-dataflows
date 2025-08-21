@@ -16,6 +16,10 @@ import shutil
 import traceback
 import re
 
+import plotly.graph_objects as go
+import matplotlib.cm as _mpl_cm
+import matplotlib.colors as _mpl_colors
+
 from bokeh.resources import INLINE
 from pathlib import Path
 from saildrone.store import upload_folder_to_blob_storage
@@ -88,7 +92,7 @@ def plot_sv_channel(
     title_template: str = "{channel_label}",
     vmin: float = -80,
     vmax: float = -50,
-    hour_grid: bool = True,
+    hour_grid: bool = False,
     inches_per_hour: float = 1.0,
     min_width: float = 14.0,
     max_width: float = 34.0,
@@ -136,7 +140,6 @@ def plot_sv_channel(
         rasterized=True,
     )
 
-    # --- hour separators (nice for up to 24 h) ---
     if hour_grid and meta["xdim"] == "ping_time":
         start = t[0].floor("1H")
         end = t[-1].ceil("1H")
@@ -753,8 +756,8 @@ def _plot_single_mask_cube(
     out_path = out_dir / f"{fname}_{cube_name}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    return out_path
 
+    return out_path
 
 
 def export_interactive_echogram(
@@ -853,14 +856,25 @@ def export_interactive_echogram(
         w, h = _canvas_size(chunk)
         sv_label, sv_units = _sv_label_and_units(chunk)
 
+        tool_list = tools.split(",") if isinstance(tools, str) else list(tools)
+        tool_list = list(dict.fromkeys(t.strip() for t in tool_list if t.strip()))
+
         p = chunk.hvplot.quadmesh(
-            x=xdim, y=ydim,
-            rasterize=True, upsample=True, aggregator="max",
-            width=w, height=h,
-            cmap=cmap, clim=(vmin, vmax), cnorm="linear",
+            x=xdim,
+            y=ydim,
+            rasterize=True,
+            upsample=True,
+            aggregator="mean",
+            width=w,
+            height=h,
+            cmap=cmap,
+            clim=(vmin, vmax),
+            cnorm="linear",
             flip_yaxis=(ydim == "depth"),
             clabel=f"{sv_label}" + (f" ({sv_units})" if sv_units else ""),
-            colorbar=True, title=label,
+            colorbar=True,
+            title=label,
+            tools=[]
         )
 
         # Ranges for bounds + zoom-out lock
@@ -887,12 +901,30 @@ def export_interactive_echogram(
                 if lock_zoom_out:
                     yr.max_interval = abs(y_span)
 
+        def _style_fonts_and_grid(plot, element):
+            fig = plot.state
+            fig.title.text_font_size = "13pt"
+            fig.xaxis.axis_label_text_font_size = "11pt"
+            fig.yaxis.axis_label_text_font_size = "11pt"
+            fig.xaxis.major_label_text_font_size = "10pt"
+            fig.yaxis.major_label_text_font_size = "10pt"
+
+            # grid styling
+            fig.xgrid.grid_line_color = "#e0e0e0"
+            fig.xgrid.grid_line_alpha = 0.5
+            fig.ygrid.grid_line_color = "#e0e0e0"
+            fig.ygrid.grid_line_alpha = 0.5
+
         p = p.opts(
             active_tools=['xwheel_zoom'],
-            tools=tools.split(",") if isinstance(tools, str) else tools,
-            hooks=[_lock_ranges],
+            tools=[],
+            hooks=[_lock_ranges, _style_fonts_and_grid],
             bgcolor=plot_bg_color if plot_bg_color is not None else None,
+            padding=0.02,
+            fontsize=11,
+            title_format=label,
         )
+
         return p
 
     da = ds_Sv[var].isel(channel=channel)
@@ -913,7 +945,6 @@ def export_interactive_echogram(
     if auto_clip_shallow:
         da = _auto_clip_depth(da)
 
-    # ----- build panel -----
     if time_split:
         t0 = pd.to_datetime(da[xdim].values[0]).floor(time_split)
         t1 = pd.to_datetime(da[xdim].values[-1]).ceil(time_split)
