@@ -3,24 +3,35 @@ import xarray as xr
 from typing import Dict, Tuple
 
 
-def _dilate_mask_separable(mask: xr.DataArray, *, pings: int = 0, samples: int = 0) -> xr.DataArray:
+def _dilate_mask_shift_or(mask: xr.DataArray, *, pings: int = 0, samples: int = 0) -> xr.DataArray:
     """
-    Cheap rectangular dilation by (±pings, ±samples). Stays Dask-lazy.
-    Implemented as two 1-D rolling max ops (time, then depth).
+    Very cheap rectangular dilation: OR a few shifted copies.
+    Separable (time then depth) → O(pings + samples) shifts, not (pings*samples).
+    Stays fully Dask-lazy.
     """
     if (pings <= 0) and (samples <= 0):
         return mask
 
-    ping_dim, range_dim = "ping_time", mask.dims[1]  # (ping_time, depth/echo_range)
-    out = mask.astype("uint8")
+    ping_dim, range_dim = "ping_time", mask.dims[1]
+    out = mask
 
+    # time dilation (±pings)
     if pings > 0:
-        out = out.rolling({ping_dim: 2 * pings + 1}, center=True, min_periods=1).max()
+        acc = out.data  # dask array
+        for dt in range(1, pings + 1):
+            acc = da.logical_or(acc, out.shift({ping_dim: dt},  fill_value=False).data)
+            acc = da.logical_or(acc, out.shift({ping_dim: -dt}, fill_value=False).data)
+        out = out.copy(data=acc)
 
+    # depth dilation (±samples)
     if samples > 0:
-        out = out.rolling({range_dim: 2 * samples + 1}, center=True, min_periods=1).max()
+        acc = out.data
+        for dz in range(1, samples + 1):
+            acc = da.logical_or(acc, out.shift({range_dim: dz},  fill_value=False).data)
+            acc = da.logical_or(acc, out.shift({range_dim: -dz}, fill_value=False).data)
+        out = out.copy(data=acc)
 
-    return (out > 0)  # boolean DataArray, same dims/coords
+    return out
 
 
 def impulsive_noise_mask(
@@ -93,20 +104,18 @@ def impulsive_noise_mask(
     Sv_sm_db = 10.0 * np.log10(Sv_lin)
 
     # 3. multi-lag forward & backward differences
-    per_lag = []
+    count = xr.zeros_like(Sv_sm_db, dtype="uint8")
     for lag in lags:
         fwd = Sv_sm_db - Sv_sm_db.shift({ping_dim: -lag}, fill_value=-np.inf)
         bwd = Sv_sm_db - Sv_sm_db.shift({ping_dim: lag}, fill_value=-np.inf)
-        per_lag.append((fwd > thr_db) & (bwd > thr_db))
+        hit = ((fwd > thr_db) & (bwd > thr_db)).astype("uint8")
+        # add using dask arrays to avoid alignment overhead
+        count = count.copy(data=(count.data + hit.data))
 
-    if len(per_lag) == 1:
-        impulse_mask = per_lag[0]
+    if vote_k is None or int(vote_k) <= 1:
+        impulse_mask = count > 0
     else:
-        stack = xr.concat(per_lag, dim="lag")
-        if vote_k is None or int(vote_k) <= 1:
-            impulse_mask = stack.any("lag")
-        else:
-            impulse_mask = (stack.astype("uint8").sum("lag") >= int(vote_k))
+        impulse_mask = count >= np.uint8(int(vote_k))
 
     # 4. unfeasible mask (first/last max(lag) pings or NaNs)
     max_lag = max(lags)
@@ -137,9 +146,8 @@ def impulsive_noise_mask(
         pd_p = int(post.get("pings", 0))
         pd_s = int(post.get("samples", 0))
         if (pd_p > 0) or (pd_s > 0):
-            impulse_mask = _dilate_mask_separable(impulse_mask, pings=pd_p, samples=pd_s)
-            # re-apply guards so dilation doesn't bleed into unfeasible/invalid areas
-            impulse_mask = impulse_mask & ~mask_unfeasible
-            impulse_mask = impulse_mask.where(valid_depth, False)
+            impulse_mask = _dilate_mask_shift_or(impulse_mask, pings=pd_p, samples=pd_s)
+            # re-guard
+            impulse_mask = impulse_mask & ~mask_unfeasible & valid_depth
 
     return impulse_mask, mask_unfeasible
