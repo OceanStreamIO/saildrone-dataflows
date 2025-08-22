@@ -3,6 +3,26 @@ import xarray as xr
 from typing import Dict, Tuple
 
 
+def _dilate_mask_separable(mask: xr.DataArray, *, pings: int = 0, samples: int = 0) -> xr.DataArray:
+    """
+    Cheap rectangular dilation by (±pings, ±samples). Stays Dask-lazy.
+    Implemented as two 1-D rolling max ops (time, then depth).
+    """
+    if (pings <= 0) and (samples <= 0):
+        return mask
+
+    ping_dim, range_dim = "ping_time", mask.dims[1]  # (ping_time, depth/echo_range)
+    out = mask.astype("uint8")
+
+    if pings > 0:
+        out = out.rolling({ping_dim: 2 * pings + 1}, center=True, min_periods=1).max()
+
+    if samples > 0:
+        out = out.rolling({range_dim: 2 * samples + 1}, center=True, min_periods=1).max()
+
+    return (out > 0)  # boolean DataArray, same dims/coords
+
+
 def impulsive_noise_mask(
     channel_ds: xr.Dataset,
     params: Dict[str, float],
@@ -33,6 +53,8 @@ def impulsive_noise_mask(
     lags = tuple(sorted(set(params.get("ping_lags", (1,)))))
     thr_db = params.get("threshold_db", 10.0)
     cut_above = params.get("exclude_shallow_above", None)
+    vote_k = params.get("vote_k_of_n", None)  # e.g., 2 means ">= 2 lags must vote True"
+    post = params.get("post_dilate", None)  # e.g., {"pings": 1, "samples": 2}
 
     if any(l < 1 for l in lags):
         raise ValueError("ping_lags must contain positive integers")
@@ -71,11 +93,20 @@ def impulsive_noise_mask(
     Sv_sm_db = 10.0 * np.log10(Sv_lin)
 
     # 3. multi-lag forward & backward differences
-    impulse_mask = xr.zeros_like(Sv_sm_db, dtype=bool)
+    per_lag = []
     for lag in lags:
         fwd = Sv_sm_db - Sv_sm_db.shift({ping_dim: -lag}, fill_value=-np.inf)
-        bwd = Sv_sm_db - Sv_sm_db.shift({ping_dim:  lag}, fill_value=-np.inf)
-        impulse_mask |= (fwd > thr_db) & (bwd > thr_db)
+        bwd = Sv_sm_db - Sv_sm_db.shift({ping_dim: lag}, fill_value=-np.inf)
+        per_lag.append((fwd > thr_db) & (bwd > thr_db))
+
+    if len(per_lag) == 1:
+        impulse_mask = per_lag[0]
+    else:
+        stack = xr.concat(per_lag, dim="lag")
+        if vote_k is None or int(vote_k) <= 1:
+            impulse_mask = stack.any("lag")
+        else:
+            impulse_mask = (stack.astype("uint8").sum("lag") >= int(vote_k))
 
     # 4. unfeasible mask (first/last max(lag) pings or NaNs)
     max_lag = max(lags)
@@ -96,8 +127,19 @@ def impulsive_noise_mask(
         valid_depth = range_values >= cut_above
         mask_unfeasible |= ~valid_depth
         impulse_mask = impulse_mask.where(valid_depth, False)
+    else:
+        valid_depth = xr.ones_like(Sv_sm_db, dtype=bool)
 
     # 6. final tidy-up & return
     impulse_mask = impulse_mask & ~mask_unfeasible  # edges/NaNs not impulses
+
+    if isinstance(post, dict):
+        pd_p = int(post.get("pings", 0))
+        pd_s = int(post.get("samples", 0))
+        if (pd_p > 0) or (pd_s > 0):
+            impulse_mask = _dilate_mask_separable(impulse_mask, pings=pd_p, samples=pd_s)
+            # re-apply guards so dilation doesn't bleed into unfeasible/invalid areas
+            impulse_mask = impulse_mask & ~mask_unfeasible
+            impulse_mask = impulse_mask.where(valid_depth, False)
 
     return impulse_mask, mask_unfeasible
