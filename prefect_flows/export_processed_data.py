@@ -321,7 +321,7 @@ def export_processed_data(cruise_id: str,
             num_files=total_files,
             denoise_params=denoise_params,
             agg_params=agg_params,
-            base_url=f"{base_url}{export_container_name}/",
+            base_url=base_url,
         )
 
         print(f"Export created with ID: {export_id}, Key: {export_key}")

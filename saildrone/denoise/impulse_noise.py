@@ -54,15 +54,6 @@ def impulsive_noise_mask(
     else:
         bin_sz = max(1, int(bin_cfg))
 
-    channel_label = channel_ds["channel_label"].values.item()
-    # print('channel_label:', channel_label)
-    # print('bin_sz:', bin_sz)
-    # print('cut_above:', cut_above)
-    dz = channel_ds.depth.diff('depth').median().item()
-    # print(f"Grid spacing: {dz:.3f} m")
-    # print(f"bin_sz chosen: {bin_sz}")
-    # print(f"Physical window: {bin_sz * dz:.2f} m")
-
     # 2. vertical pooling in linear domain (optional)
     if np.all(np.diff(range_values) < 0):  # descending grid → sort ascending
         Sv_db = Sv_db.sortby(range_coord)

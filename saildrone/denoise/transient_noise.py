@@ -26,45 +26,72 @@ def _lin2db(x: np.ndarray) -> np.ndarray:
 
 def _mov_nanmedian_1d(y: np.ndarray, win: int) -> np.ndarray:
     """Centered moving NaN-median on 1D (len T) → shape (T,) with NaNs at edges."""
-    T = y.shape[0]
-    if win <= 1 or T == 0:
-        return y.copy()
-
-    if T < win:
+    try:
+        import bottleneck as bn
+        # bn.move_median uses right-aligned window; center it
+        if win <= 1 or y.size == 0:
+            return y.copy()
+        out = bn.move_median(y, window=win, min_count=win)
+        # bn outputs right-aligned; shift to centered by padding both sides
+        pre = win // 2
+        post = win - 1 - pre
+        # Right-aligned result has valid values starting at index win-1
+        core = out[win - 1 :]                      # length T - (win - 1)
+        centered = np.pad(core, (pre, post), constant_values=np.nan)
+        return centered[: y.size]
+    except Exception:
+        # Fallback to sliding_window_view
+        T = y.shape[0]
+        if win <= 1 or T == 0:
+            return y.copy()
+        if T < win:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                m = np.nanmedian(y)
+            return np.full(T, m)
+        w = sliding_window_view(y, win)  # (T-win+1, win)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
-            m = np.nanmedian(y)
-        return np.full(T, m)
-
-    w = sliding_window_view(y, win)  # (T-win+1, win)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        core = np.nanmedian(w, axis=1)
-    pre = win // 2
-    post = win - 1 - pre
-    return np.pad(core, (pre, post), mode="constant", constant_values=np.nan)
-
+            core = np.nanmedian(w, axis=1)
+        pre = win // 2
+        post = win - 1 - pre
+        return np.pad(core, (pre, post), mode="constant", constant_values=np.nan)
 
 def _mov_nanmedian_rows(Y: np.ndarray, win: int) -> np.ndarray:
     """Centered moving NaN-median along axis=1 for 2D (S, T) → shape (S, T)."""
-    S, T = Y.shape
-    if win <= 1 or T == 0:
-        return Y.copy()
-
-    if T < win:
+    try:
+        import bottleneck as bn
+        S, T = Y.shape
+        if win <= 1 or T == 0:
+            return Y.copy()
+        out = np.empty_like(Y)
+        # Loop only over S (typically small: number of vertical steps)
+        for i in range(S):
+            row = Y[i]
+            tmp = bn.move_median(row, window=win, min_count=win)
+            pre = win // 2
+            post = win - 1 - pre
+            core = tmp[win - 1 :]
+            centered = np.pad(core, (pre, post), constant_values=np.nan)
+            out[i] = centered[: T]
+        return out
+    except Exception:
+        # Fallback to sliding_window_view
+        S, T = Y.shape
+        if win <= 1 or T == 0:
+            return Y.copy()
+        if T < win:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                m = np.nanmedian(Y, axis=1, keepdims=True)
+            return np.broadcast_to(m, (S, T)).copy()
+        W = sliding_window_view(Y, win, axis=1)  # (S, T-win+1, win)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
-            m = np.nanmedian(Y, axis=1, keepdims=True)
-        return np.broadcast_to(m, (S, T)).copy()
-    W = sliding_window_view(Y, win, axis=1)  # (S, T-win+1, win)
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=RuntimeWarning)
-        core = np.nanmedian(W, axis=2)  # (S, T-win+1)
-    pre = win // 2
-    post = win - 1 - pre
-
-    return np.pad(core, ((0, 0), (pre, post)), mode="constant", constant_values=np.nan)
+            core = np.nanmedian(W, axis=2)       # (S, T-win+1)
+        pre = win // 2
+        post = win - 1 - pre
+        return np.pad(core, ((0, 0), (pre, post)), mode="constant", constant_values=np.nan)
 
 
 def _fielding_mask_kernel(

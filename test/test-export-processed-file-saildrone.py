@@ -133,9 +133,9 @@ def test_file_workflow_saildrone_full():
         ),
         "200000": dict(
             range_coord="depth",
-            range_window=50,
-            ping_window=50,
-            background_noise_max="-120.0dB",
+            range_window=20,
+            ping_window=5,
+            background_noise_max="-128.0dB",
             SNR_threshold="6.0dB",
             sound_absorption=0.001,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
