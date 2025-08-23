@@ -55,10 +55,22 @@ def test_file_workflow_saildrone_full():
                          rechunk_after=True)
 
     impulse_noise_opts = {
-        38000: dict(ping_lags=(1, 2), threshold_db=10.0, range_coord="depth", vertical_bin_size="2m",
-                    exclude_shallow_above=5.0),
-        200000: dict(ping_lags=(1,), threshold_db=10.0, range_coord="depth", vertical_bin_size="2m",
-                     exclude_shallow_above=4.0),
+        38000: dict(
+            range_coord="depth",
+            ping_lags=[1, 2, 3, 4, 5],
+            threshold=7.5,
+            vertical_bin_size="1m",
+            exclude_shallow_above=8,
+            vote_k_of_n=2,
+            post_dilate=dict(pings=1, samples=2),
+        ),
+        200000: dict(
+            ping_lags=(1,),
+            threshold_db=10.0,
+            range_coord="depth",
+            vertical_bin_size="2m",
+            exclude_shallow_above=4.0
+        ),
     }
     attenuated_signal_opts = {
         38000: dict(
@@ -129,15 +141,19 @@ def test_file_workflow_saildrone_full():
             ping_window=50,
             background_noise_max="-130.0dB",
             SNR_threshold="6.0dB",
+            depth_stat="quantile",
+            depth_quantile=0.10,
             sound_absorption=0.009,  # 9 ×10⁻⁶ dB m⁻¹ (≈ 0.009 dB km⁻¹)
         ),
         "200000": dict(
             range_coord="depth",
-            range_window=20,
-            ping_window=5,
-            background_noise_max="-128.0dB",
+            ping_window=24,
+            range_window=8,
+            background_noise_max="-125.0dB",
             SNR_threshold="6.0dB",
-            sound_absorption=0.001,  # 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
+            depth_stat="quantile",
+            depth_quantile=0.30,
+            sound_absorption=0.045,  # 0.045 3.8 ×10⁻⁴ dB m⁻¹ (≈ 0.38 dB km⁻¹)
         ),
     }
 
@@ -151,14 +167,14 @@ def test_file_workflow_saildrone_full():
     #     html_path = f"echogram_{ch}.html"
     #     export_interactive_echogram(ds, ch, out_html=f"./test/processed/{html_path}")
 
-    ds["Sv"] = ds["Sv"].chunk({"ping_time": 2048, "depth": 1024})
+    ds["Sv"] = ds["Sv"].chunk({"ping_time": 2048, "depth": -1})
     ds["Sv"] = ds["Sv"].astype("float32")
 
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
-                                mask_attenuated_signal=attenuated_signal_opts,
-                                mask_transient_noise=transient_noise_opts,
-                                remove_background_noise=None
+                                mask_attenuated_signal=None,
+                                mask_transient_noise=None,
+                                remove_background_noise=None,
                                 )
 
     # ds = ds.set_coords("range_sample").swap_dims({"depth": "range_sample"})
@@ -175,12 +191,9 @@ def test_file_workflow_saildrone_full():
             background_noise_max=opts["background_noise_max"],
         )["Sv"]
 
-
-    sv_clean = ds_masked.groupby("channel").map(_mask_bg_noise)
-    sv_clean.name = "Sv"
-    #
-    # # overwrite in-place
-    ds_masked["Sv"] = sv_clean
+    # sv_clean = ds_masked.groupby("channel").map(_mask_bg_noise)
+    # sv_clean.name = "Sv"
+    # ds_masked["Sv"] = sv_clean
 
     n_ch = ds_masked.dims["channel"]
     for ch in range(n_ch):

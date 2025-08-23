@@ -45,6 +45,13 @@ def background_noise_mask(
     minimal_linear = params.get("minimal_linear", 1e-30)
     background_noise_max = extract_dB(background_noise_max)
     SNR_threshold = extract_dB(SNR_threshold)
+    depth_stat = params.get("depth_stat", "quantile")  # "min" | "quantile"
+    depth_quantile = float(params.get("depth_quantile", 0.15))  # used when depth_stat="quantile"
+
+    # optional guard so the depth statistic ignores DSL
+    guard_mode = params.get("guard_mode")  # None | "above" | "outside_band"
+    guard_depth = params.get("guard_depth")  # meters if mode=="above"
+    guard_band = params.get("guard_band")  # [z0, z1] if mode=="outside_band"
 
     # 2. extract Sv & range
     if rng_win == 'auto' and rng_var == 'depth':
@@ -63,39 +70,69 @@ def background_noise_mask(
     Sv_flat_db = Sv - tvg
 
     # 4. linear domain for block‐min
-    Sv_lin = 10.0 ** (Sv_flat_db / 10.0)
-    block_min_lin = (
-        Sv_lin
-        .coarsen(
-            ping_time=ping_win,
-            **{rng_var: rng_win},
-            boundary="trim"
-        )
-        .reduce(da.nanmin if Sv_lin.chunks else np.nanmin)
-        .broadcast_like(Sv_lin)
-    )
+    power_lin = 10.0 ** (Sv_flat_db / 10.0)  # TVG-removed power
+    binned_lin = power_lin.coarsen(
+        ping_time=ping_win,
+        **{rng_var: rng_win},
+        boundary="pad",
+    ).mean()  # dask-aware
+
+    # convert to dB for taking a depth statistic
+    binned_db = 10.0 * np.log10(binned_lin.where(binned_lin > 0))
+
+    binned_db = binned_db.chunk({rng_var: -1})
+
+    # optional guard: exclude DSL from the depth statistic
+    if guard_mode:
+        z = ds_channel[rng_var]
+        if guard_mode == "above":
+            if guard_depth is None:
+                raise ValueError("guard_depth required when guard_mode='above'")
+            region = z <= float(guard_depth)
+        elif guard_mode == "outside_band":
+            if not guard_band or len(guard_band) != 2:
+                raise ValueError("guard_band=[z0,z1] required when guard_mode='outside_band'")
+            z0, z1 = sorted(map(float, guard_band))
+            region = (z < z0) | (z > z1)
+        else:
+            raise ValueError("guard_mode must be None|'above'|'outside_band'")
+        binned_db = binned_db.where(region)
 
     # 5. back to dB ‐ cap floor
-    bgn_flat_db = 10.0 * np.log10(np.maximum(block_min_lin, minimal_linear))
-    bgn_flat_db = bgn_flat_db.where(bgn_flat_db > background_noise_max, background_noise_max)
+    if depth_stat == "min":
+        noise_1d_db = binned_db.min(dim=rng_var, skipna=True)
+    elif depth_stat == "quantile":
+        noise_1d_db = binned_db.quantile(depth_quantile, dim=rng_var, skipna=True)
+        # squeeze the helper 'quantile' dim if present
+        if "quantile" in noise_1d_db.dims:
+            noise_1d_db = noise_1d_db.squeeze("quantile", drop=True)
+    else:
+        raise ValueError("depth_stat must be 'min' or 'quantile'")
+
+    # align ping_time indices to the **first** ping of each coarsened bin (like echopype)
+    noise_1d_db = noise_1d_db.assign_coords(ping_time=ping_win * np.arange(noise_1d_db.sizes["ping_time"]))
+    power_lin = power_lin.assign_coords(ping_time=np.arange(power_lin.sizes["ping_time"]))
+
+    # optional cap (LESS negative => more aggressive; MORE negative => gentler)
+    if background_noise_max is not None:
+        noise_1d_db = noise_1d_db.where(noise_1d_db < background_noise_max, background_noise_max)
 
     # 6. restore TVG
-    background_db = bgn_flat_db + tvg
+    Sv_noise_db = (
+            noise_1d_db
+            .reindex({"ping_time": power_lin["ping_time"]}, method="ffill")
+            .assign_coords(ping_time=ds_channel["ping_time"])
+            + tvg
+    )
 
     # 7. compute masks
     Sv_lin_tot = 10.0 ** (Sv / 10.0)
-    bgn_lin_tot = 10.0 ** (background_db / 10.0)
+    bgn_lin_tot = 10.0 ** (Sv_noise_db / 10.0)
     lin_diff = Sv_lin_tot - bgn_lin_tot
 
     mask_non_positive = lin_diff <= 0
-
-    Sv_clean_db = xr.where(
-        mask_non_positive,
-        np.nan,
-        10.0 * np.log10(np.maximum(lin_diff, minimal_linear))
-    )
-
-    snr_db = Sv_clean_db - background_db
+    Sv_clean_db = xr.where(mask_non_positive, np.nan, 10.0 * np.log10(lin_diff))
+    snr_db = Sv_clean_db - Sv_noise_db
     mask_low_snr = snr_db < SNR_threshold
 
     return mask_low_snr, mask_non_positive
