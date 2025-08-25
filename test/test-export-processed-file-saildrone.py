@@ -43,7 +43,7 @@ def test_file_workflow_saildrone_full():
     file_name = 'SD_TPOS2023_v03-Phase0-D20231008-T115959-0'
     cruise_id = 'SD_TPOS2023_v03'
 
-    source_container_name = 'export44'
+    source_container_name = 'export63'
     export_container_name = 'export11'
     chunks = {'ping_time': 2000, 'depth': -1}
     # zarr_path = f"2023-10-08/{file_name}.zarr"
@@ -60,17 +60,19 @@ def test_file_workflow_saildrone_full():
             ping_lags=[1, 2, 3, 4, 5],
             threshold=7.5,
             vertical_bin_size="1m",
-            exclude_shallow_above=8,
+            exclude_shallow_above=200,
             vote_k_of_n=2,
             post_dilate=dict(pings=1, samples=2),
         ),
         200000: dict(
-            ping_lags=(1,),
-            threshold_db=10.0,
             range_coord="depth",
-            vertical_bin_size="2m",
-            exclude_shallow_above=4.0
-        ),
+            ping_lags=[1, 2, 3, 4],
+            threshold=8.5,
+            vertical_bin_size="1m",
+            exclude_shallow_above=150,
+            vote_k_of_n=2,
+            post_dilate=dict(pings=1, samples=1)
+        )
     }
     attenuated_signal_opts = {
         38000: dict(
@@ -115,23 +117,24 @@ def test_file_workflow_saildrone_full():
         "38000": dict(
             range_coord="depth",
             jumps=5.0,
-            maxts=-35.0,
+            maxts=-45.0,
             ping_window=8, # n (pings on each side) -> block = 17
             threshold=(10.0, 7.0),
-            exclude_above=20.0,
-            ref_min=250.0,
-            ref_max=450.0,
+            exclude_above=200.0,
+            ref_min=450.0,
+            ref_max=850.0,
         ),
-        "200000": dict(
-            range_coord="depth",
-            ping_window=6,  # block = 13
-            threshold=(12.0, 8.0),
-            exclude_above=12.0,
-            ref_min=150.0,
-            ref_max=320.0,
-            jumps=3.0,
-            maxts=-35.0
-        ),
+        "200000": None
+        # "200000": dict(
+        #     range_coord="depth",
+        #     maxts=-45.0,
+        #     ping_window=8, # n (pings on each side) -> block = 17
+        #     threshold=(12.0, 8.0),
+        #     exclude_above=200.0,
+        #     ref_min=150.0,
+        #     ref_max=320.0,
+        #     jumps=3.0,
+        # )
     }
 
     background_noise_opts = {
@@ -172,8 +175,8 @@ def test_file_workflow_saildrone_full():
 
     ds_masked = apply_denoising(ds,
                                 mask_impulse_noise=impulse_noise_opts,
-                                mask_attenuated_signal=None,
-                                mask_transient_noise=None,
+                                mask_attenuated_signal=attenuated_signal_opts,
+                                mask_transient_noise=transient_noise_opts,
                                 remove_background_noise=None,
                                 )
 
@@ -191,9 +194,9 @@ def test_file_workflow_saildrone_full():
             background_noise_max=opts["background_noise_max"],
         )["Sv"]
 
-    # sv_clean = ds_masked.groupby("channel").map(_mask_bg_noise)
-    # sv_clean.name = "Sv"
-    # ds_masked["Sv"] = sv_clean
+    sv_clean = ds_masked.groupby("channel").map(_mask_bg_noise)
+    sv_clean.name = "Sv"
+    ds_masked["Sv"] = sv_clean
 
     n_ch = ds_masked.dims["channel"]
     for ch in range(n_ch):

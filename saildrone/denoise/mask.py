@@ -8,7 +8,7 @@ def build_full_mask(
     stages: Mapping[str, Dict[str, Any]],
     var_name: str = "Sv",
     return_stage_masks: bool = False,
-    mask_unfeasible: bool = True,
+    mask_unfeasible: bool = False,
 ) -> xr.DataArray:
     n_ch = ds.dims["channel"]
 
@@ -24,9 +24,12 @@ def build_full_mask(
 
         # iterate in declared order
         for stage_name, spec in stages.items():
-            fn = spec["fn"]
             pars = _params_for_channel(spec["param_sets"], ch_ds)
 
+            if pars is None:
+                continue  # skip if no parameters for this channel
+
+            fn = spec["fn"]
             res = fn(ch_ds, pars)
             # fn may return (mask_as, mask_unfeasible, …) or a single mask
             if isinstance(res, (tuple, list)):

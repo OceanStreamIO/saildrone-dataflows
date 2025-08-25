@@ -207,31 +207,45 @@ def fill_missing_frequency_params(
     the function automatically extracts its `.frequencies` field.
     """
 
-    if hasattr(freq_params, "frequencies"):            # our PerFrequency model
-        raw_map = freq_params.frequencies              # already a dict
-    elif hasattr(freq_params, "model_dump"):           # any BaseModel
+    if hasattr(freq_params, "frequencies"):  # our PerFrequency model
+        raw_map = freq_params.frequencies  # already a dict
+    elif hasattr(freq_params, "model_dump"):  # any BaseModel
         raw_map = freq_params.model_dump()
-    else:                                              # plain mapping
+    else:  # plain mapping
         raw_map = dict(freq_params)
 
     if not raw_map:
-        raise ValueError("`freq_params` must contain at least one frequency entry")
+        return {}
 
-    norm: Dict[str, Dict] = {
-        str(k): (dict(v) if isinstance(v, Mapping) else {}) for k, v in raw_map.items()
-    }
+    norm = {}
+    for k, v in raw_map.items():
+        sk = str(k)
+        if v is None:
+            norm[sk] = None
+        elif isinstance(v, Mapping):
+            norm[sk] = dict(v)
+        else:
+            norm[sk] = {}  # treat other truthy values as empty enabled config
 
-    # template comes from 38 kHz if present, else the first entry
-    template_key = "38000" if "38000" in norm else next(iter(norm))
-    template = deepcopy(norm[template_key])
+    # Enabled entries (non-None) are eligible for templating
+    enabled_keys = [k for k, v in norm.items() if v is not None]
 
-    # ------------------------------------------------------------------
-    # 3. propagate template where needed
-    # ------------------------------------------------------------------
-    filled: Dict[str, Dict] = {}
+    # If none enabled (all None), return as-is (no merge)
+    if not enabled_keys:
+        return norm
+
+    # Choose template from enabled entries (prefer 38 kHz if present)
+    template_key = "38000" if "38000" in enabled_keys else enabled_keys[0]
+    template = deepcopy(norm[template_key]) or {}
+
+    # Merge: disabled stays None; enabled gets template defaults overlaid with user overrides
+    filled = {}
     for k, opts in norm.items():
-        merged = deepcopy(template)
-        merged.update(opts)       # user-supplied fields win
-        filled[k] = merged
+        if opts is None:
+            filled[k] = None
+        else:
+            merged = deepcopy(template)
+            merged.update(opts)  # user-supplied fields win
+            filled[k] = merged
 
     return filled

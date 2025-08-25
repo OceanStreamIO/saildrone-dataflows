@@ -39,34 +39,17 @@ def impulsive_noise_mask(
     channel_ds: xr.Dataset,
     params: Dict[str, float],
 ) -> Tuple[xr.DataArray, xr.DataArray]:
-    """
-    Multi-lag Ryan-style impulsive-noise detector (vectorised).
-
-    Parameters
-    ----------
-    channel_ds : xr.Dataset
-        Single-channel slice of the full dataset; must contain "Sv" (dB).
-    params : dict with keys
-        range_coord          : str   – vertical coordinate name ("echo_range"/"depth")
-        vertical_bin_size    : int   – # samples in vertical mean (≥1, default 1 → none)
-        ping_lags            : tuple – side-ping offsets, e.g. (1, 2, 3)
-        threshold_db         : float – Sv diff threshold (dB, default 10)
-        exclude_shallow_above: float – optional range cut-off (m) to skip processing
-
-    Returns
-    -------
-    mask_impulse     : True where impulse noise detected
-    mask_unfeasible  : True for pings where comparison impossible (edges or NaNs)
-    """
-
     # 1. unpack & validate
     range_coord = params.get("range_coord", "echo_range")
     bin_cfg = params.get("vertical_bin_size", '2m')
     lags = tuple(sorted(set(params.get("ping_lags", (1,)))))
-    thr_db = params.get("threshold_db", 10.0)
+    thr_db = float(params.get("threshold_db", params.get("threshold", 10.0)))
     cut_above = params.get("exclude_shallow_above", None)
     vote_k = params.get("vote_k_of_n", None)  # e.g., 2 means ">= 2 lags must vote True"
     post = params.get("post_dilate", None)  # e.g., {"pings": 1, "samples": 2}
+
+    if cut_above is not None:
+        cut_above = float(cut_above)
 
     if any(l < 1 for l in lags):
         raise ValueError("ping_lags must contain positive integers")
@@ -103,6 +86,11 @@ def impulsive_noise_mask(
             .interp({range_dim: range_values}, method="nearest")
         )
     Sv_sm_db = 10.0 * np.log10(Sv_lin)
+    if cut_above is not None:
+        valid_depth = xr.broadcast(channel_ds[range_coord] >= cut_above, Sv_sm_db)[0]
+        Sv_sm_db = Sv_sm_db.where(valid_depth)  # no detection above cutoff
+    else:
+        valid_depth = xr.ones_like(Sv_sm_db, dtype=bool)
 
     # 3. multi-lag forward & backward differences
     count = xr.zeros_like(Sv_sm_db, dtype="uint8")
@@ -132,15 +120,7 @@ def impulsive_noise_mask(
     mask_nan = Sv_sm_db.isnull()
     mask_unfeasible = mask_edges | mask_nan
 
-    # 5. optional shallow exclusion
-    if cut_above is not None:
-        valid_depth = range_values >= cut_above
-        mask_unfeasible |= ~valid_depth
-        impulse_mask = impulse_mask.where(valid_depth, False)
-    else:
-        valid_depth = xr.ones_like(Sv_sm_db, dtype=bool)
-
-    # 6. final tidy-up & return
+    # 5. final tidy-up & return
     impulse_mask = impulse_mask & ~mask_unfeasible  # edges/NaNs not impulses
 
     if isinstance(post, dict):
