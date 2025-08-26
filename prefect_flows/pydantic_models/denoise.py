@@ -196,25 +196,32 @@ class MaskImpulseNoise(BaseModel):
 
 
 def fill_missing_frequency_params(
-    freq_params: Mapping[str, Any] | Any  # accept Pydantic/BaseModel too
+    freq_params: Mapping[str, Any] | Any
 ) -> Dict[str, Optional[Dict]]:
     """
-    Build a new per-frequency param map where:
-      - Keys are coerced to strings.
-      - None means the frequency is disabled and is left as None.
-      - If the chosen template frequency has short/long pulse subdicts, the
-        *short_pulse* subdict is used as the default template base.
-      - For a frequency that itself has short/long pulse subdicts:
-          short_pulse := template_base ⊕ user.short_pulse
-          long_pulse  := short_pulse  ⊕ user.long_pulse   (inherits SP defaults)
-      - For a frequency with a flat dict: merged := template_base ⊕ user.
-      - If input is empty or all disabled, return as-is (no merge).
+    Build a per-frequency param map with support for nested 'short_pulse'/'long_pulse'.
+    Rules:
+      - Top-level None => frequency disabled (preserved as None).
+      - Template frequency (prefer '38000') supplies a template *base*:
+          use its 'short_pulse' if it's a dict,
+          else use its 'long_pulse' if it's a dict,
+          else use the flat dict itself (or {}).
+      - For each frequency:
+          * If flat dict:   result = base ⊕ user
+          * If nested:
+              - short_pulse:
+                  - if explicitly None  -> SP = None (disabled)
+                  - if dict/missing     -> SP = base ⊕ user.SP
+              - long_pulse:
+                  - if explicitly None  -> LP = None (disabled)
+                  - else                -> LP = (SP if SP is dict else base) ⊕ user.LP
+      - Empty input or all disabled -> return unchanged.
     """
 
-    # --- accept Pydantic models or plain mappings
-    if hasattr(freq_params, "frequencies"):            # our PerFrequency model
+    # Accept models or plain mappings
+    if hasattr(freq_params, "frequencies"):
         raw_map = freq_params.frequencies
-    elif hasattr(freq_params, "model_dump"):           # any BaseModel
+    elif hasattr(freq_params, "model_dump"):
         raw_map = freq_params.model_dump()
     else:
         raw_map = dict(freq_params)
@@ -222,7 +229,7 @@ def fill_missing_frequency_params(
     if not raw_map:
         return {}
 
-    # --- normalize: str keys; None stays None; mappings to plain dict
+    # Normalize: str keys; None stays None; mappings -> dict
     norm: Dict[str, Optional[Dict]] = {}
     for k, v in raw_map.items():
         sk = str(k)
@@ -231,27 +238,28 @@ def fill_missing_frequency_params(
         elif isinstance(v, Mapping):
             norm[sk] = dict(v)
         else:
-            norm[sk] = {}  # treat other truthy values as empty enabled config
+            norm[sk] = {}
 
-    # Enabled entries (non-None) are candidates for templating
+    # Template selection from enabled freqs
     enabled_keys = [k for k, v in norm.items() if v is not None]
     if not enabled_keys:
-        # all disabled -> return unchanged
-        return norm
+        return norm  # all disabled
 
-    # --- choose template key (prefer 38 kHz if enabled)
-    template_key = "38000" if "38000" in enabled_keys else enabled_keys[0]
-    template_val = deepcopy(norm[template_key]) or {}
+    tkey = "38000" if "38000" in enabled_keys else enabled_keys[0]
+    tval = deepcopy(norm[tkey]) or {}
 
-    # Template base: if template has short/long, use its short_pulse as base
-    if isinstance(template_val, Mapping) and (
-        "short_pulse" in template_val or "long_pulse" in template_val
-    ):
-        template_base = deepcopy(template_val.get("short_pulse", {}))
+    # Template base: prefer short_pulse (dict), else long_pulse (dict), else flat
+    if isinstance(tval, Mapping) and ("short_pulse" in tval or "long_pulse" in tval):
+        if isinstance(tval.get("short_pulse"), Mapping):
+            base = deepcopy(tval["short_pulse"])
+        elif isinstance(tval.get("long_pulse"), Mapping):
+            base = deepcopy(tval["long_pulse"])
+        else:
+            base = {}
     else:
-        template_base = deepcopy(template_val)
+        base = deepcopy(tval)
 
-    # --- merge per frequency
+    # Merge per frequency
     filled: Dict[str, Optional[Dict]] = {}
     for fk, fval in norm.items():
         if fval is None:
@@ -259,20 +267,29 @@ def fill_missing_frequency_params(
             continue
 
         if "short_pulse" in fval or "long_pulse" in fval:
-            # Nested pulse configs
-            user_sp = dict(fval.get("short_pulse", {}))
-            user_lp = dict(fval.get("long_pulse", {}))
+            sp_user = fval.get("short_pulse", None)
+            lp_user = fval.get("long_pulse", None)
 
-            sp = deepcopy(template_base)
-            sp.update(user_sp)
+            # short_pulse
+            if "short_pulse" in fval and sp_user is None:
+                sp = None  # explicitly disabled
+            else:
+                sp = deepcopy(base)
+                if isinstance(sp_user, Mapping):
+                    sp.update(dict(sp_user))
 
-            lp = deepcopy(sp)          # inherit SP as default
-            lp.update(user_lp)
+            # long_pulse
+            if "long_pulse" in fval and lp_user is None:
+                lp = None  # explicitly disabled
+            else:
+                inherit_base = sp if isinstance(sp, Mapping) else deepcopy(base)
+                lp = deepcopy(inherit_base)
+                if isinstance(lp_user, Mapping):
+                    lp.update(dict(lp_user))
 
             filled[fk] = {"short_pulse": sp, "long_pulse": lp}
         else:
-            # Flat config
-            merged = deepcopy(template_base)
+            merged = deepcopy(base)
             merged.update(fval)
             filled[fk] = merged
 
