@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Dict, Any
 from copy import deepcopy
-from typing import Dict, Mapping, MutableMapping
+from typing import Mapping, Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 
@@ -197,27 +196,34 @@ class MaskImpulseNoise(BaseModel):
 
 
 def fill_missing_frequency_params(
-    freq_params: Mapping[str, Any] | Any  # accept BaseModel too
-) -> Dict[str, Dict]:
+    freq_params: Mapping[str, Any] | Any  # accept Pydantic/BaseModel too
+) -> Dict[str, Optional[Dict]]:
     """
-    Return a **new** dict where every frequency key carries a complete
-    parameter sub-dict. Keys are coerced to strings.
-
-    If the caller passes a Pydantic model (e.g. PerFrequencyImpulseNoise),
-    the function automatically extracts its `.frequencies` field.
+    Build a new per-frequency param map where:
+      - Keys are coerced to strings.
+      - None means the frequency is disabled and is left as None.
+      - If the chosen template frequency has short/long pulse subdicts, the
+        *short_pulse* subdict is used as the default template base.
+      - For a frequency that itself has short/long pulse subdicts:
+          short_pulse := template_base ⊕ user.short_pulse
+          long_pulse  := short_pulse  ⊕ user.long_pulse   (inherits SP defaults)
+      - For a frequency with a flat dict: merged := template_base ⊕ user.
+      - If input is empty or all disabled, return as-is (no merge).
     """
 
-    if hasattr(freq_params, "frequencies"):  # our PerFrequency model
-        raw_map = freq_params.frequencies  # already a dict
-    elif hasattr(freq_params, "model_dump"):  # any BaseModel
+    # --- accept Pydantic models or plain mappings
+    if hasattr(freq_params, "frequencies"):            # our PerFrequency model
+        raw_map = freq_params.frequencies
+    elif hasattr(freq_params, "model_dump"):           # any BaseModel
         raw_map = freq_params.model_dump()
-    else:  # plain mapping
+    else:
         raw_map = dict(freq_params)
 
     if not raw_map:
         return {}
 
-    norm = {}
+    # --- normalize: str keys; None stays None; mappings to plain dict
+    norm: Dict[str, Optional[Dict]] = {}
     for k, v in raw_map.items():
         sk = str(k)
         if v is None:
@@ -227,25 +233,47 @@ def fill_missing_frequency_params(
         else:
             norm[sk] = {}  # treat other truthy values as empty enabled config
 
-    # Enabled entries (non-None) are eligible for templating
+    # Enabled entries (non-None) are candidates for templating
     enabled_keys = [k for k, v in norm.items() if v is not None]
-
-    # If none enabled (all None), return as-is (no merge)
     if not enabled_keys:
+        # all disabled -> return unchanged
         return norm
 
-    # Choose template from enabled entries (prefer 38 kHz if present)
+    # --- choose template key (prefer 38 kHz if enabled)
     template_key = "38000" if "38000" in enabled_keys else enabled_keys[0]
-    template = deepcopy(norm[template_key]) or {}
+    template_val = deepcopy(norm[template_key]) or {}
 
-    # Merge: disabled stays None; enabled gets template defaults overlaid with user overrides
-    filled = {}
-    for k, opts in norm.items():
-        if opts is None:
-            filled[k] = None
+    # Template base: if template has short/long, use its short_pulse as base
+    if isinstance(template_val, Mapping) and (
+        "short_pulse" in template_val or "long_pulse" in template_val
+    ):
+        template_base = deepcopy(template_val.get("short_pulse", {}))
+    else:
+        template_base = deepcopy(template_val)
+
+    # --- merge per frequency
+    filled: Dict[str, Optional[Dict]] = {}
+    for fk, fval in norm.items():
+        if fval is None:
+            filled[fk] = None
+            continue
+
+        if "short_pulse" in fval or "long_pulse" in fval:
+            # Nested pulse configs
+            user_sp = dict(fval.get("short_pulse", {}))
+            user_lp = dict(fval.get("long_pulse", {}))
+
+            sp = deepcopy(template_base)
+            sp.update(user_sp)
+
+            lp = deepcopy(sp)          # inherit SP as default
+            lp.update(user_lp)
+
+            filled[fk] = {"short_pulse": sp, "long_pulse": lp}
         else:
-            merged = deepcopy(template)
-            merged.update(opts)  # user-supplied fields win
-            filled[k] = merged
+            # Flat config
+            merged = deepcopy(template_base)
+            merged.update(fval)
+            filled[fk] = merged
 
     return filled

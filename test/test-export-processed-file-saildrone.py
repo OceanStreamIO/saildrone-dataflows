@@ -47,7 +47,7 @@ def test_file_workflow_saildrone_full():
     export_container_name = 'export11'
     chunks = {'ping_time': 2000, 'depth': -1}
     # zarr_path = f"2023-10-08/{file_name}.zarr"
-    zarr_path = f"SD_TPOS2023_v03/SD_TPOS2023_v03-Phase0-D20231008-T115959-0/{file_name}.zarr"
+    zarr_path = f"SD_TPOS2023_v03/{file_name}/{file_name}.zarr"
 
     ds = open_zarr_store(zarr_path, cruise_id=None,
                          container_name=source_container_name,

@@ -106,7 +106,8 @@ def trigger_denoising_flow(
     mask_transient_noise=None,
     remove_background_noise=None,
     apply_seabed_mask: bool = False,
-    chunks=None
+    chunks=None,
+    category: str = ""
 ):
     state = run_deployment(
         name="apply-denoising-flow/apply-denoising-flow",
@@ -120,6 +121,7 @@ def trigger_denoising_flow(
             'remove_background_noise': remove_background_noise,
             'apply_seabed_mask': apply_seabed_mask,
             'chunks': chunks,
+            'category': category
         },
         timeout=None
     )
@@ -367,6 +369,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             remove_background_noise=kwargs.get('remove_background_noise'),
             apply_seabed_mask=kwargs.get('apply_seabed_mask'),
             chunks=chunks,
+            category=cat
         )
         state = future.result()
         future.wait()

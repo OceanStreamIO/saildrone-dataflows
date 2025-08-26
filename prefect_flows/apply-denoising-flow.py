@@ -49,6 +49,7 @@ def denoise_zarr(
     remove_background_noise,
     apply_seabed_mask: bool,
     chunks=None,
+    category: str = ''
 ):
 
     ds = open_zarr_store(
@@ -107,7 +108,8 @@ def apply_denoising_flow(
     mask_transient_noise=None,
     remove_background_noise=None,
     apply_seabed_mask: bool = False,
-    chunks=None
+    chunks=None,
+    category: str = ''
 ):
     future = denoise_zarr.submit(
         zarr_src=zarr_path_source,
@@ -118,8 +120,8 @@ def apply_denoising_flow(
         mask_transient_noise=mask_transient_noise,
         remove_background_noise=remove_background_noise,
         apply_seabed_mask=apply_seabed_mask,
-        chunks=chunks
-
+        chunks=chunks,
+        category=category
     )
 
     output = future.result()
@@ -144,7 +146,8 @@ if __name__ == "__main__":
                 'mask_transient_noise': None,
                 'remove_background_noise': None,
                 'apply_seabed_mask': False,
-                'chunks': None
+                'chunks': None,
+                'category': ''
             }
         )
     except Exception as e:
