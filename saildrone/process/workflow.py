@@ -758,6 +758,7 @@ def apply_denoising(sv_dataset, **kwargs):
     transient_noise_opts = kwargs.get("mask_transient_noise", None)
     background_noise_opts = kwargs.get("remove_background_noise", None)
     merge_masks = kwargs.get("merge_masks", False)
+    pulse_length = kwargs.get("pulse_length", None)
 
     if not any([impulse_noise_opts, attenuated_signal_opts, transient_noise_opts, background_noise_opts]):
         return sv_dataset
@@ -789,7 +790,7 @@ def apply_denoising(sv_dataset, **kwargs):
         }
 
     try:
-        full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, return_stage_masks=True)
+        full_mask, stage_cubes = build_full_mask(sv_dataset, stages=stages, pulse_length=pulse_length, return_stage_masks=True)
         print('Full mask shape:', full_mask)
         print('Stage cubes:', stage_cubes)
         sv_dataset_denoised = apply_full_mask(sv_dataset, full_mask)

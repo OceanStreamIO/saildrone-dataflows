@@ -1,4 +1,3 @@
-import numpy as np
 import xarray as xr
 from typing import Mapping, Dict, List, Tuple, Any, Hashable, Sequence, Union, Optional
 
@@ -9,6 +8,7 @@ def build_full_mask(
     var_name: str = "Sv",
     return_stage_masks: bool = False,
     mask_unfeasible: bool = False,
+    pulse_length = None
 ) -> xr.DataArray:
     n_ch = ds.dims["channel"]
 
@@ -24,7 +24,7 @@ def build_full_mask(
 
         # iterate in declared order
         for stage_name, spec in stages.items():
-            pars = _params_for_channel(spec["param_sets"], ch_ds)
+            pars = _params_for_channel(spec["param_sets"], ch_ds, pulse_length)
 
             if pars is None:
                 continue  # skip if no parameters for this channel
@@ -154,18 +154,43 @@ def apply_full_mask(
     return ds_out
 
 
-def _params_for_channel(param_sets, ch_ds):
-    """Return the parameter dictionary for this channel."""
-    if not any(isinstance(v, Mapping) for v in param_sets.values()):
-        return param_sets  # single-dict case
+def _params_for_channel(param_sets: Mapping[Any, Any], ch_ds, pulse_length: str | None):
+    """
+    Return the parameter dictionary for this channel.
 
-    freq = float(ch_ds["frequency_nominal"].compute().item())  # per-frequency case
+    Behavior:
+    - If `param_sets` is a single dict (not per-frequency), return it unchanged.
+    - Else pick the per-frequency entry (supports int/str keys like 38000/"38000").
+    - If `pulse_length` is provided ("short_pulse" or "long_pulse") and that key
+      exists in the per-frequency entry, return that sub-dict (may be None).
+      Otherwise return the per-frequency entry as-is.
+    """
+    # single-dict case (no per-frequency mappings)
+    if not any(isinstance(v, Mapping) for v in param_sets.values()):
+        return param_sets
+
+    # resolve frequency key
+    freq = float(ch_ds["frequency_nominal"].compute().item())
     key_str = str(int(freq))
 
     if freq in param_sets:
-        return param_sets[freq]
+        entry = param_sets[freq]
+    elif key_str in param_sets:
+        entry = param_sets[key_str]
+    else:
+        raise ValueError(f"{freq} Hz parameters missing")
 
-    if key_str in param_sets:
-        return param_sets[key_str]
+    # optional pulse-length selection
+    if pulse_length and isinstance(entry, Mapping):
+        pl = pulse_length.lower()
+        if pl.startswith("short"):
+            subkey = "short_pulse"
+        elif pl.startswith("long"):
+            subkey = "long_pulse"
+        else:
+            subkey = None
 
-    raise ValueError(f"{freq} Hz parameters missing")
+        if subkey and (subkey in entry):
+            return entry[subkey]  # may be None (explicitly disabled)
+
+    return entry

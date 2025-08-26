@@ -49,7 +49,7 @@ def denoise_zarr(
     remove_background_noise,
     apply_seabed_mask: bool,
     chunks=None,
-    category: str = ''
+    category: str = None
 ):
 
     ds = open_zarr_store(
@@ -65,6 +65,7 @@ def denoise_zarr(
         mask_impulse_noise=mask_impulse_noise,
         mask_attenuated_signal=mask_attenuated_signal,
         mask_transient_noise=mask_transient_noise,
+        pulse_length=category,
         remove_background_noise=None
     )
 
