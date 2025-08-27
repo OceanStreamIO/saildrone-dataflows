@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from typing import Mapping, Any, Dict, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict
+
 
 class DenoiseOptions(BaseModel):
     def get(self, key, default_value=None):
@@ -194,183 +195,90 @@ class MaskImpulseNoiseOLD(BaseModel):
     )
 
 
-class PostDilate(BaseModel):
-    """Optional rectangular dilation of the impulse mask (after detection)."""
-    model_config = ConfigDict(extra="forbid")
-    pings: int = Field(0, ge=0, description="Half-width in pings (time).")
-    samples: int = Field(0, ge=0, description="Half-width in samples (vertical).")
-
-
-class ImpulseParams(BaseModel):
-    """
-    Impulsive-noise parameters (single pulse class).
-
-    Fields:
-      - range_coord: str — vertical coordinate name, typically "depth" (or "echo_range").
-      - vertical_bin_size: int | "<meters>m"
-          * int  → #samples to pool vertically before detection.
-          * "Xm" → a meters string; conversion to samples occurs downstream.
-      - ping_lags: list[int] — positive, unique lags (e.g., [1,2,3]); sorted automatically.
-      - threshold: float  (alias: threshold_db) — Sv diff threshold in dB.
-      - exclude_shallow_above: float | None — meters; skip detection above this depth.
-      - vote_k_of_n: int | None — require ≥k lags to vote true; default is any(…).
-      - post_dilate: PostDilate | None — tiny expansion of the mask after voting.
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    range_coord: str = Field(default="depth")
-    vertical_bin_size: Union[int, str] = Field(
-        default=1,
-        description='Either integer samples (>=1) or a string like "1m".'
-    )
-    ping_lags: List[int] = Field(default_factory=lambda: [1])
-    threshold: Optional[float] = Field(default=None, description="dB threshold (alias: threshold_db)")
-    threshold_db: Optional[float] = Field(default=None, description="Alias of `threshold` (dB).")
-    exclude_shallow_above: Optional[float] = Field(default=None, ge=0)
-    vote_k_of_n: Optional[int] = Field(default=None, ge=1)
-    post_dilate: Optional[PostDilate] = None
-
-    @field_validator("vertical_bin_size")
-    @classmethod
-    def _check_bin_size(cls, v):
-        if isinstance(v, int):
-            if v < 1:
-                raise ValueError("vertical_bin_size (int) must be >= 1")
-            return v
-        if isinstance(v, str):
-            s = v.strip().lower()
-            # accept plain integer string OR "<num>m"
-            if s.isdigit():
-                if int(s) < 1:
-                    raise ValueError("vertical_bin_size must be >= 1")
-                return int(s)
-            if s.endswith("m"):
-                # value like "0.5m", "1m", "2m" — syntactic check only
-                try:
-                    float(s[:-1])
-                except Exception as e:
-                    raise ValueError(f"vertical_bin_size meters string invalid: {v!r}") from e
-                return v  # keep as "<meters>m" for downstream conversion
-        raise ValueError("vertical_bin_size must be int or a '<meters>m' string")
-
-    @field_validator("ping_lags")
-    @classmethod
-    def _check_lags(cls, lags: List[int]):
-        if not lags:
-            raise ValueError("ping_lags must contain at least one lag")
-        if any((not isinstance(x, int)) or x < 1 for x in lags):
-            raise ValueError("ping_lags entries must be positive integers")
-        return sorted(set(lags))
-
-    @model_validator(mode="after")
-    def _unify_threshold(self):
-        # prefer `threshold` if provided; else take `threshold_db`
-        if self.threshold is None and self.threshold_db is not None:
-            self.threshold = float(self.threshold_db)
-        if self.threshold is None:
-            # default consistent with your code
-            self.threshold = 10.0
-        return self
-
-    @model_validator(mode="after")
-    def _check_vote_vs_lags(self):
-        if self.vote_k_of_n is not None and self.vote_k_of_n > len(self.ping_lags):
-            raise ValueError("vote_k_of_n cannot exceed number of ping_lags")
-        return self
-
-
-class PulsePair(BaseModel):
-    """
-    Optional nested configuration with separate settings for pulse classes.
-      - short_pulse: ImpulseParams | None (None = disabled)
-      - long_pulse : ImpulseParams | None (None = disabled)
-    """
-    model_config = ConfigDict(extra="forbid")
-    short_pulse: Optional[ImpulseParams] = None
-    long_pulse: Optional[ImpulseParams] = None
-
-
-FreqEntry = Optional[Union[ImpulseParams, PulsePair]]  # None disables that frequency
-
-
 class MaskImpulseNoise(BaseModel):
     """
-    Parameters *per acoustic frequency* as a dict-of-dicts, with optional
-    nested `short_pulse` / `long_pulse` blocks.
+    Parameters *per acoustic frequency* as a **dict of dicts**, optionally with
+    separate configs for pulse classes.
 
     You may:
-      - Provide a **flat** config per frequency (applies to both pulse types), or
-      - Provide **nested** configs under `"short_pulse"` and/or `"long_pulse"`,
-        either or both may be `null` to disable that pulse class, or
+      - Provide a **flat** config per frequency (applies to all pulses), or
+      - Provide **nested** configs under keys `"short_pulse"` and/or `"long_pulse"`,
+        either of which may be `null` to disable that pulse class, or
       - Set a frequency to `null` to disable it entirely.
 
-    **Fields supported inside an impulse config (`ImpulseParams`):**
-      - `range_coord` (str): vertical coordinate (e.g., "depth", "echo_range").
-      - `vertical_bin_size` (int or "<m>m"): vertical pooling size; integer samples or meters string.
-      - `ping_lags` (list[int]): positive unique lags; sorted automatically.
-      - `threshold` / `threshold_db` (float): dB threshold; aliases accepted.
-      - `exclude_shallow_above` (float|None): meters; skip detection shallower than this.
-      - `vote_k_of_n` (int|None): require ≥k lags to vote true; default is any.
-      - `post_dilate` ({pings:int, samples:int}|None): tiny dilation after detection.
+    Supported keys inside an impulse config (flat or nested):
+      - **range_coord**            : str   – vertical coordinate name ("echo_range"/"depth")
+      - **vertical_bin_size**      : int or "<m>m" – vertical pooling (e.g., 1 or "1m")
+      - **ping_lags**              : list[int] – side-ping offsets, e.g. [1, 2, 3]
+      - **threshold** (alias: **threshold_db**) : float – Sv diff threshold in dB
+      - **exclude_shallow_above**  : float – range cut-off (m) to skip processing
+      - **vote_k_of_n**            : int   – require ≥k lags to vote true (optional)
+      - **post_dilate**            : {"pings": int, "samples": int} – small dilation (optional)
 
-    **Frequencies:**
-      Keys may be strings or numbers (e.g., "38000", 38000, 200000); they are
-      normalized to strings in the validated model.
+    Parameters that are omitted will later be filled from the 38 kHz entry, the first
+    frequency present, or reasonable defaults by downstream helpers.
 
-    **Examples**
-
-    1) Flat per-frequency:
-    {
-      "38000": { "ping_lags":[1,2], "threshold":10, "range_coord":"depth", "vertical_bin_size":"2m", "exclude_shallow_above":10 },
-      "200000": { "ping_lags":[1], "threshold":9, "range_coord":"depth", "vertical_bin_size":"1m", "exclude_shallow_above":6 }
-    }
-
-    2) Nested pulse classes + disabled entries:
-    {
-      "38000": {
-        "short_pulse": { "ping_lags":[1,2,3,4,5], "threshold":7.5, "vote_k_of_n":2,
-                         "post_dilate":{"pings":1,"samples":2}, "range_coord":"depth",
-                         "vertical_bin_size":"1m", "exclude_shallow_above":10 },
-        "long_pulse":  { "ping_lags":[1,2], "threshold":10, "range_coord":"depth",
-                         "vertical_bin_size":"2m", "exclude_shallow_above":10 }
-      },
-      "200000": null
-    }
+    Example:
+    ```
+    \n
+    {\n
+    {\n
+      "38000": {\n
+        "long_pulse": {\n
+          "ping_lags": [1, 2],\n
+          "threshold": 10,\n
+          "range_coord": "depth",\n
+          "vertical_bin_size": "2m",\n
+          "exclude_shallow_above": 10\n
+        },\n
+        "short_pulse": {\n
+          "ping_lags": [1, 2, 3, 4, 5],\n
+          "threshold": 7.5,\n
+          "post_dilate": { "pings": 1, "samples": 2 },\n
+          "range_coord": "depth",\n
+          "vote_k_of_n": 2,\n
+          "vertical_bin_size": "1m",\n
+          "exclude_shallow_above": 10\n
+        }\n
+      },\n
+      "200000": null\n
+    }\n
+    \n
+    ```
     """
-    model_config = ConfigDict(extra="forbid")
 
-    frequencies: Dict[str, FreqEntry] = Field(
+    frequencies: Dict[str, Optional[dict]] = Field(
         ...,
-        description="Per-frequency parameters (Hz). Values may be flat dicts, nested {short_pulse/long_pulse}, or null to disable."
+        description=(
+            "Per-frequency parameters (Hz). Each value may be a flat dict, a dict with "
+            "'short_pulse'/'long_pulse' subdicts, or null to disable that frequency."
+        ),
+        examples=[{
+            "38000": {
+                "short_pulse": {
+                    "ping_lags": [1, 2, 3, 4, 5],
+                    "threshold": 7.5,
+                    "post_dilate": {"pings": 1, "samples": 2},
+                    "range_coord": "depth",
+                    "vote_k_of_n": 2,
+                    "vertical_bin_size": "1m",
+                    "exclude_shallow_above": 10
+                },
+                "long_pulse": {
+                    "ping_lags": [1, 2],
+                    "threshold": 10,
+                    "range_coord": "depth",
+                    "vertical_bin_size": "2m",
+                    "exclude_shallow_above": 10
+                }
+            },
+            "200000": {"ping_lags": [1], "exclude_shallow_above": 4}
+        }]
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def _normalize_keys(cls, data: Any):
-        """Coerce frequency keys to canonical strings ('38000', '200000')."""
-        if not isinstance(data, Mapping):
-            return data
-        d = dict(data)
-        if "frequencies" in d and isinstance(d["frequencies"], Mapping):
-            raw = d["frequencies"]
-        else:
-            # allow passing the mapping directly into this model (if you prefer)
-            raw = d.get("frequencies", d)
-
-        norm: Dict[str, Any] = {}
-        for k, v in raw.items():
-            sk: str
-            try:
-                sk = str(int(round(float(str(k).strip()))))
-            except Exception:
-                sk = str(k)
-            norm[sk] = v
-        d["frequencies"] = norm
-        return d
 
 
 def fill_missing_frequency_params(
-    freq_params: Mapping[str, Any] | Any
+        freq_params: Mapping[str, Any] | Any
 ) -> Dict[str, Optional[Dict]]:
     """
     Build a per-frequency param map with support for nested 'short_pulse'/'long_pulse'.
