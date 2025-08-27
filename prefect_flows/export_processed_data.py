@@ -284,6 +284,8 @@ def export_processed_data(cruise_id: str,
     if mask_attenuated_signal not in (None, False):
         mask_attenuated_signal = fill_missing_frequency_params(mask_attenuated_signal)
 
+    print('mask_attenuated_signal', mask_attenuated_signal)
+
     if mask_transient_noise not in (None, False):
         mask_transient_noise = fill_missing_frequency_params(mask_transient_noise)
 

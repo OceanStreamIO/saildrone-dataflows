@@ -25,6 +25,7 @@ def build_full_mask(
         # iterate in declared order
         for stage_name, spec in stages.items():
             pars = _params_for_channel(spec["param_sets"], ch_ds, pulse_length)
+            print(f'>>>> parameters for {stage_name}', pars)
 
             if pars is None:
                 continue  # skip if no parameters for this channel
