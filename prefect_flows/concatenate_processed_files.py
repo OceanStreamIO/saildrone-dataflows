@@ -3,6 +3,7 @@ import os
 import shutil
 import sys
 import traceback
+import threading
 from pathlib import Path
 
 from collections import defaultdict
@@ -22,6 +23,14 @@ from saildrone.process.workflow import compute_and_save_nasc, compute_and_save_m
 from saildrone.store import open_zarr_store, save_dataset_to_netcdf, save_zarr_store, PostgresDB, ExportService
 from datetime import datetime
 import gc
+
+# Prevent blosc thread-safety issues when multiple threads decompress zarr data
+os.environ.setdefault("BLOSC_NTHREADS", "1")
+
+# Serialize zarr I/O (concat + save) across concurrent batch threads.
+# The underlying adlfs/aiohttp/blosc C libraries are not thread-safe when
+# shared across Python threads, causing SIGSEGV.
+_zarr_io_lock = threading.Lock()
 
 try:
     import psutil  # lightweight; ships in most distros / containers
@@ -315,19 +324,24 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
 
         if skip_concatenate_batches is not True:
             _log_mem(f"1) Concatenating files for category {cat} ({len(paths)} paths)")
-            ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
-            _log_mem(f"2) Finished concatenating {cat} dataset")
 
-            # save Zarr
-            save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
-            print(f"Finished saving zarr dataset to:", zarr_path)
-            _log_mem("3) Zarr dataset saved")
+            # Serialize zarr I/O to prevent SIGSEGV from concurrent
+            # adlfs/blosc operations across threads.
+            with _zarr_io_lock:
+                _log_mem(f"1b) Acquired zarr I/O lock for {cat}")
+                ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
+                _log_mem(f"2) Finished concatenating {cat} dataset")
 
-            # Free the heavy concatenated dataset (backed by N open zarr stores)
-            # and reopen from the single saved zarr store — much leaner.
-            del ds
-            gc.collect()
-            _log_mem("3b) Freed concatenated dataset, reopening from saved zarr")
+                # save Zarr
+                save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
+                print(f"Finished saving zarr dataset to:", zarr_path)
+                _log_mem("3) Zarr dataset saved")
+
+                # Free the heavy concatenated dataset (backed by N open zarr stores)
+                # and reopen from the single saved zarr store — much leaner.
+                del ds
+                gc.collect()
+                _log_mem("3b) Freed concatenated dataset, reopening from saved zarr")
 
         ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks)
 
