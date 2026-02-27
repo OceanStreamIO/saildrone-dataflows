@@ -322,9 +322,14 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
             print(f"Finished saving zarr dataset to:", zarr_path)
             _log_mem("3) Zarr dataset saved")
-        else:
-            # TODO: pass chunks= here to avoid potential memory issues with large datasets
-            ds = open_zarr_store(zarr_path, container_name=container_name)
+
+            # Free the heavy concatenated dataset (backed by N open zarr stores)
+            # and reopen from the single saved zarr store — much leaner.
+            del ds
+            gc.collect()
+            _log_mem("3b) Freed concatenated dataset, reopening from saved zarr")
+
+        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks)
 
         # optional NetCDF
         if save_to_netcdf:
@@ -356,6 +361,12 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             _log_mem("5) Echograms plotted & uploaded")
 
         ##############################################################################################################
+        # Free the source dataset before triggering denoising — denoising reads
+        # from the saved zarr store, so we don't need ds in memory anymore.
+        del ds
+        gc.collect()
+        _log_mem("5b) Source dataset freed before denoising")
+
         print('5) Applying denoising')
         _log_mem("6) Triggering denoising flow")
         zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
@@ -373,14 +384,9 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             category=cat
         )
         state = future.result()
-        # TODO: future.wait() is redundant after .result() — .result() already blocks
-        future.wait()
+        _log_mem("7) Denoising flow completed")
 
-        del ds
-        gc.collect()
-        _log_mem("7) Source dataset freed from memory after denoising trigger")
-
-        sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name)
+        sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks)
         print('sv_dataset_masked:', sv_dataset_masked)
         _log_mem("8) Denoised dataset opened")
 
@@ -440,6 +446,11 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
         except Exception as e:
             logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
             traceback.print_exc()
+
+        # Free the denoised dataset before moving to the next category
+        del sv_dataset_masked
+        gc.collect()
+        _log_mem(f"11) Freed denoised dataset for {cat}")
 
         with PostgresDB() as db_connection:
             export_service = ExportService(db_connection)
