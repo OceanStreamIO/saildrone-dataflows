@@ -322,67 +322,62 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
         nc_file_path_denoised = None
         zarr_path = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='')}"
 
-        if skip_concatenate_batches is not True:
-            _log_mem(f"1) Concatenating files for category {cat} ({len(paths)} paths)")
+        # ── Phase 1: all local zarr I/O for the SOURCE dataset ──────────
+        # Serialized across threads to prevent SIGSEGV from concurrent
+        # adlfs/blosc C library operations.
+        with _zarr_io_lock:
+            _log_mem(f"1) Acquired zarr I/O lock — {cat} ({len(paths)} paths)")
 
-            # Serialize zarr I/O to prevent SIGSEGV from concurrent
-            # adlfs/blosc operations across threads.
-            with _zarr_io_lock:
-                _log_mem(f"1b) Acquired zarr I/O lock for {cat}")
+            if skip_concatenate_batches is not True:
                 ds = concatenate_and_rechunk(paths, container_name=container_name, chunks=chunks)
                 _log_mem(f"2) Finished concatenating {cat} dataset")
 
-                # save Zarr
                 save_zarr_store(ds, container_name=container_name, zarr_path=zarr_path)
                 print(f"Finished saving zarr dataset to:", zarr_path)
                 _log_mem("3) Zarr dataset saved")
 
-                # Free the heavy concatenated dataset (backed by N open zarr stores)
-                # and reopen from the single saved zarr store — much leaner.
+                # Free the heavy multi-store dataset, reopen from the single saved zarr.
                 del ds
                 gc.collect()
-                _log_mem("3b) Freed concatenated dataset, reopening from saved zarr")
+                _log_mem("3b) Freed concatenated dataset")
 
-        ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks)
+            ds = open_zarr_store(zarr_path, container_name=container_name, chunks=chunks)
 
-        # optional NetCDF
-        if save_to_netcdf:
-            nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
-            _, nc_file_size = save_dataset_to_netcdf(
-                ds,
-                container_name=container_name,
-                ds_path=nc_path,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
-            print(f"Finished saving netcdf dataset to:", nc_path)
-            _log_mem("4) NetCDF dataset saved")
+            if save_to_netcdf:
+                nc_path = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='')}"
+                _, nc_file_size = save_dataset_to_netcdf(
+                    ds,
+                    container_name=container_name,
+                    ds_path=nc_path,
+                    base_local_temp_path=NETCDF_ROOT_DIR,
+                    is_temp_dir=False,
+                )
+                print(f"Finished saving netcdf dataset to:", nc_path)
+                _log_mem("4) NetCDF dataset saved")
 
-        if plot_echograms:
-            uploaded_files = plot_and_upload_echograms(
-                ds,
-                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
-                save_to_blobstorage=True,
-                cruise_id=cruise_id,
-                upload_path=batch_key,
-                create_interactive_pages=True,
-                cmap=colormap,
-                title_template=f"{batch_key} ({cat})" + " | {channel_label}",
-                container_name=container_name,
-            )
+            if plot_echograms:
+                uploaded_files = plot_and_upload_echograms(
+                    ds,
+                    file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='')}",
+                    save_to_blobstorage=True,
+                    cruise_id=cruise_id,
+                    upload_path=batch_key,
+                    create_interactive_pages=True,
+                    cmap=colormap,
+                    title_template=f"{batch_key} ({cat})" + " | {channel_label}",
+                    container_name=container_name,
+                )
+                echogram_files.extend(uploaded_files)
+                _log_mem("5) Echograms plotted & uploaded")
 
-            echogram_files.extend(uploaded_files)
-            _log_mem("5) Echograms plotted & uploaded")
+            del ds
+            gc.collect()
+            _log_mem("5b) Source dataset freed, releasing lock")
 
-        ##############################################################################################################
-        # Free the source dataset before triggering denoising — denoising reads
-        # from the saved zarr store, so we don't need ds in memory anymore.
-        del ds
-        gc.collect()
-        _log_mem("5b) Source dataset freed before denoising")
-
-        print('5) Applying denoising')
-        _log_mem("6) Triggering denoising flow")
+        # ── Denoising: runs remotely via run_deployment (no local zarr I/O) ─
+        # Lock is released so other batches can do their zarr I/O while we wait.
+        print('Applying denoising')
+        _log_mem("6) Triggering denoising flow (lock released)")
         zarr_path_denoised = f"{batch_key}/{batch_key}--{section['zarr_name'].format(batch_key=batch_key, denoised='--denoised')}"
 
         future = trigger_denoising_flow.submit(
@@ -400,72 +395,75 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
         state = future.result()
         _log_mem("7) Denoising flow completed")
 
-        sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks)
-        print('sv_dataset_masked:', sv_dataset_masked)
-        _log_mem("8) Denoised dataset opened")
+        # ── Phase 2: all local zarr I/O for the DENOISED dataset ────────
+        with _zarr_io_lock:
+            _log_mem("7b) Acquired zarr I/O lock for denoised phase")
 
-        if save_to_netcdf:
-            nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
-            print('6) Saving denoised dataset to NetCDF:', nc_file_path_denoised)
-            _log_mem("9) Denoised NetCDF saved")
+            sv_dataset_masked = open_zarr_store(zarr_path_denoised, container_name=container_name, chunks=chunks)
+            print('sv_dataset_masked:', sv_dataset_masked)
+            _log_mem("8) Denoised dataset opened")
 
-            _, nc_denoised_file_size = save_dataset_to_netcdf(
-                sv_dataset_masked,
-                container_name=container_name,
-                ds_path=nc_file_path_denoised,
-                base_local_temp_path=NETCDF_ROOT_DIR,
-                is_temp_dir=False,
-            )
+            if save_to_netcdf:
+                nc_file_path_denoised = f"{batch_key}/{batch_key}--{section['nc_name'].format(batch_key=batch_key, denoised='--denoised')}"
+                print('Saving denoised dataset to NetCDF:', nc_file_path_denoised)
 
-            print('7) Saved denoised dataset to NetCDF:', nc_file_path_denoised)
-
-        try:
-            if plot_echograms:
-                file_base_name = f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}"
-                uploaded_files = plot_and_upload_echograms(
+                _, nc_denoised_file_size = save_dataset_to_netcdf(
                     sv_dataset_masked,
-                    file_base_name=file_base_name,
-                    save_to_blobstorage=True,
-                    upload_path=batch_key,
-                    cmap=colormap,
                     container_name=container_name,
-                    create_interactive_pages=True,
-                    export_filename=lambda e: f"{batch_key}/{str(Path(e).name)}",
-                    title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                    ds_path=nc_file_path_denoised,
+                    base_local_temp_path=NETCDF_ROOT_DIR,
+                    is_temp_dir=False,
                 )
-                echogram_files.extend(uploaded_files)
+                print('Saved denoised dataset to NetCDF:', nc_file_path_denoised)
+                _log_mem("9) Denoised NetCDF saved")
 
-                print('Plotting masked channels', plot_channels_masked)
-                for channel in plot_channels_masked:
-                    try:
-                        ds_channel = extract_channel_and_drop_pings(
-                            sv_dataset_masked, channel=channel, drop_threshold=1.0
-                        )
-                        print(f"Plotting pruned channel {channel} for {batch_key} ({cat})")
-                        plot_and_upload_echograms(
-                            ds_channel,
-                            file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised-pruned')}",
-                            save_to_blobstorage=True,
-                            upload_path=batch_key,
-                            cmap=colormap,
-                            container_name=container_name,
-                            title_template=f"{batch_key} ({cat}, denoised and pruned)" + " | {channel_label}",
-                        )
-                        _log_mem(f"10) Plotted pruned channel {channel} for {batch_key} ({cat})")
-                    except Exception as e:
-                        logging.error(f"Failed to plot pruned channel {channel} for {batch_key} ({cat}): {e}")
-                        traceback.print_exc()
+            try:
+                if plot_echograms:
+                    file_base_name = f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised')}"
+                    uploaded_files = plot_and_upload_echograms(
+                        sv_dataset_masked,
+                        file_base_name=file_base_name,
+                        save_to_blobstorage=True,
+                        upload_path=batch_key,
+                        cmap=colormap,
+                        container_name=container_name,
+                        create_interactive_pages=True,
+                        export_filename=lambda e: f"{batch_key}/{str(Path(e).name)}",
+                        title_template=f"{batch_key} ({cat}, denoised)" + " | {channel_label}",
+                    )
+                    echogram_files.extend(uploaded_files)
 
-                _log_mem("10) Denoised echograms & masks plotted")
-        except Exception as e:
-            logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
-            traceback.print_exc()
+                    print('Plotting masked channels', plot_channels_masked)
+                    for channel in plot_channels_masked:
+                        try:
+                            ds_channel = extract_channel_and_drop_pings(
+                                sv_dataset_masked, channel=channel, drop_threshold=1.0
+                            )
+                            print(f"Plotting pruned channel {channel} for {batch_key} ({cat})")
+                            plot_and_upload_echograms(
+                                ds_channel,
+                                file_base_name=f"{batch_key}--{section['file_base'].format(batch_key=batch_key, denoised='--denoised-pruned')}",
+                                save_to_blobstorage=True,
+                                upload_path=batch_key,
+                                cmap=colormap,
+                                container_name=container_name,
+                                title_template=f"{batch_key} ({cat}, denoised and pruned)" + " | {channel_label}",
+                            )
+                            _log_mem(f"10) Plotted pruned channel {channel} for {batch_key} ({cat})")
+                        except Exception as e:
+                            logging.error(f"Failed to plot pruned channel {channel} for {batch_key} ({cat}): {e}")
+                            traceback.print_exc()
 
-        # Free the denoised dataset before moving to the next category
-        del sv_dataset_masked
-        gc.collect()
-        _log_mem(f"11) Freed denoised dataset for {cat}")
+                    _log_mem("10) Denoised echograms & masks plotted")
+            except Exception as e:
+                logging.error(f"Failed to plot echograms or masks for {cat}: {e}")
+                traceback.print_exc()
 
+            del sv_dataset_masked
+            gc.collect()
+            _log_mem(f"11) Freed denoised dataset for {cat}, releasing lock")
+
+        # ── DB writes (no zarr I/O, no lock needed) ────────────────────
         with PostgresDB() as db_connection:
             export_service = ExportService(db_connection)
             nc_file_path_denoised = str(nc_file_path_denoised) if nc_file_path_denoised else None
