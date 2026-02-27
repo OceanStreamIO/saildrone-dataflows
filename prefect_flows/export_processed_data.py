@@ -1,6 +1,5 @@
 import logging
 import os
-import shutil
 import sys
 import traceback
 from collections import defaultdict
@@ -8,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import List, Optional, Union
 from dotenv import load_dotenv
-from dask.distributed import Client, Lock
+from dask.distributed import Client
 
 from prefect import flow, task
 from prefect_dask import DaskTaskRunner, get_dask_client
@@ -75,15 +74,11 @@ def _nav_to_data_vars(ds):
     return ds
 
 
-@task(log_prints=True)
-def get_worker_addresses(scheduler: str) -> list[str]:
-    """
-    A tiny prefect task that opens a short-lived Dask Client,
-    asks the scheduler for the current workers, and returns *only*
-    a list of their addresses (plain strings).
-    """
-    with Client(scheduler, name="discover-workers", timeout="5s") as c:
-        return list(c.scheduler_info()["workers"])
+# TODO: get_worker_addresses task is unused — remove if not needed in future
+# @task(log_prints=True)
+# def get_worker_addresses(scheduler: str) -> list[str]:
+#     with Client(scheduler, name="discover-workers", timeout="5s") as c:
+#         return list(c.scheduler_info()["workers"])
 
 
 @task(
@@ -178,6 +173,9 @@ def process_single_file(file, file_name, source_container_name, cruise_id,
 
         create_markdown_artifact(markdown_report)
 
+        # TODO: returning Completed state here causes ValueError when the flow
+        # destructures result as a 5-tuple. Return a sentinel tuple or use Failed state,
+        # and add error-checking before destructuring in the main flow.
         return Completed(message="Task completed with errors")
 
 
@@ -201,7 +199,8 @@ def trigger_concatenate_flow(
     remove_background_noise=None,
     apply_seabed_mask=None,
     chunks=None,
-    plot_channels_masked=None
+    plot_channels_masked=None,
+    concat_batch_size=3,
 ):
     files = files_list.copy() if files_list else []
     for source_path, file_record in files:
@@ -228,7 +227,8 @@ def trigger_concatenate_flow(
             'remove_background_noise': remove_background_noise,
             'apply_seabed_mask': apply_seabed_mask,
             'chunks': chunks,
-            'plot_channels_masked': plot_channels_masked
+            'plot_channels_masked': plot_channels_masked,
+            'concat_batch_size': concat_batch_size,
         },
         timeout=None
     )
@@ -261,6 +261,8 @@ def export_processed_data(cruise_id: str,
                           save_mvbs_to_netcdf: bool = True,
                           base_url: str = '',
                           batch_size: int = BATCH_SIZE,
+                          skip_file_processing: bool = False,
+                          concat_batch_size: int = 3,
                           plot_channels_masked=None
                           ):
     denoise_params = {
@@ -328,48 +330,53 @@ def export_processed_data(cruise_id: str,
 
         print(f"Export created with ID: {export_id}, Key: {export_key}")
 
-    processed_files = defaultdict(list)
-
-    for idx, (source_path, file) in enumerate(files_list):
-        future = process_single_file.submit(file,
-                                            file_name=file['file_name'],
-                                            source_container_name=source_container,
-                                            cruise_id=cruise_id,
-                                            chunks=chunks,
-                                            export_container_name=export_container_name,
-                                            file_index=idx,
-                                            total=len(files_list),
-                                            plot_echograms=plot_echograms,
-                                            colormap=colormap,
-                                            compute_nasc_options=compute_nasc_options,
-                                            compute_mvbs_options=compute_mvbs_options,
-                                            save_to_netcdf=save_to_netcdf
-                                            )
-        in_flight.append(future)
-
-        processed_files[file['id']].append(future)
-
-        # Throttle when max concurrent tasks reached
-        if len(in_flight) >= batch_size:
-            finished = next(as_completed(in_flight))
-            in_flight.remove(finished)
-
-    # Wait for remaining tasks
-    for remaining in in_flight:
-        remaining.result()
-
-    with PostgresDB() as db_connection:
-        export_service = ExportService(db_connection)
+    if not skip_file_processing:
+        processed_files = defaultdict(list)
 
         for idx, (source_path, file) in enumerate(files_list):
-            file_id = file['id']
-            category, zarr_path, nc_file, nc_file_size, echogram_files = processed_files[file_id][0].result()
+            future = process_single_file.submit(file,
+                                                file_name=file['file_name'],
+                                                source_container_name=source_container,
+                                                cruise_id=cruise_id,
+                                                chunks=chunks,
+                                                export_container_name=export_container_name,
+                                                file_index=idx,
+                                                total=len(files_list),
+                                                plot_echograms=plot_echograms,
+                                                colormap=colormap,
+                                                compute_nasc_options=compute_nasc_options,
+                                                compute_mvbs_options=compute_mvbs_options,
+                                                save_to_netcdf=save_to_netcdf
+                                                )
+            in_flight.append(future)
 
-            zarr_path = str(zarr_path) if zarr_path else None
-            nc_file = str(nc_file) if nc_file else None
+            processed_files[file['id']].append(future)
 
-            print('Processed data for file ID:', file_id, 'with futures:')
-            export_service.add_file(export_id, file_id, echogram_files, zarr_path, None, nc_file, nc_file_size)
+            # Throttle when max concurrent tasks reached
+            if len(in_flight) >= batch_size:
+                finished = next(as_completed(in_flight))
+                in_flight.remove(finished)
+
+        # Wait for remaining tasks
+        for remaining in in_flight:
+            remaining.result()
+
+        with PostgresDB() as db_connection:
+            export_service = ExportService(db_connection)
+
+            for idx, (source_path, file) in enumerate(files_list):
+                file_id = file['id']
+                # TODO: process_single_file returns Completed state on error, not a tuple.
+                # This destructuring will crash with ValueError. Add error-checking here.
+                category, zarr_path, nc_file, nc_file_size, echogram_files = processed_files[file_id][0].result()
+
+                zarr_path = str(zarr_path) if zarr_path else None
+                nc_file = str(nc_file) if nc_file else None
+
+                print('Processed data for file ID:', file_id, 'with futures:')
+                export_service.add_file(export_id, file_id, echogram_files, zarr_path, None, nc_file, nc_file_size)
+    else:
+        print(f"Skipping file processing — assuming data already exists in {export_container_name}")
 
     future_zip = trigger_concatenate_flow.submit(
         files_list=files_list,
@@ -390,7 +397,8 @@ def export_processed_data(cruise_id: str,
         remove_background_noise=remove_background_noise,
         apply_seabed_mask=apply_seabed_mask,
         chunks=chunks,
-        plot_channels_masked=plot_channels_masked
+        plot_channels_masked=plot_channels_masked,
+        concat_batch_size=concat_batch_size,
     )
     future_zip.wait()
 
@@ -428,6 +436,8 @@ if __name__ == "__main__":
                 'save_mvbs_to_netcdf': True,
                 'base_url': '',
                 'batch_size': 4,
+                'skip_file_processing': False,
+                'concat_batch_size': 3,
                 'plot_channels_masked': []
             }
         )

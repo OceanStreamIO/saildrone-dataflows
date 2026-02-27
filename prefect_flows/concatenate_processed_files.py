@@ -323,6 +323,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             print(f"Finished saving zarr dataset to:", zarr_path)
             _log_mem("3) Zarr dataset saved")
         else:
+            # TODO: pass chunks= here to avoid potential memory issues with large datasets
             ds = open_zarr_store(zarr_path, container_name=container_name)
 
         # optional NetCDF
@@ -372,6 +373,7 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
             category=cat
         )
         state = future.result()
+        # TODO: future.wait() is redundant after .result() — .result() already blocks
         future.wait()
 
         del ds
@@ -451,6 +453,8 @@ def concatenate_batch_files(batch_key, export_id, cruise_id, files, container_na
                                         nc_denoised_file_size)
 
     ###############################################################################################################
+    # TODO: categories are processed sequentially here. Consider parallelizing
+    # _process_category calls (e.g. via threading or separate task submissions)
     # 2) run through each category
     for category in CATEGORY_CONFIG:
         _process_category(category)
@@ -481,7 +485,8 @@ def concatenate_processed_files(files_list,
                                 remove_background_noise=None,
                                 apply_seabed_mask=False,
                                 chunks=None,
-                                plot_channels_masked=None
+                                plot_channels_masked=None,
+                                concat_batch_size=3,
                                 ):
     by_batch = defaultdict(list)
     in_flight = []
@@ -499,7 +504,7 @@ def concatenate_processed_files(files_list,
         key = _batch_key(ts, days_to_combine)
         by_batch[key].append(file_record)
 
-    batch_size = 3  # max number of concurrent tasks
+    batch_size = max(1, concat_batch_size)
     batches = by_batch.items()
     print(f"Total batches to process: {len(batches)}")
 
@@ -594,7 +599,8 @@ if __name__ == "__main__":
                 'remove_background_noise': None,
                 'apply_seabed_mask': False,
                 'chunks': None,
-                'plot_channels_masked': []
+                'plot_channels_masked': [],
+                'concat_batch_size': 3,
             }
         )
     except Exception as e:
